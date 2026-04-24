@@ -1,0 +1,310 @@
+package mailstore
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/BurntSushi/toml"
+)
+
+type DraftInput struct {
+	Mailbox MailboxMeta
+	Subject string
+	To      []string
+	CC      []string
+	BCC     []string
+	Body    string
+	Now     time.Time
+}
+
+type DraftMeta struct {
+	SchemaVersion int       `toml:"schema_version"`
+	Kind          string    `toml:"kind"`
+	ID            string    `toml:"id"`
+	DomainID      int64     `toml:"domain_id"`
+	DomainName    string    `toml:"domain_name"`
+	InboxID       int64     `toml:"inbox_id"`
+	FromAddress   string    `toml:"from_address"`
+	RemoteID      int64     `toml:"remote_id"`
+	RemoteStatus  string    `toml:"remote_status"`
+	RemoteError   string    `toml:"remote_error"`
+	Subject       string    `toml:"subject"`
+	To            []string  `toml:"to"`
+	CC            []string  `toml:"cc"`
+	BCC           []string  `toml:"bcc"`
+	CreatedAt     time.Time `toml:"created_at"`
+	UpdatedAt     time.Time `toml:"updated_at"`
+}
+
+type Draft struct {
+	Meta DraftMeta
+	Path string
+	Body string
+}
+
+func (s Store) FindMailboxByAddress(address string) (*MailboxMeta, string, error) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return nil, "", fmt.Errorf("mailbox address is required")
+	}
+	parts := strings.Split(address, "@")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return nil, "", fmt.Errorf("mailbox must be an address like hello@example.com")
+	}
+	path, err := s.MailboxPath(parts[1], parts[0])
+	if err != nil {
+		return nil, "", err
+	}
+	meta, err := ReadMailboxMeta(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("mailbox %s has not been synced: %w", address, err)
+	}
+	if !strings.EqualFold(meta.Address, address) {
+		return nil, "", fmt.Errorf("mailbox metadata address mismatch: found %s", meta.Address)
+	}
+	return meta, path, nil
+}
+
+func (s Store) CreateDraft(input DraftInput) (*Draft, error) {
+	if input.Now.IsZero() {
+		input.Now = time.Now()
+	}
+	id := draftID(input.Now, input.Subject)
+	mailboxPath, err := s.MailboxPath(input.Mailbox.DomainName, input.Mailbox.LocalPart)
+	if err != nil {
+		return nil, err
+	}
+	draftPath := filepath.Join(mailboxPath, "drafts", id)
+	if err := os.MkdirAll(filepath.Join(draftPath, "attachments"), 0o700); err != nil {
+		return nil, err
+	}
+	meta := DraftMeta{
+		SchemaVersion: SchemaVersion,
+		Kind:          "draft",
+		ID:            id,
+		DomainID:      input.Mailbox.DomainID,
+		DomainName:    input.Mailbox.DomainName,
+		InboxID:       input.Mailbox.InboxID,
+		FromAddress:   input.Mailbox.Address,
+		Subject:       input.Subject,
+		To:            cleanStrings(input.To),
+		CC:            cleanStrings(input.CC),
+		BCC:           cleanStrings(input.BCC),
+		CreatedAt:     input.Now,
+		UpdatedAt:     input.Now,
+	}
+	if err := writeTOML(filepath.Join(draftPath, "meta.toml"), meta); err != nil {
+		return nil, err
+	}
+	body := input.Body
+	if body == "" {
+		body = "\n"
+	}
+	if err := writeFile(filepath.Join(draftPath, "body.md"), []byte(body)); err != nil {
+		return nil, err
+	}
+	return &Draft{Meta: meta, Path: draftPath, Body: body}, nil
+}
+
+func ListDrafts(mailboxPath string) ([]Draft, error) {
+	entries, err := os.ReadDir(filepath.Join(mailboxPath, "drafts"))
+	if err != nil {
+		return nil, err
+	}
+	drafts := make([]Draft, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(mailboxPath, "drafts", entry.Name())
+		draft, err := ReadDraft(path)
+		if err != nil {
+			return nil, err
+		}
+		drafts = append(drafts, *draft)
+	}
+	sort.Slice(drafts, func(i, j int) bool { return drafts[i].Meta.CreatedAt.After(drafts[j].Meta.CreatedAt) })
+	return drafts, nil
+}
+
+func (s Store) MoveDraftToOutbox(mailbox MailboxMeta, draftID string, remoteID int64, remoteStatus string, queuedAt time.Time) (*Draft, error) {
+	mailboxPath, err := s.MailboxPath(mailbox.DomainName, mailbox.LocalPart)
+	if err != nil {
+		return nil, err
+	}
+	draftPath := filepath.Join(mailboxPath, "drafts", draftID)
+	draft, err := ReadDraft(draftPath)
+	if err != nil {
+		return nil, err
+	}
+	if queuedAt.IsZero() {
+		queuedAt = time.Now()
+	}
+	draft.Meta.Kind = "outbox"
+	draft.Meta.RemoteID = remoteID
+	draft.Meta.RemoteStatus = remoteStatus
+	draft.Meta.UpdatedAt = queuedAt
+	if err := writeTOML(filepath.Join(draftPath, "meta.toml"), draft.Meta); err != nil {
+		return nil, err
+	}
+	outboxPath := chronologicalItemPath(mailboxPath, "outbox", queuedAt, remoteID, draft.Meta.Subject)
+	if err := os.MkdirAll(filepath.Dir(outboxPath), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(draftPath, outboxPath); err != nil {
+		return nil, err
+	}
+	draft.Path = outboxPath
+	return draft, nil
+}
+
+func ListOutbox(mailboxPath string) ([]Draft, error) {
+	return listItems(mailboxPath, "outbox")
+}
+
+func (s Store) SyncOutboxItem(mailbox MailboxMeta, remoteID int64, remoteStatus, remoteError string, occurredAt time.Time) (*Draft, error) {
+	mailboxPath, err := s.MailboxPath(mailbox.DomainName, mailbox.LocalPart)
+	if err != nil {
+		return nil, err
+	}
+	draft, err := findOutboxDraft(mailboxPath, remoteID)
+	if err != nil {
+		return nil, err
+	}
+	if occurredAt.IsZero() {
+		occurredAt = time.Now()
+	}
+	draft.Meta.RemoteStatus = remoteStatus
+	draft.Meta.RemoteError = remoteError
+	draft.Meta.UpdatedAt = occurredAt
+	if remoteStatus != "sent" && remoteStatus != "failed" {
+		if err := writeTOML(filepath.Join(draft.Path, "meta.toml"), draft.Meta); err != nil {
+			return nil, err
+		}
+		return draft, nil
+	}
+	draft.Meta.Kind = remoteStatus
+	if err := writeTOML(filepath.Join(draft.Path, "meta.toml"), draft.Meta); err != nil {
+		return nil, err
+	}
+	targetPath := chronologicalItemPath(mailboxPath, remoteStatus, occurredAt, remoteID, draft.Meta.Subject)
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(draft.Path, targetPath); err != nil {
+		return nil, err
+	}
+	draft.Path = targetPath
+	return draft, nil
+}
+
+func listItems(mailboxPath, box string) ([]Draft, error) {
+	root := filepath.Join(mailboxPath, box)
+	drafts := []Draft{}
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() || path == root {
+			return nil
+		}
+		if _, err := os.Stat(filepath.Join(path, "meta.toml")); err != nil {
+			return nil
+		}
+		draft, err := ReadDraft(path)
+		if err != nil {
+			return err
+		}
+		drafts = append(drafts, *draft)
+		return filepath.SkipDir
+	}); err != nil {
+		return nil, err
+	}
+	sort.Slice(drafts, func(i, j int) bool { return drafts[i].Meta.UpdatedAt.After(drafts[j].Meta.UpdatedAt) })
+	return drafts, nil
+}
+
+func findOutboxDraft(mailboxPath string, remoteID int64) (*Draft, error) {
+	drafts, err := ListOutbox(mailboxPath)
+	if err != nil {
+		return nil, err
+	}
+	for i := range drafts {
+		if drafts[i].Meta.RemoteID == remoteID {
+			return &drafts[i], nil
+		}
+	}
+	return nil, fmt.Errorf("outbox item for remote id %d not found", remoteID)
+}
+
+func chronologicalItemPath(mailboxPath, box string, at time.Time, remoteID int64, subject string) string {
+	slug := slugSubject(subject)
+	if slug == "" {
+		slug = "outbound"
+	}
+	return filepath.Join(mailboxPath, box, at.Format("2006"), at.Format("01"), at.Format("02"), fmt.Sprintf("%s-%d", slug, remoteID))
+}
+
+func ReadDraft(path string) (*Draft, error) {
+	var meta DraftMeta
+	if _, err := toml.DecodeFile(filepath.Join(path, "meta.toml"), &meta); err != nil {
+		return nil, err
+	}
+	body, err := os.ReadFile(filepath.Join(path, "body.md"))
+	if err != nil {
+		return nil, err
+	}
+	return &Draft{Meta: meta, Path: path, Body: string(body)}, nil
+}
+
+func draftID(now time.Time, subject string) string {
+	slug := slugSubject(subject)
+	if slug == "" {
+		slug = "draft"
+	}
+	return now.UTC().Format("20060102-150405") + "-" + slug
+}
+
+func slugSubject(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(strings.TrimSpace(b.String()), "-")
+}
+
+func cleanStrings(values []string) []string {
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			cleaned = append(cleaned, value)
+		}
+	}
+	return cleaned
+}
+
+func writeFile(path string, content []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, content, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
