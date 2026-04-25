@@ -24,6 +24,7 @@ const (
 	mailModeDetail
 	mailModeLinks
 	mailModeArticle
+	mailModeAttachments
 	mailReadWidth = 100
 )
 
@@ -32,61 +33,68 @@ var mailBoxes = []string{"inbox", "archive", "trash", "sent", "outbox", "drafts"
 var extractArticleURL = articletext.NewExtractor().ExtractURL
 
 type Mail struct {
-	store         mailstore.Store
-	toggleRead    ToggleReadFunc
-	toggleStar    ToggleStarFunc
-	archive       MessageActionFunc
-	trash         MessageActionFunc
-	restore       MessageActionFunc
-	sync          SyncFunc
-	sendDraft     SendDraftFunc
-	mailboxes     []mailstore.MailboxMeta
-	mailboxIndex  int
-	boxIndex      int
-	allMessages   []mailstore.CachedMessage
-	messages      []mailstore.CachedMessage
-	messageIndex  int
-	searching     bool
-	searchQuery   string
-	searchInput   string
-	detailScroll  int
-	links         []emailtext.Link
-	linkIndex     int
-	article       string
-	articleURL    string
-	articleScroll int
-	mode          mailMode
-	loading       bool
-	syncing       bool
-	confirm       string
-	err           error
-	status        string
-	keys          MailKeyMap
+	store            mailstore.Store
+	toggleRead       ToggleReadFunc
+	toggleStar       ToggleStarFunc
+	archive          MessageActionFunc
+	trash            MessageActionFunc
+	restore          MessageActionFunc
+	sync             SyncFunc
+	sendDraft        SendDraftFunc
+	download         DownloadAttachmentFunc
+	mailboxes        []mailstore.MailboxMeta
+	mailboxIndex     int
+	boxIndex         int
+	allMessages      []mailstore.CachedMessage
+	messages         []mailstore.CachedMessage
+	messageIndex     int
+	searching        bool
+	searchQuery      string
+	searchInput      string
+	detailScroll     int
+	links            []emailtext.Link
+	linkIndex        int
+	attachmentIndex  int
+	savingAttachment bool
+	saveDirInput     string
+	attachingFile    bool
+	attachPathInput  string
+	article          string
+	articleURL       string
+	articleScroll    int
+	mode             mailMode
+	loading          bool
+	syncing          bool
+	confirm          string
+	err              error
+	status           string
+	keys             MailKeyMap
 }
 
 type MailKeyMap struct {
-	Up         key.Binding
-	Down       key.Binding
-	Previous   key.Binding
-	Next       key.Binding
-	BoxPrev    key.Binding
-	BoxNext    key.Binding
-	Open       key.Binding
-	OpenHTML   key.Binding
-	Links      key.Binding
-	Extract    key.Binding
-	Compose    key.Binding
-	Reply      key.Binding
-	Send       key.Binding
-	Delete     key.Binding
-	ToggleRead key.Binding
-	ToggleStar key.Binding
-	Archive    key.Binding
-	Trash      key.Binding
-	Restore    key.Binding
-	Copy       key.Binding
-	Back       key.Binding
-	Refresh    key.Binding
+	Up          key.Binding
+	Down        key.Binding
+	Previous    key.Binding
+	Next        key.Binding
+	BoxPrev     key.Binding
+	BoxNext     key.Binding
+	Open        key.Binding
+	OpenHTML    key.Binding
+	Links       key.Binding
+	Extract     key.Binding
+	Compose     key.Binding
+	Reply       key.Binding
+	Send        key.Binding
+	Delete      key.Binding
+	Attachments key.Binding
+	ToggleRead  key.Binding
+	ToggleStar  key.Binding
+	Archive     key.Binding
+	Trash       key.Binding
+	Restore     key.Binding
+	Copy        key.Binding
+	Back        key.Binding
+	Refresh     key.Binding
 }
 
 type mailLoadedMsg struct {
@@ -162,11 +170,23 @@ type draftSentMsg struct {
 	err   error
 }
 
+type attachmentDownloadedMsg struct {
+	path string
+	open bool
+	err  error
+}
+
+type attachmentOpenedMsg struct {
+	path string
+	err  error
+}
+
 type ToggleReadFunc func(context.Context, int64, bool) error
 type ToggleStarFunc func(context.Context, int64, bool) error
 type MessageActionFunc func(context.Context, int64) error
 type SyncFunc func(context.Context) (MailSyncResult, error)
 type SendDraftFunc func(context.Context, mailstore.MailboxMeta, mailstore.Draft) error
+type DownloadAttachmentFunc func(context.Context, mailstore.AttachmentMeta) ([]byte, error)
 
 type MailSyncResult struct {
 	ActiveMailboxes  int
@@ -178,37 +198,38 @@ type MailSyncResult struct {
 }
 
 func NewMail(store mailstore.Store) Mail {
-	return NewMailWithActions(store, nil, nil, nil, nil, nil, nil, nil)
+	return NewMailWithActions(store, nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
-func NewMailWithActions(store mailstore.Store, toggleRead ToggleReadFunc, toggleStar ToggleStarFunc, archive MessageActionFunc, trash MessageActionFunc, restore MessageActionFunc, sync SyncFunc, sendDraft SendDraftFunc) Mail {
-	return Mail{store: store, toggleRead: toggleRead, toggleStar: toggleStar, archive: archive, trash: trash, restore: restore, sync: sync, sendDraft: sendDraft, keys: DefaultMailKeyMap(), loading: true}
+func NewMailWithActions(store mailstore.Store, toggleRead ToggleReadFunc, toggleStar ToggleStarFunc, archive MessageActionFunc, trash MessageActionFunc, restore MessageActionFunc, sync SyncFunc, sendDraft SendDraftFunc, download DownloadAttachmentFunc) Mail {
+	return Mail{store: store, toggleRead: toggleRead, toggleStar: toggleStar, archive: archive, trash: trash, restore: restore, sync: sync, sendDraft: sendDraft, download: download, keys: DefaultMailKeyMap(), loading: true}
 }
 
 func DefaultMailKeyMap() MailKeyMap {
 	return MailKeyMap{
-		Up:         key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "message up")),
-		Down:       key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "message down")),
-		Previous:   key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("left/h", "mailbox prev")),
-		Next:       key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("right/l", "mailbox next")),
-		BoxPrev:    key.NewBinding(key.WithKeys("["), key.WithHelp("[", "box prev")),
-		BoxNext:    key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "box next")),
-		Open:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
-		OpenHTML:   key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open html")),
-		Links:      key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "links")),
-		Extract:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "extract")),
-		Compose:    key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "compose")),
-		Reply:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reply")),
-		Send:       key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "send draft")),
-		Delete:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "delete draft")),
-		ToggleRead: key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "read/unread")),
-		ToggleStar: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "star/unstar")),
-		Archive:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "archive")),
-		Trash:      key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "trash")),
-		Restore:    key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restore")),
-		Copy:       key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy link")),
-		Back:       key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-		Refresh:    key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload cache")),
+		Up:          key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "message up")),
+		Down:        key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "message down")),
+		Previous:    key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("left/h", "mailbox prev")),
+		Next:        key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("right/l", "mailbox next")),
+		BoxPrev:     key.NewBinding(key.WithKeys("["), key.WithHelp("[", "box prev")),
+		BoxNext:     key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "box next")),
+		Open:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
+		OpenHTML:    key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open html")),
+		Links:       key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "links")),
+		Extract:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "extract")),
+		Compose:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "compose")),
+		Reply:       key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reply")),
+		Send:        key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "send draft")),
+		Delete:      key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "delete draft")),
+		Attachments: key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "attachments")),
+		ToggleRead:  key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "read/unread")),
+		ToggleStar:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "star/unstar")),
+		Archive:     key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "archive")),
+		Trash:       key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "trash")),
+		Restore:     key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restore")),
+		Copy:        key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy link")),
+		Back:        key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+		Refresh:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload cache")),
 	}
 }
 
@@ -354,6 +375,25 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		m.clampSelection()
 		m.status = "Draft deleted"
 		return m, nil
+	case attachmentDownloadedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not save attachment: %v", msg.err)
+			return m, nil
+		}
+		if msg.open {
+			m.status = "Opening attachment..."
+			cmd := exec.Command("xdg-open", msg.path)
+			return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return attachmentOpenedMsg{path: msg.path, err: err} })
+		}
+		m.status = fmt.Sprintf("Saved attachment: %s", msg.path)
+		return m, nil
+	case attachmentOpenedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not open attachment: %v", msg.err)
+		} else {
+			m.status = fmt.Sprintf("Opened attachment: %s", msg.path)
+		}
+		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -377,6 +417,9 @@ func (m Mail) View(width, height int) string {
 	if m.mode == mailModeLinks && len(m.messages) > 0 {
 		return style.Render(m.linksView(width, height))
 	}
+	if m.mode == mailModeAttachments && len(m.messages) > 0 {
+		return style.Render(m.attachmentsView(width, height))
+	}
 	if m.mode == mailModeDetail && len(m.messages) > 0 {
 		return style.Render(m.detailView(width, height))
 	}
@@ -386,7 +429,7 @@ func (m Mail) View(width, height int) string {
 func (m Mail) Title() string { return "Mail" }
 
 func (m Mail) KeyBindings() []key.Binding {
-	return []key.Binding{m.keys.Up, m.keys.Down, m.keys.Previous, m.keys.Next, m.keys.BoxPrev, m.keys.BoxNext, m.keys.Open, m.keys.OpenHTML, m.keys.Links, m.keys.Extract, m.keys.Compose, m.keys.Reply, m.keys.Send, m.keys.Delete, m.keys.ToggleRead, m.keys.ToggleStar, m.keys.Archive, m.keys.Trash, m.keys.Restore, m.keys.Copy, m.keys.Back, m.keys.Refresh}
+	return []key.Binding{m.keys.Up, m.keys.Down, m.keys.Previous, m.keys.Next, m.keys.BoxPrev, m.keys.BoxNext, m.keys.Open, m.keys.OpenHTML, m.keys.Links, m.keys.Attachments, m.keys.Extract, m.keys.Compose, m.keys.Reply, m.keys.Send, m.keys.Delete, m.keys.ToggleRead, m.keys.ToggleStar, m.keys.Archive, m.keys.Trash, m.keys.Restore, m.keys.Copy, m.keys.Back, m.keys.Refresh}
 }
 
 func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
@@ -396,8 +439,17 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if m.searching {
 		return m.handleSearchKey(msg)
 	}
+	if m.savingAttachment {
+		return m.handleAttachmentSaveKey(msg)
+	}
+	if m.attachingFile {
+		return m.handleAttachFileKey(msg)
+	}
 	if m.mode == mailModeArticle {
 		return m.handleArticleKey(msg)
+	}
+	if m.mode == mailModeAttachments {
+		return m.handleAttachmentsKey(msg)
 	}
 	if m.mode == mailModeLinks {
 		return m.handleLinksKey(msg)
@@ -419,6 +471,16 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			if len(m.links) == 0 {
 				m.status = "No links found in this message"
 			}
+			return m, nil
+		}
+		if key.Matches(msg, m.keys.Attachments) {
+			if len(m.messages[m.messageIndex].Meta.Attachments) == 0 {
+				m.status = "No attachments on this message"
+				return m, nil
+			}
+			m.attachmentIndex = 0
+			m.mode = mailModeAttachments
+			m.status = ""
 			return m, nil
 		}
 		if key.Matches(msg, m.keys.Reply) {
@@ -536,6 +598,9 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	case key.Matches(msg, m.keys.ToggleStar):
 		return m.toggleSelectedStar()
 	case key.Matches(msg, m.keys.Archive):
+		if m.currentBox() == "drafts" {
+			return m.startAttachFile()
+		}
 		return m.moveSelectedMessage("archive")
 	case key.Matches(msg, m.keys.Trash):
 		return m.requestConfirm("trash", "Move this message to trash?")
@@ -572,6 +637,115 @@ func (m Mail) handleLinksKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return m.extractLink()
 	}
 	return m, nil
+}
+
+func (m Mail) handleAttachmentsKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+	if key.Matches(msg, m.keys.Back) {
+		m.mode = mailModeDetail
+		return m, nil
+	}
+	attachments := m.messages[m.messageIndex].Meta.Attachments
+	if len(attachments) == 0 {
+		return m, nil
+	}
+	switch {
+	case key.Matches(msg, m.keys.Up):
+		if m.attachmentIndex > 0 {
+			m.attachmentIndex--
+		}
+	case key.Matches(msg, m.keys.Down):
+		if m.attachmentIndex < len(attachments)-1 {
+			m.attachmentIndex++
+		}
+	case key.Matches(msg, m.keys.Open):
+		return m.openAttachment()
+	case key.Matches(msg, m.keys.Copy):
+		return m.copyAttachmentURL()
+	case key.Matches(msg, m.keys.Send):
+		m.savingAttachment = true
+		m.saveDirInput = defaultDownloadDir()
+		m.status = "Save to: " + m.saveDirInput
+	}
+	return m, nil
+}
+
+func (m Mail) handleAttachmentSaveKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.savingAttachment = false
+		m.saveDirInput = ""
+		m.status = "Cancelled"
+		return m, nil
+	case "enter":
+		dir := strings.TrimSpace(m.saveDirInput)
+		m.savingAttachment = false
+		m.saveDirInput = ""
+		return m.saveAttachmentTo(dir)
+	case "backspace":
+		if len(m.saveDirInput) > 0 {
+			m.saveDirInput = m.saveDirInput[:len(m.saveDirInput)-1]
+		}
+		m.status = "Save to: " + m.saveDirInput
+		return m, nil
+	}
+	if msg.Text != "" {
+		m.saveDirInput += msg.Text
+		m.status = "Save to: " + m.saveDirInput
+	}
+	return m, nil
+}
+
+func (m Mail) handleAttachFileKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.attachingFile = false
+		m.attachPathInput = ""
+		m.status = "Cancelled"
+		return m, nil
+	case "enter":
+		path := strings.TrimSpace(m.attachPathInput)
+		m.attachingFile = false
+		m.attachPathInput = ""
+		return m.attachFileToSelectedDraft(path)
+	case "backspace":
+		if len(m.attachPathInput) > 0 {
+			m.attachPathInput = m.attachPathInput[:len(m.attachPathInput)-1]
+		}
+		m.status = "Attach file: " + m.attachPathInput
+		return m, nil
+	}
+	if msg.Text != "" {
+		m.attachPathInput += msg.Text
+		m.status = "Attach file: " + m.attachPathInput
+	}
+	return m, nil
+}
+
+func (m Mail) startAttachFile() (Screen, tea.Cmd) {
+	if len(m.messages) == 0 || m.currentBox() != "drafts" {
+		m.status = "attach is only available from drafts"
+		return m, nil
+	}
+	m.attachingFile = true
+	m.attachPathInput = ""
+	m.status = "Attach file: "
+	return m, nil
+}
+
+func (m Mail) attachFileToSelectedDraft(path string) (Screen, tea.Cmd) {
+	if path == "" {
+		m.status = "No file selected"
+		return m, nil
+	}
+	if len(m.messages) == 0 || m.currentBox() != "drafts" {
+		return m, nil
+	}
+	draftPath := m.messages[m.messageIndex].Path
+	m.status = "Attaching file..."
+	return m, func() tea.Msg {
+		_, err := mailstore.AttachFileToDraft(draftPath, expandHome(path), time.Now())
+		return draftEditedMsg{existingPath: draftPath, err: err}
+	}
 }
 
 func (m Mail) handleArticleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
@@ -967,6 +1141,110 @@ func (m Mail) copyArticleURL() (Screen, tea.Cmd) {
 	})
 }
 
+func (m Mail) openAttachment() (Screen, tea.Cmd) {
+	attachment := m.messages[m.messageIndex].Meta.Attachments[m.attachmentIndex]
+	path := mailstore.AttachmentCachePath(m.messages[m.messageIndex].Path, attachment)
+	if _, err := os.Stat(path); err == nil {
+		m.status = "Opening attachment..."
+		cmd := exec.Command("xdg-open", path)
+		return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return attachmentOpenedMsg{path: path, err: err} })
+	}
+	return m.downloadAttachment(path, true)
+}
+
+func (m Mail) saveAttachmentTo(dir string) (Screen, tea.Cmd) {
+	if dir == "" {
+		dir = defaultDownloadDir()
+	}
+	attachment := m.messages[m.messageIndex].Meta.Attachments[m.attachmentIndex]
+	dest := uniquePath(filepath.Join(expandHome(dir), attachmentSaveName(attachment)))
+	cachePath := mailstore.AttachmentCachePath(m.messages[m.messageIndex].Path, attachment)
+	if data, err := os.ReadFile(cachePath); err == nil {
+		m.status = "Saving attachment..."
+		return m, func() tea.Msg { return attachmentDownloadedMsg{path: dest, err: writeAttachmentFile(dest, data)} }
+	}
+	return m.downloadAttachment(dest, false)
+}
+
+func (m Mail) downloadAttachment(path string, open bool) (Screen, tea.Cmd) {
+	if m.download == nil {
+		m.status = "Attachment download is not configured"
+		return m, nil
+	}
+	attachment := m.messages[m.messageIndex].Meta.Attachments[m.attachmentIndex]
+	m.status = "Downloading attachment..."
+	return m, func() tea.Msg {
+		data, err := m.download(context.Background(), attachment)
+		if err != nil {
+			return attachmentDownloadedMsg{path: path, open: open, err: err}
+		}
+		return attachmentDownloadedMsg{path: path, open: open, err: writeAttachmentFile(path, data)}
+	}
+}
+
+func (m Mail) copyAttachmentURL() (Screen, tea.Cmd) {
+	attachment := m.messages[m.messageIndex].Meta.Attachments[m.attachmentIndex]
+	if attachment.DownloadURL == "" {
+		m.status = "No download URL for this attachment"
+		return m, nil
+	}
+	cmd, err := clipboardCommand(attachment.DownloadURL)
+	if err != nil {
+		m.status = err.Error()
+		return m, nil
+	}
+	m.status = "Copying attachment URL..."
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return linkCopyFinishedMsg{url: attachment.DownloadURL, err: err} })
+}
+
+func writeAttachmentFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+func attachmentSaveName(attachment mailstore.AttachmentMeta) string {
+	path := mailstore.AttachmentCachePath("", attachment)
+	return filepath.Base(path)
+}
+
+func uniquePath(path string) string {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return path
+	}
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s-%d%s", base, i, ext)
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate
+		}
+	}
+}
+
+func defaultDownloadDir() string {
+	if xdg := strings.TrimSpace(os.Getenv("XDG_DOWNLOAD_DIR")); xdg != "" {
+		return expandHome(xdg)
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, "Downloads")
+	}
+	return "."
+}
+
+func expandHome(path string) string {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			if path == "~" {
+				return home
+			}
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
 func clipboardCommand(value string) (*exec.Cmd, error) {
 	for _, candidate := range []struct {
 		name string
@@ -1197,6 +1475,7 @@ func draftsToCachedMessages(drafts []mailstore.Draft) []mailstore.CachedMessage 
 				Mailbox:       draft.Meta.Kind,
 				Status:        draft.Meta.RemoteStatus,
 				RemoteError:   draft.Meta.RemoteError,
+				Attachments:   draft.Meta.Attachments,
 				Subject:       draft.Meta.Subject,
 				FromAddress:   draft.Meta.FromAddress,
 				To:            draft.Meta.To,
@@ -1309,7 +1588,7 @@ func (m Mail) listView(width, height int) string {
 	} else if box == "archive" || box == "trash" {
 		b.WriteString(" R restore.")
 	} else if box == "drafts" {
-		b.WriteString(" e edit, S send, x delete.")
+		b.WriteString(" a attach, e edit, S send, x delete.")
 	}
 	b.WriteByte('\n')
 	if m.status != "" {
@@ -1369,6 +1648,9 @@ func (m Mail) detailView(width, height int) string {
 	if message.Meta.RemoteError != "" {
 		b.WriteString(fmt.Sprintf("Delivery error: %s\n", message.Meta.RemoteError))
 	}
+	if len(message.Meta.Attachments) > 0 {
+		b.WriteString(fmt.Sprintf("Attachments: %d (A to view)\n", len(message.Meta.Attachments)))
+	}
 	if m.currentBoxSupportsMessageActions() {
 		b.WriteString(fmt.Sprintf("Read: %t\n", message.Meta.Read))
 		b.WriteString(fmt.Sprintf("Starred: %t\n", message.Meta.Starred))
@@ -1396,6 +1678,39 @@ func (m Mail) detailView(width, height int) string {
 	}
 	if len(lines) > limit {
 		b.WriteString(fmt.Sprintf("\n%d/%d lines", end, len(lines)))
+	}
+	return b.String()
+}
+
+func (m Mail) attachmentsView(width, height int) string {
+	message := m.messages[m.messageIndex]
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Attachments: %s\n", message.Meta.Subject))
+	b.WriteString("enter opens/downloads to cache, S saves to directory, y copies URL, esc returns.\n")
+	if m.status != "" {
+		b.WriteString(fmt.Sprintf("Status: %s\n", m.status))
+	}
+	b.WriteString("\n")
+	attachments := message.Meta.Attachments
+	if len(attachments) == 0 {
+		b.WriteString("No attachments on this message.\n")
+		return b.String()
+	}
+	limit := max(1, height-5)
+	start := 0
+	if m.attachmentIndex >= limit {
+		start = m.attachmentIndex - limit + 1
+	}
+	end := min(len(attachments), start+limit)
+	for i := start; i < end; i++ {
+		attachment := attachments[i]
+		cursor := "  "
+		if i == m.attachmentIndex {
+			cursor = "> "
+		}
+		line := fmt.Sprintf("%s%d. %s %s %s", cursor, i+1, attachment.Filename, attachment.ContentType, formatBytes(attachment.ByteSize))
+		b.WriteString(truncate(line, width))
+		b.WriteByte('\n')
 	}
 	return b.String()
 }
@@ -1495,4 +1810,17 @@ func truncate(value string, width int) string {
 		return value[:width]
 	}
 	return value[:width-1] + "~"
+}
+
+func formatBytes(size int64) string {
+	switch {
+	case size >= 1024*1024:
+		return fmt.Sprintf("%.1f MB", float64(size)/(1024*1024))
+	case size >= 1024:
+		return fmt.Sprintf("%.1f KB", float64(size)/1024)
+	case size > 0:
+		return fmt.Sprintf("%d B", size)
+	default:
+		return ""
+	}
 }

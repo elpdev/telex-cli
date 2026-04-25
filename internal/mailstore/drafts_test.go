@@ -1,6 +1,7 @@
 package mailstore
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -62,6 +63,33 @@ func TestCreateDraftWritesMetadataBodyAndAttachmentsFolder(t *testing.T) {
 	}
 	if read.Body != "Hello\n" || read.Meta.Subject != "Product Update!" {
 		t.Fatalf("draft = %#v", read)
+	}
+}
+
+func TestAttachFileToDraftCopiesFileAndUpdatesMetadata(t *testing.T) {
+	store := New(t.TempDir())
+	mailbox := testMailboxMeta()
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := store.CreateDraft(DraftInput{Mailbox: mailbox, Subject: "Attach", Now: time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "invoice.pdf")
+	if err := os.WriteFile(source, []byte("pdf"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := AttachFileToDraft(draft.Path, source, time.Date(2026, 4, 24, 11, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Meta.Attachments) != 1 || updated.Meta.Attachments[0].Filename != "invoice.pdf" || updated.Meta.Attachments[0].CacheName != "invoice.pdf" {
+		t.Fatalf("attachments = %#v", updated.Meta.Attachments)
+	}
+	data, err := os.ReadFile(filepath.Join(draft.Path, "attachments", "invoice.pdf"))
+	if err != nil || string(data) != "pdf" {
+		t.Fatalf("data = %q err=%v", string(data), err)
 	}
 }
 

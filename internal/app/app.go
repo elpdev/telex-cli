@@ -100,7 +100,7 @@ func (m Model) devBuild() bool { return m.meta.Version == "dev" }
 
 func (m *Model) registerScreens() {
 	m.screens["home"] = screens.NewHome()
-	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft)
+	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.downloadAttachment)
 	m.screens["settings"] = screens.NewSettings(screens.SettingsState{
 		ThemeName:      m.theme.Name,
 		SidebarVisible: m.showSidebar,
@@ -190,6 +190,17 @@ func (m *Model) sendDraft(ctx context.Context, mailbox mailstore.MailboxMeta, dr
 	}
 	_, err = mailsend.SendDraft(ctx, mailstore.New(m.dataPath), service, mailbox, draft)
 	return err
+}
+
+func (m *Model) downloadAttachment(ctx context.Context, attachment mailstore.AttachmentMeta) ([]byte, error) {
+	if attachment.DownloadURL == "" {
+		return nil, fmt.Errorf("attachment has no download URL")
+	}
+	if _, err := m.mailService(); err != nil {
+		return nil, err
+	}
+	body, _, err := m.client.Download(ctx, attachment.DownloadURL)
+	return body, err
 }
 
 func (m *Model) mailService() (*mail.Service, error) {

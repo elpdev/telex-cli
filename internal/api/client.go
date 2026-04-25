@@ -61,6 +61,51 @@ func (c *Client) Delete(ctx context.Context, path string) (int, error) {
 	return status, err
 }
 
+func (c *Client) Download(ctx context.Context, rawURL string) ([]byte, string, error) {
+	if err := c.ensureAuth(ctx); err != nil {
+		return nil, "", err
+	}
+	downloadURL, sameOrigin, err := c.resolveDownloadURL(rawURL)
+	if err != nil {
+		return nil, "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("creating download request: %w", err)
+	}
+	if sameOrigin {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("downloading %s: %w", rawURL, err)
+	}
+	defer closeSilently(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.Header.Get("Content-Type"), fmt.Errorf("reading download response: %w", err)
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, resp.Header.Get("Content-Type"), parseError(resp.StatusCode, body)
+	}
+	return body, resp.Header.Get("Content-Type"), nil
+}
+
+func (c *Client) resolveDownloadURL(rawURL string) (string, bool, error) {
+	base, err := url.Parse(c.BaseURL)
+	if err != nil {
+		return "", false, err
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", false, err
+	}
+	if !parsed.IsAbs() {
+		return base.ResolveReference(parsed).String(), true, nil
+	}
+	return parsed.String(), parsed.Scheme == base.Scheme && parsed.Host == base.Host, nil
+}
+
 func (c *Client) ensureAuth(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -265,7 +265,7 @@ func TestMailScreenTogglesReadState(t *testing.T) {
 		gotID = id
 		gotRead = read
 		return nil
-	}, nil, nil, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil, nil, nil)
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "u", Code: 'u'}))
@@ -322,7 +322,7 @@ func TestMailScreenTogglesStarState(t *testing.T) {
 		gotID = id
 		gotStarred = starred
 		return nil
-	}, nil, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil, nil)
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "s", Code: 's'}))
@@ -381,7 +381,7 @@ func TestMailScreenArchivesSelectedMessage(t *testing.T) {
 	screen := NewMailWithActions(store, nil, nil, func(ctx context.Context, id int64) error {
 		gotID = id
 		return nil
-	}, nil, nil, nil, nil)
+	}, nil, nil, nil, nil, nil)
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "a", Code: 'a'}))
@@ -542,7 +542,7 @@ func TestMailScreenSendsSelectedDraft(t *testing.T) {
 		gotDraftID = draft.Meta.ID
 		_, err := store.MoveDraftToOutbox(mailbox, draft.Meta.ID, 301, "queued", time.Date(2026, 4, 24, 15, 0, 0, 0, time.UTC))
 		return err
-	})
+	}, nil)
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	for range 5 {
@@ -589,7 +589,7 @@ func TestMailScreenDraftSendFailureLeavesDraft(t *testing.T) {
 	}
 	screen := NewMailWithActions(store, nil, nil, nil, nil, nil, nil, func(ctx context.Context, mailbox mailstore.MailboxMeta, draft mailstore.Draft) error {
 		return errors.New("remote unavailable")
-	})
+	}, nil)
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	for range 5 {
@@ -685,6 +685,93 @@ func TestMailScreenSearchFiltersCurrentBox(t *testing.T) {
 	view := stripScreenANSI(screen.View(100, 20))
 	if strings.Contains(view, "Alpha") || !strings.Contains(view, "Beta") || !strings.Contains(view, "Filter: needle (1/2)") {
 		t.Fatalf("view = %q", view)
+	}
+}
+
+func TestMailScreenShowsAndCachesAttachment(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	mailbox := mailstore.MailboxMeta{SchemaVersion: mailstore.SchemaVersion, DomainID: 12, DomainName: "example.com", InboxID: 34, Address: "hello@example.com", LocalPart: "hello", Active: true, SyncedAt: time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC)}
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.StoreInboxMessage(mailbox, mail.Message{ID: 1, Subject: "With Attachment", FromAddress: "a@example.net", SystemState: "inbox", Attachments: []mail.Attachment{{ID: 9, Filename: "invoice.pdf", ContentType: "application/pdf", ByteSize: 2048, DownloadURL: "/attachments/9"}}, ReceivedAt: time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)}, nil, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen := NewMailWithActions(store, nil, nil, nil, nil, nil, nil, nil, func(ctx context.Context, attachment mailstore.AttachmentMeta) ([]byte, error) {
+		if attachment.ID != 9 {
+			t.Fatalf("attachment id = %d", attachment.ID)
+		}
+		return []byte("pdf data"), nil
+	})
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	screen = updated.(Mail)
+	detail := stripScreenANSI(screen.View(100, 20))
+	if !strings.Contains(detail, "Attachments: 1") {
+		t.Fatalf("detail = %q", detail)
+	}
+	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Text: "A", Code: 'A'}))
+	screen = updated.(Mail)
+	attachments := stripScreenANSI(screen.View(100, 20))
+	if !strings.Contains(attachments, "invoice.pdf") || !strings.Contains(attachments, "2.0 KB") {
+		t.Fatalf("attachments = %q", attachments)
+	}
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	screen = updated.(Mail)
+	if cmd == nil {
+		t.Fatal("expected attachment download command")
+	}
+	msg := cmd().(attachmentDownloadedMsg)
+	if msg.err != nil || !msg.open {
+		t.Fatalf("download msg = %#v", msg)
+	}
+	cached := filepath.Join(path, "attachments", "9-invoice.pdf")
+	if msg.path != cached {
+		t.Fatalf("path = %q, want %q", msg.path, cached)
+	}
+	if data, err := os.ReadFile(cached); err != nil || string(data) != "pdf data" {
+		t.Fatalf("cached data = %q err=%v", string(data), err)
+	}
+}
+
+func TestMailScreenSavesAttachmentToDirectory(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	dir := t.TempDir()
+	mailbox := mailstore.MailboxMeta{SchemaVersion: mailstore.SchemaVersion, DomainID: 12, DomainName: "example.com", InboxID: 34, Address: "hello@example.com", LocalPart: "hello", Active: true, SyncedAt: time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC)}
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StoreInboxMessage(mailbox, mail.Message{ID: 1, Subject: "With Attachment", FromAddress: "a@example.net", SystemState: "inbox", Attachments: []mail.Attachment{{ID: 9, Filename: "invoice.pdf", ContentType: "application/pdf", ByteSize: 2048, DownloadURL: "/attachments/9"}}, ReceivedAt: time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)}, nil, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "9-invoice.pdf"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	screen := NewMailWithActions(store, nil, nil, nil, nil, nil, nil, nil, func(ctx context.Context, attachment mailstore.AttachmentMeta) ([]byte, error) {
+		return []byte("new"), nil
+	})
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	screen = updated.(Mail)
+	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Text: "A", Code: 'A'}))
+	screen = updated.(Mail)
+	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Text: "S", Code: 'S'}))
+	screen = updated.(Mail)
+	screen.saveDirInput = dir
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	screen = updated.(Mail)
+	if cmd == nil {
+		t.Fatal("expected save command")
+	}
+	msg := cmd().(attachmentDownloadedMsg)
+	if msg.err != nil || msg.open {
+		t.Fatalf("save msg = %#v", msg)
+	}
+	if msg.path != filepath.Join(dir, "9-invoice-2.pdf") {
+		t.Fatalf("path = %q", msg.path)
 	}
 }
 
@@ -827,7 +914,7 @@ func TestMailScreenSyncsAndReloadsCurrentBox(t *testing.T) {
 			return MailSyncResult{}, err
 		}
 		return MailSyncResult{InboxMessages: 1}, nil
-	}, nil)
+	}, nil, nil)
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "r", Code: 'r'}))
@@ -876,7 +963,7 @@ func TestMailScreenSyncFailureReloadsCache(t *testing.T) {
 	}
 	screen := NewMailWithActions(store, nil, nil, nil, nil, nil, func(ctx context.Context) (MailSyncResult, error) {
 		return MailSyncResult{}, errors.New("remote unavailable")
-	}, nil)
+	}, nil, nil)
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "r", Code: 'r'}))
@@ -929,7 +1016,7 @@ func TestMailScreenRestoresArchivedMessage(t *testing.T) {
 	screen := NewMailWithActions(store, nil, nil, nil, nil, func(ctx context.Context, id int64) error {
 		gotID = id
 		return nil
-	}, nil, nil)
+	}, nil, nil, nil)
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
@@ -1003,7 +1090,7 @@ func TestMailScreenRestoreFailureLeavesTrashUnchanged(t *testing.T) {
 	}
 	screen := NewMailWithActions(store, nil, nil, nil, nil, func(ctx context.Context, id int64) error {
 		return errors.New("remote unavailable")
-	}, nil, nil)
+	}, nil, nil, nil)
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	for range 2 {
@@ -1066,7 +1153,7 @@ func TestMailScreenTrashFailureLeavesCacheUnchanged(t *testing.T) {
 	}
 	screen := NewMailWithActions(store, nil, nil, nil, func(ctx context.Context, id int64) error {
 		return errors.New("remote unavailable")
-	}, nil, nil, nil)
+	}, nil, nil, nil, nil)
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "d", Code: 'd'}))

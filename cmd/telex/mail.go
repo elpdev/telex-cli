@@ -149,6 +149,7 @@ func newDraftsCommand(rt *runtime) *cobra.Command {
 	cmd.AddCommand(newDraftListCommand(rt))
 	cmd.AddCommand(newDraftShowCommand(rt))
 	cmd.AddCommand(newDraftEditCommand(rt))
+	cmd.AddCommand(newDraftAttachCommand(rt))
 	cmd.AddCommand(newDraftSendCommand(rt))
 	return cmd
 }
@@ -324,6 +325,40 @@ func newDraftEditCommand(rt *runtime) *cobra.Command {
 	cmd.Flags().StringSliceVar(&cc, "cc", nil, "cc address, repeatable or comma-separated")
 	cmd.Flags().StringSliceVar(&bcc, "bcc", nil, "bcc address, repeatable or comma-separated")
 	cmd.Flags().StringVar(&body, "body", "", "Markdown body")
+	_ = cmd.MarkFlagRequired("mailbox")
+	return cmd
+}
+
+func newDraftAttachCommand(rt *runtime) *cobra.Command {
+	var mailboxAddress string
+	var latest bool
+	cmd := &cobra.Command{
+		Use:   "attach [draft-id] <file>",
+		Short: "Attach a local file to a local draft",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store := mailstore.New(rt.dataPath)
+			_, mailboxPath, err := store.FindMailboxByAddress(mailboxAddress)
+			if err != nil {
+				return err
+			}
+			draftArgs := args[:len(args)-1]
+			filePath := args[len(args)-1]
+			draftID, err := resolveDraftID(mailboxAddress, mailboxPath, draftArgs, latest)
+			if err != nil {
+				return err
+			}
+			draft, err := mailstore.AttachFileToDraft(filepath.Join(mailboxPath, "drafts", draftID), filePath, time.Now())
+			if err != nil {
+				return err
+			}
+			writeRows(cmd.OutOrStdout(), []string{"key", "value"}, draftFields(*draft))
+			fmt.Fprintln(cmd.ErrOrStderr(), "Warning: outbound attachment upload is not supported yet; this draft cannot be sent until attachments are removed or upload support is added.")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
+	cmd.Flags().BoolVar(&latest, "latest", false, "attach to the newest local draft")
 	_ = cmd.MarkFlagRequired("mailbox")
 	return cmd
 }
@@ -504,6 +539,7 @@ func draftFields(draft mailstore.Draft) [][]string {
 		{"bcc", strings.Join(draft.Meta.BCC, ", ")},
 		{"subject", draft.Meta.Subject},
 		{"updated_at", draft.Meta.UpdatedAt.Format("2006-01-02 15:04")},
+		{"attachments", strconv.Itoa(len(draft.Meta.Attachments))},
 		{"path", draft.Path},
 	}
 	if draft.Meta.SourceMessageID > 0 {

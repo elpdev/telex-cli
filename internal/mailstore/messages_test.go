@@ -24,6 +24,7 @@ func TestStoreInboxMessageWritesChronologicalMessageCache(t *testing.T) {
 		ToAddresses:    []string{"hello@example.com"},
 		SystemState:    "inbox",
 		Read:           true,
+		Attachments:    []mail.Attachment{{ID: 55, Filename: "invoice.pdf", ContentType: "application/pdf", ByteSize: 2048, DownloadURL: "/download/55"}},
 		ReceivedAt:     receivedAt,
 	}, &mail.MessageBody{Text: "Plain text", HTML: "<p>Plain text</p>"}, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC))
 	if err != nil {
@@ -37,6 +38,13 @@ func TestStoreInboxMessageWritesChronologicalMessageCache(t *testing.T) {
 	assertFile(t, filepath.Join(path, "body.txt"))
 	assertFile(t, filepath.Join(path, "body.html"))
 	assertDir(t, filepath.Join(path, "attachments"))
+	readBack, err := ReadCachedMessage(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readBack.Meta.Attachments) != 1 || readBack.Meta.Attachments[0].Filename != "invoice.pdf" {
+		t.Fatalf("attachments = %#v", readBack.Meta.Attachments)
+	}
 }
 
 func TestListInboxReturnsNewestFirstAndReadsBodies(t *testing.T) {

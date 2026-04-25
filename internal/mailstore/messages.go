@@ -13,25 +13,38 @@ import (
 )
 
 type MessageMeta struct {
-	SchemaVersion  int       `toml:"schema_version"`
-	Kind           string    `toml:"kind"`
-	RemoteID       int64     `toml:"remote_id"`
-	ConversationID int64     `toml:"conversation_id"`
-	DomainID       int64     `toml:"domain_id"`
-	DomainName     string    `toml:"domain_name"`
-	InboxID        int64     `toml:"inbox_id"`
-	Mailbox        string    `toml:"mailbox"`
-	Status         string    `toml:"status"`
-	RemoteError    string    `toml:"remote_error"`
-	Subject        string    `toml:"subject"`
-	FromAddress    string    `toml:"from_address"`
-	FromName       string    `toml:"from_name"`
-	To             []string  `toml:"to"`
-	CC             []string  `toml:"cc"`
-	Read           bool      `toml:"read"`
-	Starred        bool      `toml:"starred"`
-	ReceivedAt     time.Time `toml:"received_at"`
-	SyncedAt       time.Time `toml:"synced_at"`
+	SchemaVersion  int              `toml:"schema_version"`
+	Kind           string           `toml:"kind"`
+	RemoteID       int64            `toml:"remote_id"`
+	ConversationID int64            `toml:"conversation_id"`
+	DomainID       int64            `toml:"domain_id"`
+	DomainName     string           `toml:"domain_name"`
+	InboxID        int64            `toml:"inbox_id"`
+	Mailbox        string           `toml:"mailbox"`
+	Status         string           `toml:"status"`
+	RemoteError    string           `toml:"remote_error"`
+	Subject        string           `toml:"subject"`
+	FromAddress    string           `toml:"from_address"`
+	FromName       string           `toml:"from_name"`
+	To             []string         `toml:"to"`
+	CC             []string         `toml:"cc"`
+	Read           bool             `toml:"read"`
+	Starred        bool             `toml:"starred"`
+	Attachments    []AttachmentMeta `toml:"attachments"`
+	ReceivedAt     time.Time        `toml:"received_at"`
+	SyncedAt       time.Time        `toml:"synced_at"`
+}
+
+type AttachmentMeta struct {
+	ID          int64  `toml:"id"`
+	Filename    string `toml:"filename"`
+	CacheName   string `toml:"cache_name"`
+	ContentType string `toml:"content_type"`
+	ByteSize    int64  `toml:"byte_size"`
+	Previewable bool   `toml:"previewable"`
+	PreviewKind string `toml:"preview_kind"`
+	PreviewURL  string `toml:"preview_url"`
+	DownloadURL string `toml:"download_url"`
 }
 
 type CachedMessage struct {
@@ -71,6 +84,7 @@ func (s Store) StoreInboxMessage(mailbox MailboxMeta, message mail.Message, body
 		CC:             message.CCAddresses,
 		Read:           message.Read,
 		Starred:        message.Starred,
+		Attachments:    attachmentMetas(message.Attachments),
 		ReceivedAt:     receivedAt,
 		SyncedAt:       syncedAt,
 	}
@@ -86,6 +100,65 @@ func (s Store) StoreInboxMessage(mailbox MailboxMeta, message mail.Message, body
 		}
 	}
 	return path, nil
+}
+
+func attachmentMetas(attachments []mail.Attachment) []AttachmentMeta {
+	metas := make([]AttachmentMeta, 0, len(attachments))
+	for _, attachment := range attachments {
+		metas = append(metas, AttachmentMeta{
+			ID:          attachment.ID,
+			Filename:    attachment.Filename,
+			CacheName:   attachmentCacheName(AttachmentMeta{ID: attachment.ID, Filename: attachment.Filename}),
+			ContentType: attachment.ContentType,
+			ByteSize:    attachment.ByteSize,
+			Previewable: attachment.Previewable,
+			PreviewKind: attachment.PreviewKind,
+			PreviewURL:  attachment.PreviewURL,
+			DownloadURL: attachment.DownloadURL,
+		})
+	}
+	return metas
+}
+
+func AttachmentCachePath(messagePath string, attachment AttachmentMeta) string {
+	return filepath.Join(messagePath, "attachments", attachmentFileName(attachment))
+}
+
+func attachmentFileName(attachment AttachmentMeta) string {
+	if attachment.CacheName != "" {
+		return attachment.CacheName
+	}
+	return attachmentCacheName(attachment)
+}
+
+func attachmentCacheName(attachment AttachmentMeta) string {
+	name := safeFilename(attachment.Filename)
+	if name == "" {
+		name = "attachment"
+	}
+	if attachment.ID > 0 {
+		name = fmt.Sprintf("%d-%s", attachment.ID, name)
+	}
+	return name
+}
+
+func safeFilename(value string) string {
+	value = strings.TrimSpace(filepath.Base(value))
+	value = strings.Trim(value, ".")
+	var b strings.Builder
+	lastDash := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func messageItemPath(mailboxPath, box string, at time.Time, remoteID int64, subject string) string {
