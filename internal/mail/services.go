@@ -151,6 +151,11 @@ func (s *Service) UpdateOutboundMessage(ctx context.Context, id int64, input *Ou
 	return &envelope.Data, nil
 }
 
+func (s *Service) DeleteOutboundMessage(ctx context.Context, id int64) error {
+	_, err := s.client.Delete(ctx, fmt.Sprintf("/api/v1/outbound_messages/%d", id))
+	return err
+}
+
 func (s *Service) SendOutboundMessage(ctx context.Context, id int64) (*OutboundMessage, error) {
 	body, _, err := s.client.Post(ctx, fmt.Sprintf("/api/v1/outbound_messages/%d/send_message", id), nil)
 	if err != nil {

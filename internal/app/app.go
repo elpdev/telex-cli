@@ -101,7 +101,7 @@ func (m Model) devBuild() bool { return m.meta.Version == "dev" }
 
 func (m *Model) registerScreens() {
 	m.screens["home"] = screens.NewHome()
-	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.forwardMessage, m.downloadAttachment)
+	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment)
 	m.screens["settings"] = screens.NewSettings(screens.SettingsState{
 		ThemeName:      m.theme.Name,
 		SidebarVisible: m.showSidebar,
@@ -192,6 +192,52 @@ func (m *Model) sendDraft(ctx context.Context, mailbox mailstore.MailboxMeta, dr
 	}
 	_, err = mailsend.SendDraft(ctx, mailstore.New(m.dataPath), service, mailbox, draft)
 	return err
+}
+
+func (m *Model) updateDraft(ctx context.Context, draft mailstore.Draft) error {
+	if draft.Meta.RemoteID == 0 {
+		return nil
+	}
+	service, err := m.mailService()
+	if err != nil {
+		return err
+	}
+	_, err = service.UpdateOutboundMessage(ctx, draft.Meta.RemoteID, outboundInputFromDraft(draft))
+	return err
+}
+
+func (m *Model) deleteDraft(ctx context.Context, draft mailstore.Draft) error {
+	if draft.Meta.RemoteID == 0 {
+		return nil
+	}
+	service, err := m.mailService()
+	if err != nil {
+		return err
+	}
+	return service.DeleteOutboundMessage(ctx, draft.Meta.RemoteID)
+}
+
+func outboundInputFromDraft(draft mailstore.Draft) *mail.OutboundMessageInput {
+	domainID := draft.Meta.DomainID
+	inboxID := draft.Meta.InboxID
+	return &mail.OutboundMessageInput{
+		DomainID:        &domainID,
+		InboxID:         &inboxID,
+		SourceMessageID: int64Ptr(draft.Meta.SourceMessageID),
+		ConversationID:  int64Ptr(draft.Meta.ConversationID),
+		ToAddresses:     draft.Meta.To,
+		CCAddresses:     draft.Meta.CC,
+		BCCAddresses:    draft.Meta.BCC,
+		Subject:         draft.Meta.Subject,
+		Body:            draft.Body,
+	}
+}
+
+func int64Ptr(value int64) *int64 {
+	if value == 0 {
+		return nil
+	}
+	return &value
 }
 
 func (m *Model) forwardMessage(ctx context.Context, id int64, to []string) (int64, string, error) {

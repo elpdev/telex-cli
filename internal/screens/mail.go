@@ -41,6 +41,8 @@ type Mail struct {
 	restore          MessageActionFunc
 	sync             SyncFunc
 	sendDraft        SendDraftFunc
+	updateDraft      UpdateDraftFunc
+	deleteDraft      DeleteDraftFunc
 	forward          ForwardFunc
 	download         DownloadAttachmentFunc
 	mailboxes        []mailstore.MailboxMeta
@@ -162,6 +164,11 @@ type draftEditedMsg struct {
 	err          error
 }
 
+type remoteDraftUpdatedMsg struct {
+	remoteID int64
+	err      error
+}
+
 type draftDeletedMsg struct {
 	index int
 	path  string
@@ -201,6 +208,8 @@ type ToggleStarFunc func(context.Context, int64, bool) error
 type MessageActionFunc func(context.Context, int64) error
 type SyncFunc func(context.Context) (MailSyncResult, error)
 type SendDraftFunc func(context.Context, mailstore.MailboxMeta, mailstore.Draft) error
+type UpdateDraftFunc func(context.Context, mailstore.Draft) error
+type DeleteDraftFunc func(context.Context, mailstore.Draft) error
 type ForwardFunc func(context.Context, int64, []string) (int64, string, error)
 type DownloadAttachmentFunc func(context.Context, mailstore.AttachmentMeta) ([]byte, error)
 
@@ -215,11 +224,11 @@ type MailSyncResult struct {
 }
 
 func NewMail(store mailstore.Store) Mail {
-	return NewMailWithActions(store, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	return NewMailWithActions(store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
-func NewMailWithActions(store mailstore.Store, toggleRead ToggleReadFunc, toggleStar ToggleStarFunc, archive MessageActionFunc, trash MessageActionFunc, restore MessageActionFunc, sync SyncFunc, sendDraft SendDraftFunc, forward ForwardFunc, download DownloadAttachmentFunc) Mail {
-	return Mail{store: store, toggleRead: toggleRead, toggleStar: toggleStar, archive: archive, trash: trash, restore: restore, sync: sync, sendDraft: sendDraft, forward: forward, download: download, keys: DefaultMailKeyMap(), loading: true}
+func NewMailWithActions(store mailstore.Store, toggleRead ToggleReadFunc, toggleStar ToggleStarFunc, archive MessageActionFunc, trash MessageActionFunc, restore MessageActionFunc, sync SyncFunc, sendDraft SendDraftFunc, updateDraft UpdateDraftFunc, deleteDraft DeleteDraftFunc, forward ForwardFunc, download DownloadAttachmentFunc) Mail {
+	return Mail{store: store, toggleRead: toggleRead, toggleStar: toggleStar, archive: archive, trash: trash, restore: restore, sync: sync, sendDraft: sendDraft, updateDraft: updateDraft, deleteDraft: deleteDraft, forward: forward, download: download, keys: DefaultMailKeyMap(), loading: true}
 }
 
 func DefaultMailKeyMap() MailKeyMap {
@@ -374,6 +383,19 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			m.applySearch()
 			m.clampSelection()
 		}
+		if draft.Meta.RemoteID > 0 && m.updateDraft != nil {
+			m.status = fmt.Sprintf("Draft saved locally; syncing remote draft %d...", draft.Meta.RemoteID)
+			return m, func() tea.Msg {
+				return remoteDraftUpdatedMsg{remoteID: draft.Meta.RemoteID, err: m.updateDraft(context.Background(), *draft)}
+			}
+		}
+		return m, nil
+	case remoteDraftUpdatedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not sync remote draft %d: %v", msg.remoteID, msg.err)
+			return m, nil
+		}
+		m.status = fmt.Sprintf("Remote draft synced: %d", msg.remoteID)
 		return m, nil
 	case draftSentMsg:
 		if msg.err != nil {
@@ -1170,6 +1192,15 @@ func (m Mail) deleteSelectedDraft() (Screen, tea.Cmd) {
 	path := m.messages[index].Path
 	m.status = "Deleting draft..."
 	return m, func() tea.Msg {
+		draft, err := mailstore.ReadDraft(path)
+		if err != nil {
+			return draftDeletedMsg{index: index, path: path, err: err}
+		}
+		if draft.Meta.RemoteID > 0 && m.deleteDraft != nil {
+			if err := m.deleteDraft(context.Background(), *draft); err != nil {
+				return draftDeletedMsg{index: index, path: path, err: err}
+			}
+		}
 		return draftDeletedMsg{index: index, path: path, err: mailstore.DeleteDraft(path)}
 	}
 }
@@ -1499,9 +1530,9 @@ func splitDraftAddresses(value string) []string {
 }
 
 func quotedReplyBody(message mailstore.CachedMessage) string {
-	body := strings.TrimSpace(message.BodyText)
+	body := strings.TrimSpace(emailtext.DecodeQuotedPrintable(message.BodyText))
 	if body == "" {
-		body = strings.TrimSpace(message.BodyHTML)
+		body = strings.TrimSpace(emailtext.DecodeQuotedPrintable(message.BodyHTML))
 	}
 	if body == "" {
 		return "\n\n"
@@ -1514,9 +1545,9 @@ func quotedReplyBody(message mailstore.CachedMessage) string {
 }
 
 func quotedForwardBody(message mailstore.CachedMessage) string {
-	body := strings.TrimSpace(message.BodyText)
+	body := strings.TrimSpace(emailtext.DecodeQuotedPrintable(message.BodyText))
 	if body == "" {
-		body = strings.TrimSpace(message.BodyHTML)
+		body = strings.TrimSpace(emailtext.DecodeQuotedPrintable(message.BodyHTML))
 	}
 	var b strings.Builder
 	b.WriteString("\n\n---------- Forwarded message ---------\n")

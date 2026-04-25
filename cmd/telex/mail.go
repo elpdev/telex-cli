@@ -205,6 +205,7 @@ func newDraftsCommand(rt *runtime) *cobra.Command {
 	cmd.AddCommand(newDraftEditCommand(rt))
 	cmd.AddCommand(newDraftAttachCommand(rt))
 	cmd.AddCommand(newDraftDetachCommand(rt))
+	cmd.AddCommand(newDraftDeleteCommand(rt))
 	cmd.AddCommand(newDraftSendCommand(rt))
 	return cmd
 }
@@ -369,6 +370,15 @@ func newDraftEditCommand(rt *runtime) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if updated.Meta.RemoteID > 0 {
+				service, err := mailService(rt)
+				if err != nil {
+					return err
+				}
+				if _, err := service.UpdateOutboundMessage(rt.context(), updated.Meta.RemoteID, outboundInputFromDraft(*updated)); err != nil {
+					return err
+				}
+			}
 			writeRows(cmd.OutOrStdout(), []string{"key", "value"}, draftFields(*updated))
 			return nil
 		},
@@ -446,6 +456,50 @@ func newDraftDetachCommand(rt *runtime) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
 	cmd.Flags().BoolVar(&latest, "latest", false, "detach from the newest local draft")
+	_ = cmd.MarkFlagRequired("mailbox")
+	return cmd
+}
+
+func newDraftDeleteCommand(rt *runtime) *cobra.Command {
+	var mailboxAddress string
+	var latest bool
+	cmd := &cobra.Command{
+		Use:   "delete [draft-id]",
+		Short: "Delete a local or synced remote draft",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store := mailstore.New(rt.dataPath)
+			_, mailboxPath, err := store.FindMailboxByAddress(mailboxAddress)
+			if err != nil {
+				return err
+			}
+			draftID, err := resolveDraftID(mailboxAddress, mailboxPath, args, latest)
+			if err != nil {
+				return err
+			}
+			draftPath := filepath.Join(mailboxPath, "drafts", draftID)
+			draft, err := mailstore.ReadDraft(draftPath)
+			if err != nil {
+				return err
+			}
+			if draft.Meta.RemoteID > 0 {
+				service, err := mailService(rt)
+				if err != nil {
+					return err
+				}
+				if err := service.DeleteOutboundMessage(rt.context(), draft.Meta.RemoteID); err != nil {
+					return err
+				}
+			}
+			if err := mailstore.DeleteDraft(draftPath); err != nil {
+				return err
+			}
+			writeRows(cmd.OutOrStdout(), []string{"key", "value"}, [][]string{{"deleted", draft.Meta.ID}})
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
+	cmd.Flags().BoolVar(&latest, "latest", false, "delete the newest local draft")
 	_ = cmd.MarkFlagRequired("mailbox")
 	return cmd
 }
@@ -651,6 +705,29 @@ func outboxUpdateRows(updates []mailsync.OutboxUpdate, includeMailbox bool) [][]
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+func outboundInputFromDraft(draft mailstore.Draft) *mail.OutboundMessageInput {
+	domainID := draft.Meta.DomainID
+	inboxID := draft.Meta.InboxID
+	return &mail.OutboundMessageInput{
+		DomainID:        &domainID,
+		InboxID:         &inboxID,
+		SourceMessageID: int64Ptr(draft.Meta.SourceMessageID),
+		ConversationID:  int64Ptr(draft.Meta.ConversationID),
+		ToAddresses:     draft.Meta.To,
+		CCAddresses:     draft.Meta.CC,
+		BCCAddresses:    draft.Meta.BCC,
+		Subject:         draft.Meta.Subject,
+		Body:            draft.Body,
+	}
+}
+
+func int64Ptr(value int64) *int64 {
+	if value == 0 {
+		return nil
+	}
+	return &value
 }
 
 func newMailboxesCommand(rt *runtime) *cobra.Command {

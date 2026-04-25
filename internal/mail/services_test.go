@@ -108,6 +108,17 @@ func TestAttachOutboundMessageFileUsesAttachmentEndpoint(t *testing.T) {
 	}
 }
 
+func TestDeleteOutboundMessageUsesDeleteEndpoint(t *testing.T) {
+	fake := &fakeClient{}
+	service := NewService(fake)
+	if err := service.DeleteOutboundMessage(context.Background(), 123); err != nil {
+		t.Fatal(err)
+	}
+	if fake.deletePath != "/api/v1/outbound_messages/123" {
+		t.Fatalf("delete path = %q", fake.deletePath)
+	}
+}
+
 func assertQuery(t *testing.T, query url.Values, key, want string) {
 	t.Helper()
 	if got := query.Get(key); got != want {
@@ -123,6 +134,7 @@ type fakeClient struct {
 	postBody      any
 	multipartPath string
 	multipartFile string
+	deletePath    string
 }
 
 func (f *fakeClient) Get(_ context.Context, path string, query url.Values) ([]byte, int, error) {
@@ -147,7 +159,8 @@ func (f *fakeClient) Patch(_ context.Context, _ string, _ any) ([]byte, int, err
 	return f.body, 200, nil
 }
 
-func (f *fakeClient) Delete(_ context.Context, _ string) (int, error) {
+func (f *fakeClient) Delete(_ context.Context, path string) (int, error) {
+	f.deletePath = path
 	return 204, nil
 }
 
