@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/elpdev/telex-cli/internal/api"
@@ -177,6 +178,7 @@ func (m *Model) syncMail(ctx context.Context) (screens.MailSyncResult, error) {
 		ActiveMailboxes:  result.ActiveMailboxes,
 		SkippedMailboxes: result.SkippedMailboxes,
 		OutboxItems:      result.OutboxItems,
+		DraftItems:       result.DraftItems,
 		InboxMessages:    result.InboxMessages,
 		BodyErrors:       result.BodyErrors,
 		InboxErrors:      result.InboxErrors,
@@ -200,6 +202,14 @@ func (m *Model) forwardMessage(ctx context.Context, id int64, to []string) (int6
 	outbound, err := service.Forward(ctx, id, to)
 	if err != nil {
 		return 0, "", err
+	}
+	store := mailstore.New(m.dataPath)
+	mailboxes, _ := store.ListMailboxes()
+	for _, mailbox := range mailboxes {
+		if mailbox.InboxID == outbound.InboxID || mailbox.DomainID == outbound.DomainID {
+			_, _ = store.StoreRemoteDraft(mailbox, *outbound, time.Now())
+			break
+		}
 	}
 	return outbound.ID, outbound.Status, nil
 }

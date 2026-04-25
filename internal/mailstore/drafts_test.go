@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/elpdev/telex-cli/internal/mail"
 )
 
 func TestFindMailboxByAddressUsesSyncedMetadata(t *testing.T) {
@@ -120,6 +122,28 @@ func TestDetachFileFromDraftRemovesFileAndMetadata(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(draft.Path, "attachments", "invoice.pdf")); !os.IsNotExist(err) {
 		t.Fatalf("attachment file should be removed: %v", err)
+	}
+}
+
+func TestStoreRemoteDraftImportsOutboundDraft(t *testing.T) {
+	store := New(t.TempDir())
+	mailbox := testMailboxMeta()
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := store.StoreRemoteDraft(mailbox, mail.OutboundMessage{ID: 99, DomainID: mailbox.DomainID, InboxID: mailbox.InboxID, Status: "draft", Subject: "Remote", ToAddresses: []string{"to@example.net"}, BodyText: "body", CreatedAt: time.Date(2026, 4, 24, 11, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 24, 12, 0, 0, 0, time.UTC), Attachments: []mail.Attachment{{ID: 7, Filename: "remote.pdf", DownloadURL: "/download/7"}}}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.Meta.RemoteID != 99 || draft.Meta.Subject != "Remote" || draft.Body != "body" || len(draft.Meta.Attachments) != 1 {
+		t.Fatalf("draft = %#v", draft)
+	}
+	updated, err := store.StoreRemoteDraft(mailbox, mail.OutboundMessage{ID: 99, DomainID: mailbox.DomainID, InboxID: mailbox.InboxID, Status: "draft", Subject: "Remote Updated", BodyText: "updated"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Path != draft.Path || updated.Meta.Subject != "Remote Updated" || updated.Body != "updated" {
+		t.Fatalf("updated = %#v", updated)
 	}
 }
 

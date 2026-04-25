@@ -111,12 +111,36 @@ func (s *Service) Forward(ctx context.Context, id int64, targetAddresses []strin
 	return s.outboundAction(ctx, id, "forward", map[string]any{"target_addresses": targetAddresses})
 }
 
+func (s *Service) ListOutboundMessages(ctx context.Context, params OutboundMessageListParams) ([]OutboundMessage, *api.Pagination, error) {
+	body, _, err := s.client.Get(ctx, "/api/v1/outbound_messages", outboundMessageQuery(params))
+	if err != nil {
+		return nil, nil, err
+	}
+	envelope, err := api.DecodeEnvelope[[]OutboundMessage](body)
+	if err != nil {
+		return nil, nil, err
+	}
+	return envelope.Data, api.DecodePagination(envelope.Meta), nil
+}
+
 func (s *Service) CreateOutboundMessage(ctx context.Context, input *OutboundMessageInput, queue bool) (*OutboundMessage, error) {
 	payload := map[string]any{"outbound_message": outboundInputMap(input)}
 	if queue {
 		payload["queue"] = true
 	}
 	body, _, err := s.client.Post(ctx, "/api/v1/outbound_messages", payload)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[OutboundMessage](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
+}
+
+func (s *Service) UpdateOutboundMessage(ctx context.Context, id int64, input *OutboundMessageInput) (*OutboundMessage, error) {
+	body, _, err := s.client.Patch(ctx, fmt.Sprintf("/api/v1/outbound_messages/%d", id), map[string]any{"outbound_message": outboundInputMap(input)})
 	if err != nil {
 		return nil, err
 	}
@@ -211,6 +235,18 @@ func messageQuery(params MessageListParams) url.Values {
 	setString(query, "subaddress", params.Subaddress)
 	setString(query, "received_from", params.ReceivedFrom)
 	setString(query, "received_to", params.ReceivedTo)
+	setString(query, "sort", params.Sort)
+	return query
+}
+
+func outboundMessageQuery(params OutboundMessageListParams) url.Values {
+	query := url.Values{}
+	setInt(query, "page", params.Page)
+	setInt(query, "per_page", params.PerPage)
+	setInt64(query, "domain_id", params.DomainID)
+	setInt64(query, "conversation_id", params.ConversationID)
+	setInt64(query, "source_message_id", params.SourceMessageID)
+	setString(query, "status", params.Status)
 	setString(query, "sort", params.Sort)
 	return query
 }

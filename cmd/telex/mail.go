@@ -60,6 +60,9 @@ func runMailSync(cmd *cobra.Command, rt *runtime, mailboxAddress string) error {
 	} else {
 		fmt.Fprintln(cmd.OutOrStdout(), "Outbox already synced.")
 	}
+	if result.DraftItems > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "Synced %d remote draft(s).\n", result.DraftItems)
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Synced %d inbox message(s).\n", result.InboxMessages)
 	if result.BodyErrors > 0 {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Skipped %d inbox message body fetch(es) due to remote API errors; metadata was still cached.\n", result.BodyErrors)
@@ -628,6 +631,9 @@ func draftFields(draft mailstore.Draft) [][]string {
 	}
 	if draft.Meta.SourceMessageID > 0 {
 		rows = append(rows, []string{"source_message_id", strconv.FormatInt(draft.Meta.SourceMessageID, 10)})
+	}
+	if draft.Meta.RemoteID > 0 {
+		rows = append(rows, []string{"remote_id", strconv.FormatInt(draft.Meta.RemoteID, 10)})
 	}
 	if draft.Meta.ConversationID > 0 {
 		rows = append(rows, []string{"conversation_id", strconv.FormatInt(draft.Meta.ConversationID, 10)})

@@ -13,6 +13,7 @@ type Result struct {
 	ActiveMailboxes  int
 	SkippedMailboxes int
 	OutboxItems      int
+	DraftItems       int
 	InboxMessages    int
 	BodyErrors       int
 	InboxErrors      int
@@ -50,6 +51,11 @@ func Run(ctx context.Context, store mailstore.Store, service *mail.Service, mail
 		mailboxes = []mailstore.MailboxMeta{*mailbox}
 	}
 	for _, mailbox := range mailboxes {
+		draftCount, err := SyncRemoteDraftsForMailbox(ctx, service, store, mailbox)
+		if err != nil {
+			return result, fmt.Errorf("sync remote drafts for %s: %w", mailbox.Address, err)
+		}
+		result.DraftItems += draftCount
 		outboxUpdates, err := SyncOutboxForMailbox(ctx, service, store, mailbox)
 		if err != nil {
 			return result, fmt.Errorf("sync outbox for %s: %w", mailbox.Address, err)
@@ -68,6 +74,39 @@ func Run(ctx context.Context, store mailstore.Store, service *mail.Service, mail
 		}
 	}
 	return result, nil
+}
+
+func SyncRemoteDraftsForMailbox(ctx context.Context, service *mail.Service, store mailstore.Store, mailbox mailstore.MailboxMeta) (int, error) {
+	count := 0
+	page := 1
+	const perPage = 100
+	for {
+		outbound, pagination, err := service.ListOutboundMessages(ctx, mail.OutboundMessageListParams{
+			ListParams: mail.ListParams{Page: page, PerPage: perPage},
+			DomainID:   mailbox.DomainID,
+			Status:     "draft",
+			Sort:       "-updated_at",
+		})
+		if err != nil {
+			return count, fmt.Errorf("list page %d: %w", page, err)
+		}
+		if len(outbound) == 0 {
+			return count, nil
+		}
+		for _, draft := range outbound {
+			if draft.InboxID != 0 && draft.InboxID != mailbox.InboxID {
+				continue
+			}
+			if _, err := store.StoreRemoteDraft(mailbox, draft, time.Now()); err != nil {
+				return count, fmt.Errorf("store remote draft %d: %w", draft.ID, err)
+			}
+			count++
+		}
+		if pagination == nil || page*pagination.PerPage >= pagination.TotalCount {
+			return count, nil
+		}
+		page++
+	}
 }
 
 func SyncOutboxForMailbox(ctx context.Context, service *mail.Service, store mailstore.Store, mailbox mailstore.MailboxMeta) ([]OutboxUpdate, error) {

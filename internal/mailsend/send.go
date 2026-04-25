@@ -2,6 +2,7 @@ package mailsend
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/elpdev/telex-cli/internal/mail"
@@ -20,7 +21,7 @@ func SendDraft(ctx context.Context, store mailstore.Store, service *mail.Service
 	inboxID := draft.Meta.InboxID
 	sourceMessageID := draft.Meta.SourceMessageID
 	conversationID := draft.Meta.ConversationID
-	outbound, err := service.CreateOutboundMessage(ctx, &mail.OutboundMessageInput{
+	input := &mail.OutboundMessageInput{
 		DomainID:        &domainID,
 		InboxID:         &inboxID,
 		SourceMessageID: int64Ptr(sourceMessageID),
@@ -30,12 +31,23 @@ func SendDraft(ctx context.Context, store mailstore.Store, service *mail.Service
 		BCCAddresses:    draft.Meta.BCC,
 		Subject:         draft.Meta.Subject,
 		Body:            draft.Body,
-	}, false)
+	}
+	var outbound *mail.OutboundMessage
+	var err error
+	if draft.Meta.RemoteID > 0 {
+		outbound, err = service.UpdateOutboundMessage(ctx, draft.Meta.RemoteID, input)
+	} else {
+		outbound, err = service.CreateOutboundMessage(ctx, input, false)
+	}
 	if err != nil {
 		return Result{}, err
 	}
 	for _, attachment := range draft.Meta.Attachments {
-		if _, err := service.AttachOutboundMessageFile(ctx, outbound.ID, mailstore.AttachmentCachePath(draft.Path, attachment)); err != nil {
+		path := mailstore.AttachmentCachePath(draft.Path, attachment)
+		if !localFileExists(path) {
+			continue
+		}
+		if _, err := service.AttachOutboundMessageFile(ctx, outbound.ID, path); err != nil {
 			return Result{}, err
 		}
 	}
@@ -48,6 +60,11 @@ func SendDraft(ctx context.Context, store mailstore.Store, service *mail.Service
 		return Result{}, err
 	}
 	return Result{DraftID: moved.Meta.ID, RemoteID: sent.ID, Status: sent.Status, Path: moved.Path}, nil
+}
+
+func localFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func int64Ptr(value int64) *int64 {

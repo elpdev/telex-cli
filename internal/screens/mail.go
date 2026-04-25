@@ -208,6 +208,7 @@ type MailSyncResult struct {
 	ActiveMailboxes  int
 	SkippedMailboxes int
 	OutboxItems      int
+	DraftItems       int
 	InboxMessages    int
 	BodyErrors       int
 	InboxErrors      int
@@ -1587,6 +1588,9 @@ func syncStatus(result MailSyncResult) string {
 	status := fmt.Sprintf("Synced %d mailbox(es), %d inbox message(s)", result.ActiveMailboxes, result.InboxMessages)
 	if result.OutboxItems > 0 {
 		status = fmt.Sprintf("%s, %d outbox item(s)", status, result.OutboxItems)
+	}
+	if result.DraftItems > 0 {
+		status = fmt.Sprintf("%s, %d remote draft(s)", status, result.DraftItems)
 	}
 	if result.BodyErrors > 0 || result.InboxErrors > 0 {
 		status = fmt.Sprintf("%s with warnings", status)

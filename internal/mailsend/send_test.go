@@ -124,6 +124,44 @@ func TestSendDraftUploadsAttachmentsBeforeQueueing(t *testing.T) {
 	}
 }
 
+func TestSendDraftUpdatesRemoteDraftBeforeQueueing(t *testing.T) {
+	var patched bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/outbound_messages/900":
+			if r.Method != http.MethodPatch {
+				t.Fatalf("method = %s", r.Method)
+			}
+			patched = true
+			_, _ = w.Write([]byte(`{"data":{"id":900,"status":"draft"}}`))
+		case "/api/v1/outbound_messages/900/send_message":
+			_, _ = w.Write([]byte(`{"data":{"id":900,"status":"queued"}}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	store := mailstore.New(t.TempDir())
+	mailbox := mailstore.MailboxMeta{SchemaVersion: mailstore.SchemaVersion, DomainID: 12, DomainName: "example.com", InboxID: 34, Address: "hello@example.com", LocalPart: "hello", Active: true, SyncedAt: time.Now()}
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := store.StoreRemoteDraft(mailbox, mail.OutboundMessage{ID: 900, DomainID: mailbox.DomainID, InboxID: mailbox.InboxID, Status: "draft", Subject: "Remote", ToAddresses: []string{"to@example.net"}, BodyText: "Body", CreatedAt: time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC)}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := mail.NewService(testAPIClient(t, server.URL))
+	result, err := SendDraft(context.Background(), store, service, mailbox, *draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !patched || result.RemoteID != 900 || result.Status != "queued" {
+		t.Fatalf("patched=%t result=%#v", patched, result)
+	}
+}
+
 func testAPIClient(t *testing.T, baseURL string) *api.Client {
 	t.Helper()
 	tokenPath := filepath.Join(t.TempDir(), "token.toml")

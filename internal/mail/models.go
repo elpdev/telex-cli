@@ -138,6 +138,15 @@ type MessageListParams struct {
 	Sort           string
 }
 
+type OutboundMessageListParams struct {
+	ListParams
+	DomainID        int64
+	ConversationID  int64
+	SourceMessageID int64
+	Status          string
+	Sort            string
+}
+
 type OutboundMessage struct {
 	ID                  int64          `json:"id"`
 	DomainID            int64          `json:"domain_id"`
