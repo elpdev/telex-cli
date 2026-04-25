@@ -11,10 +11,20 @@ import (
 )
 
 type Config struct {
-	BaseURL   string `toml:"base_url"`
-	ClientID  string `toml:"client_id"`
-	SecretKey string `toml:"secret_key"`
+	BaseURL   string      `toml:"base_url"`
+	ClientID  string      `toml:"client_id"`
+	SecretKey string      `toml:"secret_key"`
+	Drive     DriveConfig `toml:"drive"`
 }
+
+type DriveConfig struct {
+	SyncMode string `toml:"sync_mode"`
+}
+
+const (
+	DriveSyncFull         = "full"
+	DriveSyncMetadataOnly = "metadata_only"
+)
 
 type TokenCache struct {
 	Token     string    `toml:"token"`
@@ -59,7 +69,19 @@ func (c *Config) Validate() error {
 	if c.SecretKey == "" {
 		return fmt.Errorf("secret_key is required")
 	}
+	switch c.DriveSyncMode() {
+	case DriveSyncFull, DriveSyncMetadataOnly:
+	default:
+		return fmt.Errorf("drive.sync_mode must be %q or %q", DriveSyncFull, DriveSyncMetadataOnly)
+	}
 	return nil
+}
+
+func (c *Config) DriveSyncMode() string {
+	if c == nil || c.Drive.SyncMode == "" {
+		return DriveSyncFull
+	}
+	return c.Drive.SyncMode
 }
 
 func (c *Config) SaveTo(path string) error {

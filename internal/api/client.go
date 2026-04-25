@@ -137,6 +137,33 @@ func (c *Client) Download(ctx context.Context, rawURL string) ([]byte, string, e
 	return body, resp.Header.Get("Content-Type"), nil
 }
 
+func (c *Client) PutRaw(ctx context.Context, rawURL string, headers map[string]string, body io.Reader) (int, error) {
+	uploadURL, _, err := c.resolveDownloadURL(rawURL)
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, uploadURL, body)
+	if err != nil {
+		return 0, fmt.Errorf("creating raw upload request: %w", err)
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("uploading %s: %w", rawURL, err)
+	}
+	defer closeSilently(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, fmt.Errorf("reading raw upload response: %w", err)
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		return resp.StatusCode, parseError(resp.StatusCode, respBody)
+	}
+	return resp.StatusCode, nil
+}
+
 func (c *Client) resolveDownloadURL(rawURL string) (string, bool, error) {
 	base, err := url.Parse(c.BaseURL)
 	if err != nil {

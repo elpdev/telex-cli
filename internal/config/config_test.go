@@ -23,6 +23,20 @@ func TestConfigValidateRequiresCredentials(t *testing.T) {
 	}
 }
 
+func TestDriveSyncModeDefaultsToFull(t *testing.T) {
+	cfg := &Config{}
+	if got := cfg.DriveSyncMode(); got != DriveSyncFull {
+		t.Fatalf("drive sync mode = %q, want %q", got, DriveSyncFull)
+	}
+}
+
+func TestConfigValidateRejectsInvalidDriveSyncMode(t *testing.T) {
+	cfg := &Config{BaseURL: "http://localhost:3000", ClientID: "id", SecretKey: "secret", Drive: DriveConfig{SyncMode: "headers_only"}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid drive.sync_mode error")
+	}
+}
+
 func TestTokenCacheValid(t *testing.T) {
 	tc := &TokenCache{Token: "token", ExpiresAt: time.Now().Add(2 * time.Minute)}
 	if !tc.Valid() {

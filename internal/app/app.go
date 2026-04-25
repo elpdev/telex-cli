@@ -13,6 +13,9 @@ import (
 	"github.com/elpdev/telex-cli/internal/commands"
 	"github.com/elpdev/telex-cli/internal/config"
 	"github.com/elpdev/telex-cli/internal/debug"
+	"github.com/elpdev/telex-cli/internal/drive"
+	"github.com/elpdev/telex-cli/internal/drivestore"
+	"github.com/elpdev/telex-cli/internal/drivesync"
 	"github.com/elpdev/telex-cli/internal/mail"
 	"github.com/elpdev/telex-cli/internal/mailsend"
 	"github.com/elpdev/telex-cli/internal/mailstore"
@@ -103,6 +106,7 @@ func (m Model) devBuild() bool { return m.meta.Version == "dev" }
 func (m *Model) registerScreens() {
 	m.screens["home"] = screens.NewHome()
 	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody)
+	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive)
 	m.screens["settings"] = screens.NewSettings(screens.SettingsState{
 		ThemeName:      m.theme.Name,
 		SidebarVisible: m.showSidebar,
@@ -349,6 +353,15 @@ func (m *Model) conversationBody(ctx context.Context, entry screens.Conversation
 	return body.HTML, nil
 }
 
+func (m *Model) syncDrive(ctx context.Context) (screens.DriveSyncResult, error) {
+	service, cfg, err := m.driveService()
+	if err != nil {
+		return screens.DriveSyncResult{}, err
+	}
+	result, err := drivesync.Run(ctx, drivestore.New(m.dataPath), service, cfg.DriveSyncMode())
+	return screens.DriveSyncResult{Folders: result.Folders, Files: result.Files, DownloadedFiles: result.DownloadedFiles, DownloadFailures: result.DownloadFailures}, err
+}
+
 func cachedRemoteMessage(message mail.Message) mailstore.CachedMessage {
 	return mailstore.CachedMessage{
 		Meta: mailstore.MessageMeta{
@@ -407,13 +420,28 @@ func (m *Model) mailService() (*mail.Service, error) {
 	return mail.NewService(m.client), nil
 }
 
+func (m *Model) driveService() (*drive.Service, *config.Config, error) {
+	configFile, tokenFile := config.Paths(m.configPath)
+	cfg, err := config.LoadFrom(configFile)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, nil, err
+	}
+	if m.client == nil {
+		m.client = api.NewClient(cfg, tokenFile)
+	}
+	return drive.NewService(m.client), cfg, nil
+}
+
 func (m *Model) refreshScreenOrder() {
 	m.screenOrder = m.screenOrder[:0]
 	for id := range m.screens {
 		m.screenOrder = append(m.screenOrder, id)
 	}
 	sort.Strings(m.screenOrder)
-	preferred := []string{"home", "mail", "settings", "logs"}
+	preferred := []string{"home", "mail", "drive", "settings", "logs"}
 	ordered := make([]string, 0, len(m.screenOrder))
 	seen := make(map[string]bool)
 	for _, id := range preferred {
@@ -462,6 +490,7 @@ func (m *Model) registerCommands() {
 	// Navigation
 	m.commands.Register(commands.Command{ID: "go-home", Module: commands.ModuleGlobal, Title: "Go to Home", Description: "Open the home screen", Keywords: []string{"home", "start"}, Run: route("home")})
 	m.commands.Register(commands.Command{ID: "go-mail", Module: commands.ModuleMail, Title: "Open Mail", Description: "Switch to cached mail", Keywords: []string{"mail", "email", "inbox"}, Run: route("mail")})
+	m.commands.Register(commands.Command{ID: "go-drive", Module: commands.ModuleDrive, Title: "Open Drive", Description: "Switch to local Drive mirror", Keywords: []string{"drive", "files", "documents"}, Run: route("drive")})
 	m.commands.Register(commands.Command{ID: "go-settings", Module: commands.ModuleSettings, Title: "Open Settings", Description: "Open application settings", Keywords: []string{"settings", "config"}, Run: route("settings")})
 	if m.devBuild() {
 		m.commands.Register(commands.Command{ID: "go-logs", Module: commands.ModuleGlobal, Title: "Open Logs", Description: "Open debug event log", Keywords: []string{"logs", "debug", "events"}, Run: route("logs")})

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +67,30 @@ func TestPostMultipartFileUploadsFileWithAuth(t *testing.T) {
 	}
 	if auth != "Bearer token" || filename != "upload.txt" || uploaded != "hello" {
 		t.Fatalf("auth=%q filename=%q uploaded=%q", auth, filename, uploaded)
+	}
+}
+
+func TestPutRawUploadsWithoutAuth(t *testing.T) {
+	var auth string
+	var contentType string
+	var uploaded string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		contentType = r.Header.Get("Content-Type")
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		uploaded = string(body)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	client := testClient(t, server.URL)
+	if _, err := client.PutRaw(context.Background(), "/upload", map[string]string{"Content-Type": "text/plain"}, strings.NewReader("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if auth != "" || contentType != "text/plain" || uploaded != "hello" {
+		t.Fatalf("auth=%q contentType=%q uploaded=%q", auth, contentType, uploaded)
 	}
 }
 
