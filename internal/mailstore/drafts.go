@@ -23,6 +23,7 @@ type DraftInput struct {
 	Body            string
 	SourceMessageID int64
 	ConversationID  int64
+	DraftKind       string
 	Now             time.Time
 }
 
@@ -39,6 +40,7 @@ type DraftMeta struct {
 	ConversationID  int64            `toml:"conversation_id"`
 	RemoteStatus    string           `toml:"remote_status"`
 	RemoteError     string           `toml:"remote_error"`
+	DraftKind       string           `toml:"draft_kind"`
 	Subject         string           `toml:"subject"`
 	To              []string         `toml:"to"`
 	CC              []string         `toml:"cc"`
@@ -99,6 +101,7 @@ func (s Store) CreateDraft(input DraftInput) (*Draft, error) {
 		InboxID:         input.Mailbox.InboxID,
 		FromAddress:     input.Mailbox.Address,
 		Subject:         input.Subject,
+		DraftKind:       input.DraftKind,
 		SourceMessageID: input.SourceMessageID,
 		ConversationID:  input.ConversationID,
 		To:              cleanStrings(input.To),
@@ -129,6 +132,7 @@ func (s Store) UpdateDraft(path string, input DraftInput) (*Draft, error) {
 		input.Now = time.Now()
 	}
 	draft.Meta.Subject = input.Subject
+	draft.Meta.DraftKind = input.DraftKind
 	draft.Meta.To = cleanStrings(input.To)
 	draft.Meta.CC = cleanStrings(input.CC)
 	draft.Meta.BCC = cleanStrings(input.BCC)
@@ -194,6 +198,7 @@ func (s Store) StoreRemoteDraft(mailbox MailboxMeta, outbound mail.OutboundMessa
 		ConversationID:  outbound.ConversationID,
 		RemoteStatus:    outbound.Status,
 		RemoteError:     outbound.LastError,
+		DraftKind:       stringValue(outbound.Metadata["draft_kind"]),
 		Subject:         outbound.Subject,
 		To:              cleanStrings(outbound.ToAddresses),
 		CC:              cleanStrings(outbound.CCAddresses),
@@ -285,6 +290,13 @@ func outboundAttachmentMetas(attachments []mail.Attachment) []AttachmentMeta {
 		})
 	}
 	return metas
+}
+
+func stringValue(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
 }
 
 func DetachFileFromDraft(draftPath, name string, now time.Time) (*Draft, error) {

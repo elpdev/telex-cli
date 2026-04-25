@@ -776,11 +776,11 @@ func TestMailScreenSavesAttachmentToDirectory(t *testing.T) {
 }
 
 func TestParseDraftFile(t *testing.T) {
-	fields, err := parseDraftFile("From: hello@example.com\nTo: a@example.net, b@example.net\nCc: c@example.net\nBcc: d@example.net\nSubject: Hello\n\nDraft body")
+	fields, err := parseDraftFile("From: hello@example.com\nTo: a@example.net, b@example.net\nCc: c@example.net\nBcc: d@example.net\nSubject: Hello\nX-Telex-Draft-Kind: forward\n\nDraft body")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fields.Subject != "Hello" || len(fields.To) != 2 || fields.To[1] != "b@example.net" || fields.Body != "Draft body" {
+	if fields.Subject != "Hello" || len(fields.To) != 2 || fields.To[1] != "b@example.net" || fields.DraftKind != "forward" || fields.Body != "Draft body" {
 		t.Fatalf("fields = %#v", fields)
 	}
 }
@@ -811,33 +811,36 @@ func TestMailScreenCreatesRemoteForwardDraft(t *testing.T) {
 	if err := store.CreateMailbox(mailbox); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.StoreInboxMessage(mailbox, mail.Message{ID: 123, Subject: "Forward Me", FromAddress: "a@example.net", SystemState: "inbox", ReceivedAt: time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)}, nil, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)); err != nil {
-		t.Fatal(err)
-	}
 	var gotID int64
-	var gotTo []string
-	screen := NewMailWithActions(store, nil, nil, nil, nil, nil, nil, nil, nil, nil, func(ctx context.Context, id int64, to []string) (int64, string, error) {
+	var gotDraft mailstore.Draft
+	screen := NewMailWithActions(store, nil, nil, nil, nil, nil, nil, nil, nil, nil, func(ctx context.Context, id int64, draft mailstore.Draft) (int64, string, error) {
 		gotID = id
-		gotTo = to
+		gotDraft = draft
 		return 900, "draft", nil
 	}, nil)
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
-	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	screen = updated.(Mail)
-	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Text: "f", Code: 'f'}))
-	screen = updated.(Mail)
-	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Text: "team@example.com", Code: 't'}))
-	screen = updated.(Mail)
-	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	file, err := os.CreateTemp(t.TempDir(), "draft-*.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := file.Name()
+	_, err = file.WriteString(draftTemplate(draftFields{From: mailbox.Address, To: []string{"team@example.com"}, Subject: "Fwd: Forward Me", Body: "reviewed body", SourceMessageID: 123, DraftKind: "forward"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	updated, cmd := screen.Update(draftEditedMsg{path: path, mailbox: mailbox})
 	screen = updated.(Mail)
 	if cmd == nil {
-		t.Fatal("expected forward command")
+		t.Fatal("expected reviewed forward command")
 	}
 	updated, _ = screen.Update(cmd())
 	screen = updated.(Mail)
-	if gotID != 123 || len(gotTo) != 1 || gotTo[0] != "team@example.com" {
-		t.Fatalf("forward got id=%d to=%v", gotID, gotTo)
+	if gotID != 123 || len(gotDraft.Meta.To) != 1 || gotDraft.Meta.To[0] != "team@example.com" || gotDraft.Meta.DraftKind != "forward" {
+		t.Fatalf("forward got id=%d draft=%#v", gotID, gotDraft.Meta)
 	}
 	view := stripScreenANSI(screen.View(100, 20))
 	if !strings.Contains(view, "Forward draft created remotely: 900 (draft)") {

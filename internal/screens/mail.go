@@ -164,6 +164,12 @@ type draftEditedMsg struct {
 	err          error
 }
 
+type forwardDraftCreatedMsg struct {
+	remoteID int64
+	status   string
+	err      error
+}
+
 type remoteDraftUpdatedMsg struct {
 	remoteID int64
 	err      error
@@ -186,12 +192,6 @@ type draftAttachmentDetachedMsg struct {
 	err  error
 }
 
-type forwardCreatedMsg struct {
-	remoteID int64
-	status   string
-	err      error
-}
-
 type attachmentDownloadedMsg struct {
 	path string
 	open bool
@@ -210,7 +210,7 @@ type SyncFunc func(context.Context) (MailSyncResult, error)
 type SendDraftFunc func(context.Context, mailstore.MailboxMeta, mailstore.Draft) error
 type UpdateDraftFunc func(context.Context, mailstore.Draft) error
 type DeleteDraftFunc func(context.Context, mailstore.Draft) error
-type ForwardFunc func(context.Context, int64, []string) (int64, string, error)
+type ForwardFunc func(context.Context, int64, mailstore.Draft) (int64, string, error)
 type DownloadAttachmentFunc func(context.Context, mailstore.AttachmentMeta) ([]byte, error)
 
 type MailSyncResult struct {
@@ -389,6 +389,20 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 				return remoteDraftUpdatedMsg{remoteID: draft.Meta.RemoteID, err: m.updateDraft(context.Background(), *draft)}
 			}
 		}
+		if draft.Meta.DraftKind == "forward" && draft.Meta.SourceMessageID > 0 && m.forward != nil {
+			m.status = "Creating reviewed forward draft..."
+			return m, func() tea.Msg {
+				remoteID, status, err := m.forward(context.Background(), draft.Meta.SourceMessageID, *draft)
+				return forwardDraftCreatedMsg{remoteID: remoteID, status: status, err: err}
+			}
+		}
+		return m, nil
+	case forwardDraftCreatedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not create forward draft: %v", msg.err)
+			return m, nil
+		}
+		m.status = fmt.Sprintf("Forward draft created remotely: %d (%s)", msg.remoteID, msg.status)
 		return m, nil
 	case remoteDraftUpdatedMsg:
 		if msg.err != nil {
@@ -405,13 +419,6 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		m.removeMessageByPath(msg.path)
 		m.clampSelection()
 		m.status = "Draft sent"
-		return m, nil
-	case forwardCreatedMsg:
-		if msg.err != nil {
-			m.status = fmt.Sprintf("Could not create forward draft: %v", msg.err)
-			return m, nil
-		}
-		m.status = fmt.Sprintf("Forward draft created remotely: %d (%s)", msg.remoteID, msg.status)
 		return m, nil
 	case draftDeletedMsg:
 		if msg.err != nil {
@@ -830,7 +837,7 @@ func (m Mail) handleForwardKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 
 func (m Mail) startForward() (Screen, tea.Cmd) {
 	if m.forward == nil {
-		return m.editForwardDraft()
+		return m.editForwardDraft(nil)
 	}
 	m.forwarding = true
 	m.forwardToInput = ""
@@ -843,12 +850,7 @@ func (m Mail) createRemoteForwardDraft(to []string) (Screen, tea.Cmd) {
 		m.status = "No forward recipients"
 		return m, nil
 	}
-	message := m.messages[m.messageIndex]
-	m.status = "Creating remote forward draft..."
-	return m, func() tea.Msg {
-		remoteID, status, err := m.forward(context.Background(), message.Meta.RemoteID, to)
-		return forwardCreatedMsg{remoteID: remoteID, status: status, err: err}
-	}
+	return m.editForwardDraft(to)
 }
 
 func (m Mail) startAttachFile() (Screen, tea.Cmd) {
@@ -1120,7 +1122,7 @@ func (m Mail) editReplyDraft() (Screen, tea.Cmd) {
 	return m.editDraft(draftTemplate(draftFields{From: m.mailboxes[m.mailboxIndex].Address, To: []string{message.Meta.FromAddress}, Subject: subject, Body: body, SourceMessageID: message.Meta.RemoteID, ConversationID: message.Meta.ConversationID}), "")
 }
 
-func (m Mail) editForwardDraft() (Screen, tea.Cmd) {
+func (m Mail) editForwardDraft(to []string) (Screen, tea.Cmd) {
 	if len(m.messages) == 0 || len(m.mailboxes) == 0 {
 		return m, nil
 	}
@@ -1129,7 +1131,7 @@ func (m Mail) editForwardDraft() (Screen, tea.Cmd) {
 	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(subject)), "fwd:") {
 		subject = "Fwd: " + subject
 	}
-	return m.editDraft(draftTemplate(draftFields{From: m.mailboxes[m.mailboxIndex].Address, Subject: subject, Body: quotedForwardBody(message), SourceMessageID: message.Meta.RemoteID, ConversationID: message.Meta.ConversationID}), "")
+	return m.editDraft(draftTemplate(draftFields{From: m.mailboxes[m.mailboxIndex].Address, To: to, Subject: subject, Body: quotedForwardBody(message), SourceMessageID: message.Meta.RemoteID, ConversationID: message.Meta.ConversationID, DraftKind: "forward"}), "")
 }
 
 func (m Mail) editSelectedDraft() (Screen, tea.Cmd) {
@@ -1446,6 +1448,7 @@ type draftFields struct {
 	Body            string
 	SourceMessageID int64
 	ConversationID  int64
+	DraftKind       string
 }
 
 func draftTemplate(fields draftFields) string {
@@ -1455,6 +1458,9 @@ func draftTemplate(fields draftFields) string {
 	}
 	if fields.ConversationID > 0 {
 		extra += fmt.Sprintf("X-Telex-Conversation-ID: %d\n", fields.ConversationID)
+	}
+	if fields.DraftKind != "" {
+		extra += fmt.Sprintf("X-Telex-Draft-Kind: %s\n", fields.DraftKind)
 	}
 	return fmt.Sprintf("From: %s\nTo: %s\nCc: %s\nBcc: %s\nSubject: %s\n%s\n%s", fields.From, strings.Join(fields.To, ", "), strings.Join(fields.CC, ", "), strings.Join(fields.BCC, ", "), fields.Subject, extra, fields.Body)
 }
@@ -1469,7 +1475,7 @@ func saveEditedDraft(store mailstore.Store, mailbox mailstore.MailboxMeta, path,
 	if err != nil {
 		return nil, err
 	}
-	input := mailstore.DraftInput{Mailbox: mailbox, Subject: fields.Subject, To: fields.To, CC: fields.CC, BCC: fields.BCC, Body: fields.Body, SourceMessageID: fields.SourceMessageID, ConversationID: fields.ConversationID, Now: time.Now()}
+	input := mailstore.DraftInput{Mailbox: mailbox, Subject: fields.Subject, To: fields.To, CC: fields.CC, BCC: fields.BCC, Body: fields.Body, SourceMessageID: fields.SourceMessageID, ConversationID: fields.ConversationID, DraftKind: fields.DraftKind, Now: time.Now()}
 	if existingPath != "" {
 		return store.UpdateDraft(existingPath, input)
 	}
@@ -1503,6 +1509,8 @@ func parseDraftFile(content string) (draftFields, error) {
 			fields.SourceMessageID = parseDraftInt(value)
 		case "x-telex-conversation-id":
 			fields.ConversationID = parseDraftInt(value)
+		case "x-telex-draft-kind":
+			fields.DraftKind = strings.TrimSpace(value)
 		}
 	}
 	if strings.TrimSpace(fields.Subject) == "" {

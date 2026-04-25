@@ -240,12 +240,16 @@ func int64Ptr(value int64) *int64 {
 	return &value
 }
 
-func (m *Model) forwardMessage(ctx context.Context, id int64, to []string) (int64, string, error) {
+func (m *Model) forwardMessage(ctx context.Context, id int64, draft mailstore.Draft) (int64, string, error) {
 	service, err := m.mailService()
 	if err != nil {
 		return 0, "", err
 	}
-	outbound, err := service.Forward(ctx, id, to)
+	outbound, err := service.Forward(ctx, id, draft.Meta.To)
+	if err != nil {
+		return 0, "", err
+	}
+	outbound, err = service.UpdateOutboundMessage(ctx, outbound.ID, outboundInputFromDraft(draft))
 	if err != nil {
 		return 0, "", err
 	}
