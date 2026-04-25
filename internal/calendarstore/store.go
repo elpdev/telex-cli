@@ -148,6 +148,22 @@ func (s Store) ListCalendars() ([]CalendarMeta, error) {
 	return out, nil
 }
 
+func (s Store) DeleteCalendar(id int64) error {
+	if err := os.Remove(s.calendarPath(id)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	events, err := s.ListEvents(id)
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if err := s.DeleteEvent(event.Meta.RemoteID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s Store) StoreEvent(value calendar.CalendarEvent, syncedAt time.Time) error {
 	if err := s.EnsureRoot(); err != nil {
 		return err

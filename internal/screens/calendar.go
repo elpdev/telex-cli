@@ -18,16 +18,28 @@ import (
 )
 
 type CalendarSyncFunc func(context.Context) (CalendarSyncResult, error)
+type CreateCalendarFunc func(context.Context, calendar.CalendarInput) (*calendar.Calendar, error)
+type UpdateCalendarFunc func(context.Context, int64, calendar.CalendarInput) (*calendar.Calendar, error)
+type DeleteCalendarFunc func(context.Context, int64) error
 type CreateCalendarEventFunc func(context.Context, calendar.CalendarEventInput) (*calendar.CalendarEvent, error)
 type UpdateCalendarEventFunc func(context.Context, int64, calendar.CalendarEventInput) (*calendar.CalendarEvent, error)
 type DeleteCalendarEventFunc func(context.Context, int64) error
+
+type calendarViewMode int
+
+const (
+	calendarViewAgenda calendarViewMode = iota
+	calendarViewCalendars
+)
 
 type calendarFormKind int
 
 const (
 	calendarFormNone calendarFormKind = iota
-	calendarFormCreate
-	calendarFormEdit
+	calendarFormEventCreate
+	calendarFormEventEdit
+	calendarFormCalendarCreate
+	calendarFormCalendarEdit
 )
 
 type CalendarSyncResult struct {
@@ -37,24 +49,33 @@ type CalendarSyncResult struct {
 }
 
 type Calendar struct {
-	store    calendarstore.Store
-	sync     CalendarSyncFunc
-	create   CreateCalendarEventFunc
-	update   UpdateCalendarEventFunc
-	delete   DeleteCalendarEventFunc
-	items    []calendarstore.OccurrenceMeta
-	index    int
-	detail   bool
-	form     *huh.Form
-	formKind calendarFormKind
-	formID   int64
-	formData *calendarEventFormData
-	confirm  string
-	loading  bool
-	syncing  bool
-	err      error
-	status   string
-	keys     CalendarKeyMap
+	store          calendarstore.Store
+	sync           CalendarSyncFunc
+	createCalendar CreateCalendarFunc
+	updateCalendar UpdateCalendarFunc
+	deleteCalendar DeleteCalendarFunc
+	createEvent    CreateCalendarEventFunc
+	updateEvent    UpdateCalendarEventFunc
+	deleteEvent    DeleteCalendarEventFunc
+	items          []calendarstore.OccurrenceMeta
+	calendars      []calendarstore.CalendarMeta
+	mode           calendarViewMode
+	index          int
+	calendarIndex  int
+	detail         bool
+	form           *huh.Form
+	formKind       calendarFormKind
+	formID         int64
+	formData       *calendarEventFormData
+	calendarForm   *calendarFormData
+	confirm        string
+	confirmAction  string
+	confirmID      int64
+	loading        bool
+	syncing        bool
+	err            error
+	status         string
+	keys           CalendarKeyMap
 }
 
 type CalendarKeyMap struct {
@@ -65,6 +86,7 @@ type CalendarKeyMap struct {
 	Refresh key.Binding
 	Sync    key.Binding
 	Today   key.Binding
+	View    key.Binding
 	New     key.Binding
 	Edit    key.Binding
 	Delete  key.Binding
@@ -84,9 +106,17 @@ type calendarEventFormData struct {
 	Status      string
 }
 
+type calendarFormData struct {
+	Name     string
+	Color    string
+	TimeZone string
+	Position string
+}
+
 type calendarLoadedMsg struct {
-	items []calendarstore.OccurrenceMeta
-	err   error
+	items     []calendarstore.OccurrenceMeta
+	calendars []calendarstore.CalendarMeta
+	err       error
 }
 
 type calendarSyncedMsg struct {
@@ -108,9 +138,16 @@ func NewCalendar(store calendarstore.Store, sync CalendarSyncFunc) Calendar {
 }
 
 func (c Calendar) WithActions(create CreateCalendarEventFunc, update UpdateCalendarEventFunc, delete DeleteCalendarEventFunc) Calendar {
-	c.create = create
-	c.update = update
-	c.delete = delete
+	c.createEvent = create
+	c.updateEvent = update
+	c.deleteEvent = delete
+	return c
+}
+
+func (c Calendar) WithCalendarActions(create CreateCalendarFunc, update UpdateCalendarFunc, delete DeleteCalendarFunc) Calendar {
+	c.createCalendar = create
+	c.updateCalendar = update
+	c.deleteCalendar = delete
 	return c
 }
 
@@ -123,6 +160,7 @@ func DefaultCalendarKeyMap() CalendarKeyMap {
 		Refresh: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload cache")),
 		Sync:    key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "sync calendar")),
 		Today:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "today")),
+		View:    key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "agenda/calendars")),
 		New:     key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new event")),
 		Edit:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit event")),
 		Delete:  key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "delete event")),
@@ -142,6 +180,7 @@ func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		c.err = msg.err
 		if msg.err == nil {
 			c.items = msg.items
+			c.calendars = msg.calendars
 			c.clampIndex()
 		}
 		return c, nil
@@ -154,6 +193,7 @@ func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		c.status = fmt.Sprintf("Synced %d calendar(s), %d event(s), %d occurrence(s)", msg.result.Calendars, msg.result.Events, msg.result.Occurrences)
 		c.items = msg.loaded.items
+		c.calendars = msg.loaded.calendars
 		c.clampIndex()
 		return c, nil
 	case calendarActionFinishedMsg:
@@ -165,10 +205,13 @@ func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		c.status = msg.status
 		c.items = msg.loaded.items
+		c.calendars = msg.loaded.calendars
 		c.detail = false
 		c.form = nil
 		c.formKind = calendarFormNone
 		c.confirm = ""
+		c.confirmAction = ""
+		c.confirmID = 0
 		c.clampIndex()
 		return c, nil
 	case CalendarActionMsg:
@@ -191,7 +234,7 @@ func (c Calendar) View(width, height int) string {
 		return style.Render(fmt.Sprintf("Calendar cache error: %v\n\nRun `telex calendar sync` or press S to populate Calendar.", c.err))
 	}
 	var b strings.Builder
-	b.WriteString("Calendar\n")
+	b.WriteString("Calendar / " + c.modeTitle() + "\n")
 	if c.status != "" {
 		b.WriteString(c.status + "\n")
 	}
@@ -202,6 +245,10 @@ func (c Calendar) View(width, height int) string {
 		b.WriteString(c.confirm + " [y/N]\n")
 	}
 	b.WriteString("\n")
+	if c.mode == calendarViewCalendars {
+		b.WriteString(c.calendarListView())
+		return style.Render(b.String())
+	}
 	if c.detail {
 		b.WriteString(c.detailView())
 		return style.Render(b.String())
@@ -223,12 +270,19 @@ func (c Calendar) View(width, height int) string {
 func (c Calendar) Title() string { return "Calendar" }
 
 func (c Calendar) KeyBindings() []key.Binding {
-	return []key.Binding{c.keys.Up, c.keys.Down, c.keys.Open, c.keys.Back, c.keys.Refresh, c.keys.Sync, c.keys.Today, c.keys.New, c.keys.Edit, c.keys.Delete}
+	return []key.Binding{c.keys.Up, c.keys.Down, c.keys.Open, c.keys.Back, c.keys.Refresh, c.keys.Sync, c.keys.Today, c.keys.View, c.keys.New, c.keys.Edit, c.keys.Delete}
 }
 
 func (c Calendar) CapturesFocusKey(tea.KeyPressMsg) bool { return c.form != nil }
 
 func (c Calendar) Selection() CalendarSelection {
+	if c.mode == calendarViewCalendars {
+		item, ok := c.selectedCalendar()
+		if !ok {
+			return CalendarSelection{Kind: "calendar", HasItem: false}
+		}
+		return CalendarSelection{Kind: "calendar", Subject: item.Name, HasItem: true}
+	}
 	item, ok := c.selected()
 	if !ok {
 		return CalendarSelection{Kind: "calendar-event", HasItem: false}
@@ -255,12 +309,22 @@ func (c Calendar) handleAction(action string) (Screen, tea.Cmd) {
 		c.status = ""
 		return c, c.syncCmd()
 	case "delete":
+		if c.mode == calendarViewCalendars {
+			if item, ok := c.selectedCalendar(); ok {
+				c.confirm = fmt.Sprintf("Delete calendar %s?", strconv.FormatInt(item.RemoteID, 10))
+				c.confirmAction = "delete-calendar"
+				c.confirmID = item.RemoteID
+			}
+			return c, nil
+		}
 		if item, ok := c.selected(); ok {
 			c.confirm = fmt.Sprintf("Delete event %s?", strconv.FormatInt(item.EventID, 10))
+			c.confirmAction = "delete-event"
+			c.confirmID = item.EventID
 		}
 		return c, nil
 	case "new":
-		return c.startEventForm(calendarFormCreate, nil)
+		return c.startEventForm(calendarFormEventCreate, nil)
 	case "edit":
 		item, ok := c.selected()
 		if !ok {
@@ -272,9 +336,42 @@ func (c Calendar) handleAction(action string) (Screen, tea.Cmd) {
 			c.status = fmt.Sprintf("Cannot load event: %v", err)
 			return c, nil
 		}
-		return c.startEventForm(calendarFormEdit, cached)
+		return c.startEventForm(calendarFormEventEdit, cached)
 	case "today":
 		c.jumpToToday()
+		return c, nil
+	case "toggle-view":
+		c.toggleMode()
+		return c, nil
+	case "view-agenda":
+		c.mode = calendarViewAgenda
+		c.detail = false
+		c.status = "Showing agenda"
+		return c, nil
+	case "view-calendars":
+		c.mode = calendarViewCalendars
+		c.detail = false
+		c.status = "Showing calendars"
+		return c, nil
+	case "new-calendar":
+		c.mode = calendarViewCalendars
+		return c.startCalendarForm(calendarFormCalendarCreate, nil)
+	case "edit-calendar":
+		item, ok := c.selectedCalendar()
+		if !ok {
+			c.status = "Select a calendar to edit"
+			return c, nil
+		}
+		return c.startCalendarForm(calendarFormCalendarEdit, &item)
+	case "delete-calendar":
+		item, ok := c.selectedCalendar()
+		if !ok {
+			c.status = "Select a calendar to delete"
+			return c, nil
+		}
+		c.confirm = fmt.Sprintf("Delete calendar %s?", strconv.FormatInt(item.RemoteID, 10))
+		c.confirmAction = "delete-calendar"
+		c.confirmID = item.RemoteID
 		return c, nil
 	}
 	return c, nil
@@ -283,27 +380,44 @@ func (c Calendar) handleAction(action string) (Screen, tea.Cmd) {
 func (c Calendar) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if c.confirm != "" {
 		if msg.String() == "y" || msg.String() == "Y" {
-			item, ok := c.selected()
+			action := c.confirmAction
+			id := c.confirmID
 			c.confirm = ""
-			if ok && c.delete != nil {
+			c.confirmAction = ""
+			c.confirmID = 0
+			if action == "delete-event" && id > 0 && c.deleteEvent != nil {
 				c.loading = true
-				return c, c.deleteCmd(item.EventID)
+				return c, c.deleteCmd(id)
+			}
+			if action == "delete-calendar" && id > 0 && c.deleteCalendar != nil {
+				c.loading = true
+				return c, c.deleteCalendarCmd(id)
 			}
 		}
 		if key.Matches(msg, c.keys.Back) || msg.String() == "n" || msg.String() == "N" {
 			c.confirm = ""
+			c.confirmAction = ""
+			c.confirmID = 0
 		}
 		return c, nil
 	}
-	if key.Matches(msg, c.keys.Up) && c.index > 0 {
+	if key.Matches(msg, c.keys.Up) && c.mode == calendarViewCalendars && c.calendarIndex > 0 {
+		c.calendarIndex--
+		return c, nil
+	}
+	if key.Matches(msg, c.keys.Down) && c.mode == calendarViewCalendars && c.calendarIndex < len(c.calendars)-1 {
+		c.calendarIndex++
+		return c, nil
+	}
+	if key.Matches(msg, c.keys.Up) && c.mode == calendarViewAgenda && c.index > 0 {
 		c.index--
 		return c, nil
 	}
-	if key.Matches(msg, c.keys.Down) && c.index < len(c.items)-1 {
+	if key.Matches(msg, c.keys.Down) && c.mode == calendarViewAgenda && c.index < len(c.items)-1 {
 		c.index++
 		return c, nil
 	}
-	if key.Matches(msg, c.keys.Open) && len(c.items) > 0 {
+	if key.Matches(msg, c.keys.Open) && c.mode == calendarViewAgenda && len(c.items) > 0 {
 		c.detail = true
 		return c, nil
 	}
@@ -321,10 +435,19 @@ func (c Calendar) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if key.Matches(msg, c.keys.Today) {
 		return c.handleAction("today")
 	}
+	if key.Matches(msg, c.keys.View) {
+		return c.handleAction("toggle-view")
+	}
 	if key.Matches(msg, c.keys.New) {
+		if c.mode == calendarViewCalendars {
+			return c.handleAction("new-calendar")
+		}
 		return c.handleAction("new")
 	}
 	if key.Matches(msg, c.keys.Edit) {
+		if c.mode == calendarViewCalendars {
+			return c.handleAction("edit-calendar")
+		}
 		return c.handleAction("edit")
 	}
 	if key.Matches(msg, c.keys.Delete) {
@@ -353,12 +476,23 @@ func (c Calendar) updateForm(msg tea.Msg) (Screen, tea.Cmd) {
 	if c.form.State == huh.StateCompleted {
 		kind := c.formKind
 		id := c.formID
-		data := *c.formData
+		var eventData calendarEventFormData
+		if c.formData != nil {
+			eventData = *c.formData
+		}
+		var calendarData calendarFormData
+		if c.calendarForm != nil {
+			calendarData = *c.calendarForm
+		}
 		c.form = nil
 		c.formKind = calendarFormNone
 		c.loading = true
-		c.status = "Saving event..."
-		return c, c.saveFormCmd(kind, id, data)
+		c.status = "Saving calendar..."
+		if kind == calendarFormEventCreate || kind == calendarFormEventEdit {
+			c.status = "Saving event..."
+			return c, c.saveEventFormCmd(kind, id, eventData)
+		}
+		return c, c.saveCalendarFormCmd(kind, id, calendarData)
 	}
 	return c, cmd
 }
@@ -388,6 +522,7 @@ func (c Calendar) startEventForm(kind calendarFormKind, cached *calendarstore.Ca
 		data.Status = cached.Meta.Status
 	}
 	c.formData = &data
+	c.calendarForm = nil
 	c.formID = id
 	c.formKind = kind
 	c.form = huh.NewForm(huh.NewGroup(
@@ -407,47 +542,109 @@ func (c Calendar) startEventForm(kind calendarFormKind, cached *calendarstore.Ca
 	return c, c.form.Init()
 }
 
-func (c Calendar) saveFormCmd(kind calendarFormKind, id int64, data calendarEventFormData) tea.Cmd {
+func (c Calendar) startCalendarForm(kind calendarFormKind, cached *calendarstore.CalendarMeta) (Screen, tea.Cmd) {
+	data := calendarFormData{TimeZone: "UTC"}
+	var id int64
+	if cached != nil {
+		id = cached.RemoteID
+		data.Name = cached.Name
+		data.Color = cached.Color
+		data.TimeZone = cached.TimeZone
+		if cached.Position > 0 {
+			data.Position = strconv.Itoa(cached.Position)
+		}
+	}
+	c.formData = nil
+	c.calendarForm = &data
+	c.formID = id
+	c.formKind = kind
+	c.form = huh.NewForm(huh.NewGroup(
+		huh.NewInput().Title("Name").Value(&c.calendarForm.Name).Validate(requiredString),
+		huh.NewInput().Title("Color").Description("Optional, e.g. #22c55e or green").Value(&c.calendarForm.Color),
+		huh.NewInput().Title("Time zone").Description("Optional IANA time zone, e.g. UTC").Value(&c.calendarForm.TimeZone).Validate(optionalTimeZoneString),
+		huh.NewInput().Title("Position").Description("Optional positive sort number").Value(&c.calendarForm.Position).Validate(optionalIntString),
+	).Title(calendarFormTitle(kind)).Description("Move between fields with up/down, j/k, or tab/shift+tab. Enter advances; submit from the last field."))
+	c.form.WithKeyMap(calendarFormKeyMap()).WithShowHelp(true)
+	return c, c.form.Init()
+}
+
+func (c Calendar) saveEventFormCmd(kind calendarFormKind, id int64, data calendarEventFormData) tea.Cmd {
 	return func() tea.Msg {
 		input, err := calendarEventInputFromForm(data)
 		if err != nil {
 			return calendarActionFinishedMsg{err: err}
 		}
 		switch kind {
-		case calendarFormCreate:
-			if c.create == nil {
+		case calendarFormEventCreate:
+			if c.createEvent == nil {
 				return calendarActionFinishedMsg{err: errors.New("create is not configured")}
 			}
-			event, err := c.create(context.Background(), input)
+			event, err := c.createEvent(context.Background(), input)
 			loaded := calendarLoadedMsg{}
 			if err == nil {
-				items, loadErr := c.store.ListOccurrences()
-				loaded = calendarLoadedMsg{items: items, err: loadErr}
-				if loadErr != nil {
-					err = loadErr
-				}
+				loaded = c.load()
+				err = loaded.err
 			}
 			status := "Created event"
 			if event != nil && event.Title != "" {
 				status = "Created " + event.Title
 			}
 			return calendarActionFinishedMsg{status: status, loaded: loaded, err: err}
-		case calendarFormEdit:
-			if c.update == nil {
+		case calendarFormEventEdit:
+			if c.updateEvent == nil {
 				return calendarActionFinishedMsg{err: errors.New("edit is not configured")}
 			}
-			event, err := c.update(context.Background(), id, input)
+			event, err := c.updateEvent(context.Background(), id, input)
 			loaded := calendarLoadedMsg{}
 			if err == nil {
-				items, loadErr := c.store.ListOccurrences()
-				loaded = calendarLoadedMsg{items: items, err: loadErr}
-				if loadErr != nil {
-					err = loadErr
-				}
+				loaded = c.load()
+				err = loaded.err
 			}
 			status := "Updated event"
 			if event != nil && event.Title != "" {
 				status = "Updated " + event.Title
+			}
+			return calendarActionFinishedMsg{status: status, loaded: loaded, err: err}
+		}
+		return calendarActionFinishedMsg{err: errors.New("unknown calendar form")}
+	}
+}
+
+func (c Calendar) saveCalendarFormCmd(kind calendarFormKind, id int64, data calendarFormData) tea.Cmd {
+	return func() tea.Msg {
+		input, err := calendarInputFromForm(data)
+		if err != nil {
+			return calendarActionFinishedMsg{err: err}
+		}
+		switch kind {
+		case calendarFormCalendarCreate:
+			if c.createCalendar == nil {
+				return calendarActionFinishedMsg{err: errors.New("calendar create is not configured")}
+			}
+			created, err := c.createCalendar(context.Background(), input)
+			loaded := calendarLoadedMsg{}
+			if err == nil {
+				loaded = c.load()
+				err = loaded.err
+			}
+			status := "Created calendar"
+			if created != nil && created.Name != "" {
+				status = "Created " + created.Name
+			}
+			return calendarActionFinishedMsg{status: status, loaded: loaded, err: err}
+		case calendarFormCalendarEdit:
+			if c.updateCalendar == nil {
+				return calendarActionFinishedMsg{err: errors.New("calendar edit is not configured")}
+			}
+			updated, err := c.updateCalendar(context.Background(), id, input)
+			loaded := calendarLoadedMsg{}
+			if err == nil {
+				loaded = c.load()
+				err = loaded.err
+			}
+			status := "Updated calendar"
+			if updated != nil && updated.Name != "" {
+				status = "Updated " + updated.Name
 			}
 			return calendarActionFinishedMsg{status: status, loaded: loaded, err: err}
 		}
@@ -473,6 +670,43 @@ func (c Calendar) detailView() string {
 	}, "\n") + "\n"
 }
 
+func (c Calendar) calendarListView() string {
+	if len(c.calendars) == 0 {
+		return "No cached calendars found. Press S to sync or n to create one.\n"
+	}
+	var b strings.Builder
+	for i, item := range c.calendars {
+		cursor := "  "
+		if i == c.calendarIndex {
+			cursor = "> "
+		}
+		b.WriteString(fmt.Sprintf("%s%s  %s  %s  pos:%d  %s\n", cursor, item.Name, item.Color, item.TimeZone, item.Position, item.Source))
+	}
+	if item, ok := c.selectedCalendar(); ok {
+		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("Calendar ID: %d\nName: %s\nColor: %s\nTime zone: %s\nPosition: %d\nSource: %s\n", item.RemoteID, item.Name, item.Color, item.TimeZone, item.Position, item.Source))
+	}
+	return b.String()
+}
+
+func (c Calendar) modeTitle() string {
+	if c.mode == calendarViewCalendars {
+		return "Calendars"
+	}
+	return "Agenda"
+}
+
+func (c *Calendar) toggleMode() {
+	c.detail = false
+	if c.mode == calendarViewCalendars {
+		c.mode = calendarViewAgenda
+		c.status = "Showing agenda"
+		return
+	}
+	c.mode = calendarViewCalendars
+	c.status = "Showing calendars"
+}
+
 func (c *Calendar) jumpToToday() {
 	today := time.Now().Format("2006-01-02")
 	for i, item := range c.items {
@@ -490,6 +724,13 @@ func (c Calendar) selected() (calendarstore.OccurrenceMeta, bool) {
 	return c.items[c.index], true
 }
 
+func (c Calendar) selectedCalendar() (calendarstore.CalendarMeta, bool) {
+	if c.calendarIndex < 0 || c.calendarIndex >= len(c.calendars) {
+		return calendarstore.CalendarMeta{}, false
+	}
+	return c.calendars[c.calendarIndex], true
+}
+
 func (c *Calendar) clampIndex() {
 	if c.index < 0 {
 		c.index = 0
@@ -501,13 +742,29 @@ func (c *Calendar) clampIndex() {
 		c.index = 0
 		c.detail = false
 	}
+	if c.calendarIndex < 0 {
+		c.calendarIndex = 0
+	}
+	if c.calendarIndex >= len(c.calendars) && len(c.calendars) > 0 {
+		c.calendarIndex = len(c.calendars) - 1
+	}
+	if len(c.calendars) == 0 {
+		c.calendarIndex = 0
+	}
 }
 
 func (c Calendar) loadCmd() tea.Cmd {
-	return func() tea.Msg {
-		items, err := c.store.ListOccurrences()
-		return calendarLoadedMsg{items: items, err: err}
+	return func() tea.Msg { return c.load() }
+
+}
+
+func (c Calendar) load() calendarLoadedMsg {
+	items, err := c.store.ListOccurrences()
+	if err != nil {
+		return calendarLoadedMsg{err: err}
 	}
+	calendars, err := c.store.ListCalendars()
+	return calendarLoadedMsg{items: items, calendars: calendars, err: err}
 }
 
 func (c Calendar) syncCmd() tea.Cmd {
@@ -515,11 +772,8 @@ func (c Calendar) syncCmd() tea.Cmd {
 		result, err := c.sync(context.Background())
 		loaded := calendarLoadedMsg{}
 		if err == nil {
-			items, loadErr := c.store.ListOccurrences()
-			loaded = calendarLoadedMsg{items: items, err: loadErr}
-			if loadErr != nil {
-				err = loadErr
-			}
+			loaded = c.load()
+			err = loaded.err
 		}
 		return calendarSyncedMsg{result: result, loaded: loaded, err: err}
 	}
@@ -527,16 +781,25 @@ func (c Calendar) syncCmd() tea.Cmd {
 
 func (c Calendar) deleteCmd(id int64) tea.Cmd {
 	return func() tea.Msg {
-		err := c.delete(context.Background(), id)
+		err := c.deleteEvent(context.Background(), id)
 		loaded := calendarLoadedMsg{}
 		if err == nil {
-			items, loadErr := c.store.ListOccurrences()
-			loaded = calendarLoadedMsg{items: items, err: loadErr}
-			if loadErr != nil {
-				err = loadErr
-			}
+			loaded = c.load()
+			err = loaded.err
 		}
 		return calendarActionFinishedMsg{status: "Deleted event", loaded: loaded, err: err}
+	}
+}
+
+func (c Calendar) deleteCalendarCmd(id int64) tea.Cmd {
+	return func() tea.Msg {
+		err := c.deleteCalendar(context.Background(), id)
+		loaded := calendarLoadedMsg{}
+		if err == nil {
+			loaded = c.load()
+			err = loaded.err
+		}
+		return calendarActionFinishedMsg{status: "Deleted calendar", loaded: loaded, err: err}
 	}
 }
 
@@ -586,6 +849,26 @@ func calendarEventInputFromForm(data calendarEventFormData) (calendar.CalendarEv
 	}
 	if err := validateCalendarRange(input); err != nil {
 		return input, err
+	}
+	return input, nil
+}
+
+func calendarInputFromForm(data calendarFormData) (calendar.CalendarInput, error) {
+	input := calendar.CalendarInput{Name: strings.TrimSpace(data.Name), Color: strings.TrimSpace(data.Color), TimeZone: strings.TrimSpace(data.TimeZone)}
+	if input.Name == "" {
+		return input, fmt.Errorf("name is required")
+	}
+	if input.TimeZone != "" {
+		if err := optionalTimeZoneString(input.TimeZone); err != nil {
+			return input, err
+		}
+	}
+	if strings.TrimSpace(data.Position) != "" {
+		position, err := strconv.Atoi(strings.TrimSpace(data.Position))
+		if err != nil || position <= 0 {
+			return input, fmt.Errorf("invalid position")
+		}
+		input.Position = &position
 	}
 	return input, nil
 }
@@ -663,8 +946,14 @@ func calendarFormKeyMap() *huh.KeyMap {
 }
 
 func calendarFormTitle(kind calendarFormKind) string {
-	if kind == calendarFormEdit {
+	switch kind {
+	case calendarFormEventEdit:
 		return "Edit Event"
+	case calendarFormCalendarCreate:
+		return "New Calendar"
+	case calendarFormCalendarEdit:
+		return "Edit Calendar"
+	default:
+		return "New Event"
 	}
-	return "New Event"
 }

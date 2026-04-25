@@ -47,3 +47,28 @@ func TestCalendarEventInputFromFormAllowsAllDayWithoutTimes(t *testing.T) {
 		t.Fatalf("input = %#v", input)
 	}
 }
+
+func TestCalendarInputFromFormValidatesRequiredFields(t *testing.T) {
+	if _, err := calendarInputFromForm(calendarFormData{Name: ""}); err == nil {
+		t.Fatal("expected missing name error")
+	}
+	if _, err := calendarInputFromForm(calendarFormData{Name: "Work", TimeZone: "Not/AZone"}); err == nil {
+		t.Fatal("expected invalid time zone error")
+	}
+	if _, err := calendarInputFromForm(calendarFormData{Name: "Work", Position: "zero"}); err == nil {
+		t.Fatal("expected invalid position error")
+	}
+}
+
+func TestCalendarInputFromFormBuildsInput(t *testing.T) {
+	input, err := calendarInputFromForm(calendarFormData{Name: " Work ", Color: " green ", TimeZone: "UTC", Position: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Name != "Work" || input.Color != "green" || input.TimeZone != "UTC" {
+		t.Fatalf("input = %#v", input)
+	}
+	if input.Position == nil || *input.Position != 2 {
+		t.Fatalf("position = %#v", input.Position)
+	}
+}

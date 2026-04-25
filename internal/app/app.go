@@ -145,7 +145,7 @@ func (m *Model) registerScreens() {
 	m.screens["home"] = screens.NewHome()
 	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody).WithJunkActions(m.junkMessage, m.notJunkMessage).WithSenderPolicyActions(m.blockSender, m.unblockSender, m.blockDomain, m.unblockDomain, m.trustSender, m.untrustSender)
 	m.screens["mail-admin"] = screens.NewMailAdmin(m.loadMailAdmin).WithActions(m.saveDomain, m.deleteDomain, m.validateDomainOutbound, m.saveInbox, m.deleteInbox, m.inboxPipeline)
-	m.screens["calendar"] = screens.NewCalendar(calendarstore.New(m.dataPath), m.syncCalendar).WithActions(m.createCalendarEvent, m.updateCalendarEvent, m.deleteCalendarEvent)
+	m.screens["calendar"] = screens.NewCalendar(calendarstore.New(m.dataPath), m.syncCalendar).WithActions(m.createCalendarEvent, m.updateCalendarEvent, m.deleteCalendarEvent).WithCalendarActions(m.createCalendar, m.updateCalendar, m.deleteCalendar)
 	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive).WithActions(m.downloadDriveFile, m.openDriveFile, m.uploadDriveFile, m.createDriveFolder, m.renameDriveFile, m.renameDriveFolder, m.deleteDriveFile, m.deleteDriveFolder)
 	m.screens["notes"] = screens.NewNotes(notestore.New(m.dataPath), m.syncNotes).WithActions(m.createNote, m.updateNote, m.deleteNote)
 	m.screens["settings"] = m.buildSettings()
@@ -881,6 +881,56 @@ func (m *Model) syncCalendar(ctx context.Context) (screens.CalendarSyncResult, e
 	return screens.CalendarSyncResult{Calendars: result.Calendars, Events: result.Events, Occurrences: result.Occurrences}, err
 }
 
+func (m *Model) createCalendar(ctx context.Context, input calendar.CalendarInput) (*calendar.Calendar, error) {
+	service, err := m.calendarService()
+	if err != nil {
+		return nil, err
+	}
+	created, err := service.CreateCalendar(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	store := calendarstore.New(m.dataPath)
+	if err := store.StoreCalendar(*created, time.Now()); err != nil {
+		return nil, err
+	}
+	_, err = runCalendarSync(ctx, store, service, calendarSyncOptions{})
+	return created, err
+}
+
+func (m *Model) updateCalendar(ctx context.Context, id int64, input calendar.CalendarInput) (*calendar.Calendar, error) {
+	service, err := m.calendarService()
+	if err != nil {
+		return nil, err
+	}
+	updated, err := service.UpdateCalendar(ctx, id, input)
+	if err != nil {
+		return nil, err
+	}
+	store := calendarstore.New(m.dataPath)
+	if err := store.StoreCalendar(*updated, time.Now()); err != nil {
+		return nil, err
+	}
+	_, err = runCalendarSync(ctx, store, service, calendarSyncOptions{})
+	return updated, err
+}
+
+func (m *Model) deleteCalendar(ctx context.Context, id int64) error {
+	service, err := m.calendarService()
+	if err != nil {
+		return err
+	}
+	if err := service.DeleteCalendar(ctx, id); err != nil {
+		return err
+	}
+	store := calendarstore.New(m.dataPath)
+	if err := store.DeleteCalendar(id); err != nil {
+		return err
+	}
+	_, err = runCalendarSync(ctx, store, service, calendarSyncOptions{})
+	return err
+}
+
 func (m *Model) createCalendarEvent(ctx context.Context, input calendar.CalendarEventInput) (*calendar.CalendarEvent, error) {
 	service, err := m.calendarService()
 	if err != nil {
@@ -1237,6 +1287,9 @@ func (m *Model) registerCommands() {
 	onCalendarItem := func(ctx commands.Context) bool {
 		return ctx.ActiveScreen == "calendar" && ctx.Selection != nil && ctx.Selection.Kind == "calendar-event" && ctx.Selection.HasItems
 	}
+	onCalendarCalendar := func(ctx commands.Context) bool {
+		return ctx.ActiveScreen == "calendar" && ctx.Selection != nil && ctx.Selection.Kind == "calendar" && ctx.Selection.HasItems
+	}
 	onDrive := func(ctx commands.Context) bool { return ctx.ActiveScreen == "drive" }
 	onNotes := func(ctx commands.Context) bool { return ctx.ActiveScreen == "notes" }
 	onNotesItem := func(ctx commands.Context) bool {
@@ -1279,10 +1332,15 @@ func (m *Model) registerCommands() {
 
 	// Calendar — module-level
 	m.commands.Register(commands.Command{ID: "calendar-sync", Module: commands.ModuleCalendar, Title: "Sync Calendar", Description: "Pull latest calendars, events, and occurrences", Shortcut: "S", Keywords: []string{"sync", "refresh", "agenda"}, Run: calendarAction("sync", true)})
+	m.commands.Register(commands.Command{ID: "calendar-view-agenda", Module: commands.ModuleCalendar, Title: "View agenda", Description: "Show cached calendar occurrences", Keywords: []string{"agenda", "occurrences", "events"}, Available: onCalendar, Run: calendarAction("view-agenda", false)})
+	m.commands.Register(commands.Command{ID: "calendar-view-calendars", Module: commands.ModuleCalendar, Title: "View calendars", Description: "Show cached calendars", Shortcut: "v", Keywords: []string{"calendars", "list", "manage"}, Available: onCalendar, Run: calendarAction("view-calendars", false)})
 	m.commands.Register(commands.Command{ID: "calendar-new", Module: commands.ModuleCalendar, Title: "New event", Description: "Create a calendar event", Shortcut: "n", Keywords: []string{"new", "create", "event"}, Available: onCalendar, Run: calendarAction("new", false)})
 	m.commands.Register(commands.Command{ID: "calendar-edit", Module: commands.ModuleCalendar, Title: "Edit selected event", Description: "Edit the highlighted calendar event", Shortcut: "e", Keywords: []string{"edit", "update", "event"}, Available: onCalendarItem, Run: calendarAction("edit", false)})
 	m.commands.Register(commands.Command{ID: "calendar-today", Module: commands.ModuleCalendar, Title: "Jump to today", Description: "Move selection to the next occurrence today or later", Shortcut: "t", Keywords: []string{"today", "agenda"}, Available: onCalendar, Run: calendarAction("today", false)})
 	m.commands.Register(commands.Command{ID: "calendar-delete", Module: commands.ModuleCalendar, Title: "Delete selected event", Description: "Delete the highlighted calendar event after confirmation", Shortcut: "x", Keywords: []string{"delete", "remove", "event"}, Available: onCalendarItem, Run: calendarAction("delete", false)})
+	m.commands.Register(commands.Command{ID: "calendars-new", Module: commands.ModuleCalendar, Title: "New calendar", Description: "Create a calendar", Shortcut: "n", Keywords: []string{"new", "create", "calendar"}, Available: onCalendar, Run: calendarAction("new-calendar", false)})
+	m.commands.Register(commands.Command{ID: "calendars-edit", Module: commands.ModuleCalendar, Title: "Edit selected calendar", Description: "Edit the highlighted calendar", Shortcut: "e", Keywords: []string{"edit", "update", "calendar"}, Available: onCalendarCalendar, Run: calendarAction("edit-calendar", false)})
+	m.commands.Register(commands.Command{ID: "calendars-delete", Module: commands.ModuleCalendar, Title: "Delete selected calendar", Description: "Delete the highlighted calendar after confirmation", Shortcut: "x", Keywords: []string{"delete", "remove", "calendar"}, Available: onCalendarCalendar, Run: calendarAction("delete-calendar", false)})
 
 	// Drive — module-level
 	m.commands.Register(commands.Command{ID: "drive-sync", Module: commands.ModuleDrive, Title: "Sync Drive", Description: "Pull latest Drive metadata and files", Shortcut: "S", Keywords: []string{"sync", "refresh"}, Run: driveAction("sync", true)})

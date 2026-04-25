@@ -49,3 +49,36 @@ func TestStoreCalendarEventAndOccurrencesUnderCalendarRoot(t *testing.T) {
 		t.Fatalf("occurrences = %#v", cached)
 	}
 }
+
+func TestDeleteCalendarRemovesCalendarAndCachedEvents(t *testing.T) {
+	store := New(t.TempDir())
+	syncedAt := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	cal := calendar.Calendar{ID: 1, Name: "Work", TimeZone: "UTC"}
+	if err := store.StoreCalendar(cal, syncedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreEvent(calendar.CalendarEvent{ID: 9, CalendarID: 1, Title: "Standup"}, syncedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreEvent(calendar.CalendarEvent{ID: 10, CalendarID: 2, Title: "Other"}, syncedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.DeleteCalendar(1); err != nil {
+		t.Fatal(err)
+	}
+	calendars, err := store.ListCalendars()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calendars) != 0 {
+		t.Fatalf("calendars = %#v", calendars)
+	}
+	events, err := store.ListEvents(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Meta.RemoteID != 10 {
+		t.Fatalf("events = %#v", events)
+	}
+}
