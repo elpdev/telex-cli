@@ -450,14 +450,78 @@ func (m *Model) downloadDriveFile(ctx context.Context, meta drivestore.FileMeta)
 
 func (m *Model) openDriveFile(path string) error {
 	opener := os.Getenv("OPENER")
-	if opener == "" {
-		opener = "xdg-open"
+	if opener != "" {
+		return startDetached(openerCommand(opener, path))
 	}
-	cmd := exec.Command(opener, path)
+	if textFile(path) {
+		if editor := os.Getenv("VISUAL"); editor != "" {
+			if cmd := terminalCommand(editor, path); cmd != nil {
+				return startDetached(cmd)
+			}
+		}
+		if editor := os.Getenv("EDITOR"); editor != "" {
+			if cmd := terminalCommand(editor, path); cmd != nil {
+				return startDetached(cmd)
+			}
+		}
+	}
+	return startDetached(exec.Command("xdg-open", path))
+}
+
+func openerCommand(opener, path string) *exec.Cmd {
+	parts := strings.Fields(opener)
+	if len(parts) == 0 {
+		return exec.Command("xdg-open", path)
+	}
+	return exec.Command(parts[0], append(parts[1:], path)...)
+}
+
+func terminalCommand(editor, path string) *exec.Cmd {
+	editorParts := strings.Fields(editor)
+	if len(editorParts) == 0 {
+		return nil
+	}
+	terminal := os.Getenv("TERMINAL")
+	if terminal != "" {
+		if cmd := terminalCommandFor(terminal, editorParts, path); cmd != nil {
+			return cmd
+		}
+	}
+	for _, candidate := range []string{"ghostty", "alacritty", "kitty"} {
+		if _, err := exec.LookPath(candidate); err == nil {
+			return terminalCommandFor(candidate, editorParts, path)
+		}
+	}
+	return nil
+}
+
+func terminalCommandFor(terminal string, editorParts []string, path string) *exec.Cmd {
+	terminalParts := strings.Fields(terminal)
+	if len(terminalParts) == 0 {
+		return nil
+	}
+	args := append([]string{}, terminalParts[1:]...)
+	args = append(args, "-e")
+	args = append(args, editorParts...)
+	args = append(args, path)
+	return exec.Command(terminalParts[0], args...)
+}
+
+func startDetached(cmd *exec.Cmd) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+func textFile(path string) bool {
+	lower := strings.ToLower(path)
+	for _, suffix := range []string{".md", ".markdown", ".txt", ".text", ".log", ".csv", ".json", ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg"} {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) uploadDriveFile(ctx context.Context, path string, folderID *int64) error {
