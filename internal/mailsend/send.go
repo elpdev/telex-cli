@@ -2,7 +2,6 @@ package mailsend
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/elpdev/telex-cli/internal/mail"
@@ -17,9 +16,6 @@ type Result struct {
 }
 
 func SendDraft(ctx context.Context, store mailstore.Store, service *mail.Service, mailbox mailstore.MailboxMeta, draft mailstore.Draft) (Result, error) {
-	if len(draft.Meta.Attachments) > 0 {
-		return Result{}, fmt.Errorf("draft attachments are not supported by the remote API yet")
-	}
 	domainID := draft.Meta.DomainID
 	inboxID := draft.Meta.InboxID
 	sourceMessageID := draft.Meta.SourceMessageID
@@ -37,6 +33,11 @@ func SendDraft(ctx context.Context, store mailstore.Store, service *mail.Service
 	}, false)
 	if err != nil {
 		return Result{}, err
+	}
+	for _, attachment := range draft.Meta.Attachments {
+		if _, err := service.AttachOutboundMessageFile(ctx, outbound.ID, mailstore.AttachmentCachePath(draft.Path, attachment)); err != nil {
+			return Result{}, err
+		}
 	}
 	sent, err := service.SendOutboundMessage(ctx, outbound.ID)
 	if err != nil {

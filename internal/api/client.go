@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +62,49 @@ func (c *Client) Patch(ctx context.Context, path string, body any) ([]byte, int,
 func (c *Client) Delete(ctx context.Context, path string) (int, error) {
 	_, status, err := c.do(ctx, http.MethodDelete, path, nil)
 	return status, err
+}
+
+func (c *Client) PostMultipartFile(ctx context.Context, path, fieldName, filePath string) ([]byte, int, error) {
+	if err := c.ensureAuth(ctx); err != nil {
+		return nil, 0, err
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer closeSilently(file)
+	part, err := writer.CreateFormFile(fieldName, filepath.Base(filePath))
+	if err != nil {
+		return nil, 0, err
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		return nil, 0, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, &body)
+	if err != nil {
+		return nil, 0, fmt.Errorf("creating multipart request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("request POST %s: %w", path, err)
+	}
+	defer closeSilently(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("reading response body: %w", err)
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		return respBody, resp.StatusCode, parseError(resp.StatusCode, respBody)
+	}
+	return respBody, resp.StatusCode, nil
 }
 
 func (c *Client) Download(ctx context.Context, rawURL string) ([]byte, string, error) {

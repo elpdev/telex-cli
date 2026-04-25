@@ -93,6 +93,21 @@ func TestShowOutboundMessageUsesShowEndpoint(t *testing.T) {
 	}
 }
 
+func TestAttachOutboundMessageFileUsesAttachmentEndpoint(t *testing.T) {
+	fake := &fakeClient{body: []byte(`{"data":[{"id":456,"filename":"upload.txt"}]}`)}
+	service := NewService(fake)
+	attachments, err := service.AttachOutboundMessageFile(context.Background(), 123, "/tmp/upload.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.multipartPath != "/api/v1/outbound_messages/123/attachments" || fake.multipartFile != "/tmp/upload.txt" {
+		t.Fatalf("multipart path=%q file=%q", fake.multipartPath, fake.multipartFile)
+	}
+	if len(attachments) != 1 || attachments[0].ID != 456 {
+		t.Fatalf("attachments = %#v", attachments)
+	}
+}
+
 func assertQuery(t *testing.T, query url.Values, key, want string) {
 	t.Helper()
 	if got := query.Get(key); got != want {
@@ -101,11 +116,13 @@ func assertQuery(t *testing.T, query url.Values, key, want string) {
 }
 
 type fakeClient struct {
-	body     []byte
-	query    url.Values
-	getPath  string
-	postPath string
-	postBody any
+	body          []byte
+	query         url.Values
+	getPath       string
+	postPath      string
+	postBody      any
+	multipartPath string
+	multipartFile string
 }
 
 func (f *fakeClient) Get(_ context.Context, path string, query url.Values) ([]byte, int, error) {
@@ -117,6 +134,12 @@ func (f *fakeClient) Get(_ context.Context, path string, query url.Values) ([]by
 func (f *fakeClient) Post(_ context.Context, path string, body any) ([]byte, int, error) {
 	f.postPath = path
 	f.postBody = normalizeJSON(body)
+	return f.body, 200, nil
+}
+
+func (f *fakeClient) PostMultipartFile(_ context.Context, path, _, filePath string) ([]byte, int, error) {
+	f.multipartPath = path
+	f.multipartFile = filePath
 	return f.body, 200, nil
 }
 

@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -28,6 +30,42 @@ func TestDownloadResolvesRelativeURLAndUsesAuth(t *testing.T) {
 	}
 	if auth != "Bearer token" {
 		t.Fatalf("auth = %q", auth)
+	}
+}
+
+func TestPostMultipartFileUploadsFileWithAuth(t *testing.T) {
+	var auth string
+	var filename string
+	var uploaded string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatal(err)
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = file.Close() }()
+		body, err := io.ReadAll(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		filename = header.Filename
+		uploaded = string(body)
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer server.Close()
+	filePath := filepath.Join(t.TempDir(), "upload.txt")
+	if err := os.WriteFile(filePath, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := testClient(t, server.URL)
+	if _, _, err := client.PostMultipartFile(context.Background(), "/upload", "file", filePath); err != nil {
+		t.Fatal(err)
+	}
+	if auth != "Bearer token" || filename != "upload.txt" || uploaded != "hello" {
+		t.Fatalf("auth=%q filename=%q uploaded=%q", auth, filename, uploaded)
 	}
 }
 

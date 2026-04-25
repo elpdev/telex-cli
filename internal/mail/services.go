@@ -12,6 +12,7 @@ import (
 type Client interface {
 	Get(context.Context, string, url.Values) ([]byte, int, error)
 	Post(context.Context, string, any) ([]byte, int, error)
+	PostMultipartFile(context.Context, string, string, string) ([]byte, int, error)
 	Patch(context.Context, string, any) ([]byte, int, error)
 	Delete(context.Context, string) (int, error)
 }
@@ -136,6 +137,18 @@ func (s *Service) SendOutboundMessage(ctx context.Context, id int64) (*OutboundM
 		return nil, err
 	}
 	return &envelope.Data, nil
+}
+
+func (s *Service) AttachOutboundMessageFile(ctx context.Context, outboundMessageID int64, filePath string) ([]Attachment, error) {
+	body, _, err := s.client.PostMultipartFile(ctx, fmt.Sprintf("/api/v1/outbound_messages/%d/attachments", outboundMessageID), "file", filePath)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[[]Attachment](body)
+	if err != nil {
+		return nil, err
+	}
+	return envelope.Data, nil
 }
 
 func (s *Service) ShowOutboundMessage(ctx context.Context, id int64) (*OutboundMessage, error) {
