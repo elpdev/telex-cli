@@ -41,6 +41,7 @@ type Mail struct {
 	restore          MessageActionFunc
 	sync             SyncFunc
 	sendDraft        SendDraftFunc
+	forward          ForwardFunc
 	download         DownloadAttachmentFunc
 	mailboxes        []mailstore.MailboxMeta
 	mailboxIndex     int
@@ -59,6 +60,8 @@ type Mail struct {
 	saveDirInput     string
 	attachingFile    bool
 	attachPathInput  string
+	forwarding       bool
+	forwardToInput   string
 	article          string
 	articleURL       string
 	articleScroll    int
@@ -84,6 +87,7 @@ type MailKeyMap struct {
 	Extract     key.Binding
 	Compose     key.Binding
 	Reply       key.Binding
+	Forward     key.Binding
 	Send        key.Binding
 	Delete      key.Binding
 	Attachments key.Binding
@@ -170,6 +174,17 @@ type draftSentMsg struct {
 	err   error
 }
 
+type draftAttachmentDetachedMsg struct {
+	path string
+	err  error
+}
+
+type forwardCreatedMsg struct {
+	remoteID int64
+	status   string
+	err      error
+}
+
 type attachmentDownloadedMsg struct {
 	path string
 	open bool
@@ -186,6 +201,7 @@ type ToggleStarFunc func(context.Context, int64, bool) error
 type MessageActionFunc func(context.Context, int64) error
 type SyncFunc func(context.Context) (MailSyncResult, error)
 type SendDraftFunc func(context.Context, mailstore.MailboxMeta, mailstore.Draft) error
+type ForwardFunc func(context.Context, int64, []string) (int64, string, error)
 type DownloadAttachmentFunc func(context.Context, mailstore.AttachmentMeta) ([]byte, error)
 
 type MailSyncResult struct {
@@ -198,11 +214,11 @@ type MailSyncResult struct {
 }
 
 func NewMail(store mailstore.Store) Mail {
-	return NewMailWithActions(store, nil, nil, nil, nil, nil, nil, nil, nil)
+	return NewMailWithActions(store, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
-func NewMailWithActions(store mailstore.Store, toggleRead ToggleReadFunc, toggleStar ToggleStarFunc, archive MessageActionFunc, trash MessageActionFunc, restore MessageActionFunc, sync SyncFunc, sendDraft SendDraftFunc, download DownloadAttachmentFunc) Mail {
-	return Mail{store: store, toggleRead: toggleRead, toggleStar: toggleStar, archive: archive, trash: trash, restore: restore, sync: sync, sendDraft: sendDraft, download: download, keys: DefaultMailKeyMap(), loading: true}
+func NewMailWithActions(store mailstore.Store, toggleRead ToggleReadFunc, toggleStar ToggleStarFunc, archive MessageActionFunc, trash MessageActionFunc, restore MessageActionFunc, sync SyncFunc, sendDraft SendDraftFunc, forward ForwardFunc, download DownloadAttachmentFunc) Mail {
+	return Mail{store: store, toggleRead: toggleRead, toggleStar: toggleStar, archive: archive, trash: trash, restore: restore, sync: sync, sendDraft: sendDraft, forward: forward, download: download, keys: DefaultMailKeyMap(), loading: true}
 }
 
 func DefaultMailKeyMap() MailKeyMap {
@@ -219,6 +235,7 @@ func DefaultMailKeyMap() MailKeyMap {
 		Extract:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "extract")),
 		Compose:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "compose")),
 		Reply:       key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reply")),
+		Forward:     key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "forward")),
 		Send:        key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "send draft")),
 		Delete:      key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "delete draft")),
 		Attachments: key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "attachments")),
@@ -366,6 +383,13 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		m.clampSelection()
 		m.status = "Draft sent"
 		return m, nil
+	case forwardCreatedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not create forward draft: %v", msg.err)
+			return m, nil
+		}
+		m.status = fmt.Sprintf("Forward draft created remotely: %d (%s)", msg.remoteID, msg.status)
+		return m, nil
 	case draftDeletedMsg:
 		if msg.err != nil {
 			m.status = fmt.Sprintf("Could not delete draft: %v", msg.err)
@@ -374,6 +398,18 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		m.removeMessageByPath(msg.path)
 		m.clampSelection()
 		m.status = "Draft deleted"
+		return m, nil
+	case draftAttachmentDetachedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not detach attachment: %v", msg.err)
+			return m, nil
+		}
+		loaded := m.load(m.mailboxIndex, m.currentBox())
+		m.allMessages = loaded.messages
+		m.applySearch()
+		m.clampSelection()
+		m.mode = mailModeDetail
+		m.status = "Attachment detached"
 		return m, nil
 	case attachmentDownloadedMsg:
 		if msg.err != nil {
@@ -429,7 +465,7 @@ func (m Mail) View(width, height int) string {
 func (m Mail) Title() string { return "Mail" }
 
 func (m Mail) KeyBindings() []key.Binding {
-	return []key.Binding{m.keys.Up, m.keys.Down, m.keys.Previous, m.keys.Next, m.keys.BoxPrev, m.keys.BoxNext, m.keys.Open, m.keys.OpenHTML, m.keys.Links, m.keys.Attachments, m.keys.Extract, m.keys.Compose, m.keys.Reply, m.keys.Send, m.keys.Delete, m.keys.ToggleRead, m.keys.ToggleStar, m.keys.Archive, m.keys.Trash, m.keys.Restore, m.keys.Copy, m.keys.Back, m.keys.Refresh}
+	return []key.Binding{m.keys.Up, m.keys.Down, m.keys.Previous, m.keys.Next, m.keys.BoxPrev, m.keys.BoxNext, m.keys.Open, m.keys.OpenHTML, m.keys.Links, m.keys.Attachments, m.keys.Extract, m.keys.Compose, m.keys.Reply, m.keys.Forward, m.keys.Send, m.keys.Delete, m.keys.ToggleRead, m.keys.ToggleStar, m.keys.Archive, m.keys.Trash, m.keys.Restore, m.keys.Copy, m.keys.Back, m.keys.Refresh}
 }
 
 func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
@@ -444,6 +480,9 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	}
 	if m.attachingFile {
 		return m.handleAttachFileKey(msg)
+	}
+	if m.forwarding {
+		return m.handleForwardKey(msg)
 	}
 	if m.mode == mailModeArticle {
 		return m.handleArticleKey(msg)
@@ -485,6 +524,9 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		}
 		if key.Matches(msg, m.keys.Reply) {
 			return m.editReplyDraft()
+		}
+		if key.Matches(msg, m.keys.Forward) {
+			return m.startForward()
 		}
 		if key.Matches(msg, m.keys.Send) {
 			return m.requestConfirm("send-draft", "Send this draft?")
@@ -659,6 +701,8 @@ func (m Mail) handleAttachmentsKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		}
 	case key.Matches(msg, m.keys.Open):
 		return m.openAttachment()
+	case key.Matches(msg, m.keys.Delete):
+		return m.detachSelectedDraftAttachment()
 	case key.Matches(msg, m.keys.Copy):
 		return m.copyAttachmentURL()
 	case key.Matches(msg, m.keys.Send):
@@ -667,6 +711,20 @@ func (m Mail) handleAttachmentsKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		m.status = "Save to: " + m.saveDirInput
 	}
 	return m, nil
+}
+
+func (m Mail) detachSelectedDraftAttachment() (Screen, tea.Cmd) {
+	if m.currentBox() != "drafts" {
+		m.status = "detach is only available from drafts"
+		return m, nil
+	}
+	message := m.messages[m.messageIndex]
+	attachment := message.Meta.Attachments[m.attachmentIndex]
+	m.status = "Detaching attachment..."
+	return m, func() tea.Msg {
+		_, err := mailstore.DetachFileFromDraft(message.Path, attachmentFileLabel(attachment), time.Now())
+		return draftAttachmentDetachedMsg{path: message.Path, err: err}
+	}
 }
 
 func (m Mail) handleAttachmentSaveKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
@@ -719,6 +777,55 @@ func (m Mail) handleAttachFileKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		m.status = "Attach file: " + m.attachPathInput
 	}
 	return m, nil
+}
+
+func (m Mail) handleForwardKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.forwarding = false
+		m.forwardToInput = ""
+		m.status = "Cancelled"
+		return m, nil
+	case "enter":
+		to := splitDraftAddresses(m.forwardToInput)
+		m.forwarding = false
+		m.forwardToInput = ""
+		return m.createRemoteForwardDraft(to)
+	case "backspace":
+		if len(m.forwardToInput) > 0 {
+			m.forwardToInput = m.forwardToInput[:len(m.forwardToInput)-1]
+		}
+		m.status = "Forward to: " + m.forwardToInput
+		return m, nil
+	}
+	if msg.Text != "" {
+		m.forwardToInput += msg.Text
+		m.status = "Forward to: " + m.forwardToInput
+	}
+	return m, nil
+}
+
+func (m Mail) startForward() (Screen, tea.Cmd) {
+	if m.forward == nil {
+		return m.editForwardDraft()
+	}
+	m.forwarding = true
+	m.forwardToInput = ""
+	m.status = "Forward to: "
+	return m, nil
+}
+
+func (m Mail) createRemoteForwardDraft(to []string) (Screen, tea.Cmd) {
+	if len(to) == 0 {
+		m.status = "No forward recipients"
+		return m, nil
+	}
+	message := m.messages[m.messageIndex]
+	m.status = "Creating remote forward draft..."
+	return m, func() tea.Msg {
+		remoteID, status, err := m.forward(context.Background(), message.Meta.RemoteID, to)
+		return forwardCreatedMsg{remoteID: remoteID, status: status, err: err}
+	}
 }
 
 func (m Mail) startAttachFile() (Screen, tea.Cmd) {
@@ -990,6 +1097,18 @@ func (m Mail) editReplyDraft() (Screen, tea.Cmd) {
 	return m.editDraft(draftTemplate(draftFields{From: m.mailboxes[m.mailboxIndex].Address, To: []string{message.Meta.FromAddress}, Subject: subject, Body: body, SourceMessageID: message.Meta.RemoteID, ConversationID: message.Meta.ConversationID}), "")
 }
 
+func (m Mail) editForwardDraft() (Screen, tea.Cmd) {
+	if len(m.messages) == 0 || len(m.mailboxes) == 0 {
+		return m, nil
+	}
+	message := m.messages[m.messageIndex]
+	subject := message.Meta.Subject
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(subject)), "fwd:") {
+		subject = "Fwd: " + subject
+	}
+	return m.editDraft(draftTemplate(draftFields{From: m.mailboxes[m.mailboxIndex].Address, Subject: subject, Body: quotedForwardBody(message), SourceMessageID: message.Meta.RemoteID, ConversationID: message.Meta.ConversationID}), "")
+}
+
 func (m Mail) editSelectedDraft() (Screen, tea.Cmd) {
 	if len(m.messages) == 0 {
 		return m, nil
@@ -1209,6 +1328,13 @@ func attachmentSaveName(attachment mailstore.AttachmentMeta) string {
 	return filepath.Base(path)
 }
 
+func attachmentFileLabel(attachment mailstore.AttachmentMeta) string {
+	if attachment.CacheName != "" {
+		return attachment.CacheName
+	}
+	return attachment.Filename
+}
+
 func uniquePath(path string) string {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return path
@@ -1384,6 +1510,40 @@ func quotedReplyBody(message mailstore.CachedMessage) string {
 		lines[i] = "> " + line
 	}
 	return "\n\n" + strings.Join(lines, "\n") + "\n"
+}
+
+func quotedForwardBody(message mailstore.CachedMessage) string {
+	body := strings.TrimSpace(message.BodyText)
+	if body == "" {
+		body = strings.TrimSpace(message.BodyHTML)
+	}
+	var b strings.Builder
+	b.WriteString("\n\n---------- Forwarded message ---------\n")
+	b.WriteString(fmt.Sprintf("From: %s\n", senderLine(message)))
+	if len(message.Meta.To) > 0 {
+		b.WriteString(fmt.Sprintf("To: %s\n", strings.Join(message.Meta.To, ", ")))
+	}
+	if len(message.Meta.CC) > 0 {
+		b.WriteString(fmt.Sprintf("Cc: %s\n", strings.Join(message.Meta.CC, ", ")))
+	}
+	if !message.Meta.ReceivedAt.IsZero() {
+		b.WriteString(fmt.Sprintf("Date: %s\n", message.Meta.ReceivedAt.Format(time.RFC1123)))
+	}
+	b.WriteString(fmt.Sprintf("Subject: %s\n\n", message.Meta.Subject))
+	if body != "" {
+		b.WriteString(body)
+		if !strings.HasSuffix(body, "\n") {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+func senderLine(message mailstore.CachedMessage) string {
+	if strings.TrimSpace(message.Meta.FromName) == "" {
+		return message.Meta.FromAddress
+	}
+	return fmt.Sprintf("%s <%s>", message.Meta.FromName, message.Meta.FromAddress)
 }
 
 func (m Mail) loadCmd() tea.Cmd {

@@ -93,6 +93,36 @@ func TestAttachFileToDraftCopiesFileAndUpdatesMetadata(t *testing.T) {
 	}
 }
 
+func TestDetachFileFromDraftRemovesFileAndMetadata(t *testing.T) {
+	store := New(t.TempDir())
+	mailbox := testMailboxMeta()
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := store.CreateDraft(DraftInput{Mailbox: mailbox, Subject: "Attach", Now: time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "invoice.pdf")
+	if err := os.WriteFile(source, []byte("pdf"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	draft, err = AttachFileToDraft(draft.Path, source, time.Date(2026, 4, 24, 11, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := DetachFileFromDraft(draft.Path, "invoice.pdf", time.Date(2026, 4, 24, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Meta.Attachments) != 0 {
+		t.Fatalf("attachments = %#v", updated.Meta.Attachments)
+	}
+	if _, err := os.Stat(filepath.Join(draft.Path, "attachments", "invoice.pdf")); !os.IsNotExist(err) {
+		t.Fatalf("attachment file should be removed: %v", err)
+	}
+}
+
 func TestListDraftsNewestFirst(t *testing.T) {
 	store := New(t.TempDir())
 	mailbox := testMailboxMeta()

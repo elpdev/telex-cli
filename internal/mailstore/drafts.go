@@ -177,6 +177,43 @@ func AttachFileToDraft(draftPath, sourcePath string, now time.Time) (*Draft, err
 	return ReadDraft(draftPath)
 }
 
+func DetachFileFromDraft(draftPath, name string, now time.Time) (*Draft, error) {
+	draft, err := ReadDraft(draftPath)
+	if err != nil {
+		return nil, err
+	}
+	if draft.Meta.Kind != "draft" {
+		return nil, fmt.Errorf("can only detach files from drafts, got %s", draft.Meta.Kind)
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("attachment name is required")
+	}
+	index := -1
+	for i, attachment := range draft.Meta.Attachments {
+		if attachment.CacheName == name || attachment.Filename == name || attachmentFileName(attachment) == name {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return nil, fmt.Errorf("attachment %q was not found", name)
+	}
+	attachment := draft.Meta.Attachments[index]
+	draft.Meta.Attachments = append(draft.Meta.Attachments[:index], draft.Meta.Attachments[index+1:]...)
+	if now.IsZero() {
+		now = time.Now()
+	}
+	draft.Meta.UpdatedAt = now
+	if err := os.Remove(AttachmentCachePath(draftPath, attachment)); err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	if err := writeTOML(filepath.Join(draftPath, "meta.toml"), draft.Meta); err != nil {
+		return nil, err
+	}
+	return ReadDraft(draftPath)
+}
+
 func uniqueAttachmentName(dir string, attachment AttachmentMeta) string {
 	name := attachmentCacheName(attachment)
 	if name == "" {

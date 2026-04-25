@@ -100,7 +100,7 @@ func (m Model) devBuild() bool { return m.meta.Version == "dev" }
 
 func (m *Model) registerScreens() {
 	m.screens["home"] = screens.NewHome()
-	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.downloadAttachment)
+	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.forwardMessage, m.downloadAttachment)
 	m.screens["settings"] = screens.NewSettings(screens.SettingsState{
 		ThemeName:      m.theme.Name,
 		SidebarVisible: m.showSidebar,
@@ -190,6 +190,18 @@ func (m *Model) sendDraft(ctx context.Context, mailbox mailstore.MailboxMeta, dr
 	}
 	_, err = mailsend.SendDraft(ctx, mailstore.New(m.dataPath), service, mailbox, draft)
 	return err
+}
+
+func (m *Model) forwardMessage(ctx context.Context, id int64, to []string) (int64, string, error) {
+	service, err := m.mailService()
+	if err != nil {
+		return 0, "", err
+	}
+	outbound, err := service.Forward(ctx, id, to)
+	if err != nil {
+		return 0, "", err
+	}
+	return outbound.ID, outbound.Status, nil
 }
 
 func (m *Model) downloadAttachment(ctx context.Context, attachment mailstore.AttachmentMeta) ([]byte, error) {

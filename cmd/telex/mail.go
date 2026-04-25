@@ -74,6 +74,7 @@ func newInboxCommand(rt *runtime) *cobra.Command {
 	cmd := &cobra.Command{Use: "inbox", Short: "Read cached inbox messages"}
 	cmd.AddCommand(newInboxListCommand(rt))
 	cmd.AddCommand(newInboxShowCommand(rt))
+	cmd.AddCommand(newInboxForwardCommand(rt))
 	return cmd
 }
 
@@ -143,6 +144,56 @@ func newInboxShowCommand(rt *runtime) *cobra.Command {
 	return cmd
 }
 
+func newInboxForwardCommand(rt *runtime) *cobra.Command {
+	var mailboxAddress string
+	var to []string
+	cmd := &cobra.Command{
+		Use:   "forward <id>",
+		Short: "Create a remote forward draft from a cached inbox message",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID(args[0])
+			if err != nil {
+				return err
+			}
+			store := mailstore.New(rt.dataPath)
+			_, mailboxPath, err := store.FindMailboxByAddress(mailboxAddress)
+			if err != nil {
+				return err
+			}
+			message, err := mailstore.FindInboxMessage(mailboxPath, id)
+			if err != nil {
+				return err
+			}
+			recipients := splitAddresses(to)
+			if len(recipients) == 0 {
+				return fmt.Errorf("at least one --to recipient is required")
+			}
+			service, err := mailService(rt)
+			if err != nil {
+				return err
+			}
+			outbound, err := service.Forward(rt.context(), message.Meta.RemoteID, recipients)
+			if err != nil {
+				return err
+			}
+			writeRows(cmd.OutOrStdout(), []string{"key", "value"}, [][]string{
+				{"remote_id", strconv.FormatInt(outbound.ID, 10)},
+				{"status", outbound.Status},
+				{"subject", outbound.Subject},
+				{"to", strings.Join(outbound.ToAddresses, ", ")},
+			})
+			fmt.Fprintln(cmd.OutOrStdout(), "Forward draft created remotely. It has not been sent; review and send it from drafts/web.")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
+	cmd.Flags().StringSliceVar(&to, "to", nil, "forward recipient address, repeatable or comma-separated")
+	_ = cmd.MarkFlagRequired("mailbox")
+	_ = cmd.MarkFlagRequired("to")
+	return cmd
+}
+
 func newDraftsCommand(rt *runtime) *cobra.Command {
 	cmd := &cobra.Command{Use: "drafts", Short: "Manage local drafts"}
 	cmd.AddCommand(newDraftCreateCommand(rt))
@@ -150,6 +201,7 @@ func newDraftsCommand(rt *runtime) *cobra.Command {
 	cmd.AddCommand(newDraftShowCommand(rt))
 	cmd.AddCommand(newDraftEditCommand(rt))
 	cmd.AddCommand(newDraftAttachCommand(rt))
+	cmd.AddCommand(newDraftDetachCommand(rt))
 	cmd.AddCommand(newDraftSendCommand(rt))
 	return cmd
 }
@@ -353,12 +405,44 @@ func newDraftAttachCommand(rt *runtime) *cobra.Command {
 				return err
 			}
 			writeRows(cmd.OutOrStdout(), []string{"key", "value"}, draftFields(*draft))
-			fmt.Fprintln(cmd.ErrOrStderr(), "Warning: outbound attachment upload is not supported yet; this draft cannot be sent until attachments are removed or upload support is added.")
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
 	cmd.Flags().BoolVar(&latest, "latest", false, "attach to the newest local draft")
+	_ = cmd.MarkFlagRequired("mailbox")
+	return cmd
+}
+
+func newDraftDetachCommand(rt *runtime) *cobra.Command {
+	var mailboxAddress string
+	var latest bool
+	cmd := &cobra.Command{
+		Use:   "detach [draft-id] <attachment>",
+		Short: "Detach a local file from a local draft",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store := mailstore.New(rt.dataPath)
+			_, mailboxPath, err := store.FindMailboxByAddress(mailboxAddress)
+			if err != nil {
+				return err
+			}
+			draftArgs := args[:len(args)-1]
+			attachmentName := args[len(args)-1]
+			draftID, err := resolveDraftID(mailboxAddress, mailboxPath, draftArgs, latest)
+			if err != nil {
+				return err
+			}
+			draft, err := mailstore.DetachFileFromDraft(filepath.Join(mailboxPath, "drafts", draftID), attachmentName, time.Now())
+			if err != nil {
+				return err
+			}
+			writeRows(cmd.OutOrStdout(), []string{"key", "value"}, draftFields(*draft))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
+	cmd.Flags().BoolVar(&latest, "latest", false, "detach from the newest local draft")
 	_ = cmd.MarkFlagRequired("mailbox")
 	return cmd
 }
