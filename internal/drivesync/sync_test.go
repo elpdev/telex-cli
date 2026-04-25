@@ -56,15 +56,15 @@ type syncFakeClient struct{}
 func (f *syncFakeClient) Get(_ context.Context, path string, query url.Values) ([]byte, int, error) {
 	switch path {
 	case "/api/v1/folders":
-		if query.Get("parent_id") == "root" {
-			return []byte(`{"data":[{"id":1,"name":"Projects"}],"meta":{"page":1,"per_page":100,"total_count":1}}`), 200, nil
+		if query.Get("parent_id") != "" {
+			return nil, 500, fmt.Errorf("sync should not depend on parent_id filters")
 		}
-		return []byte(`{"data":[],"meta":{"page":1,"per_page":100,"total_count":0}}`), 200, nil
+		return []byte(`{"data":[{"id":1,"name":"Projects"}],"meta":{"page":1,"per_page":100,"total_count":1}}`), 200, nil
 	case "/api/v1/files":
-		if query.Get("folder_id") == "1" {
-			return []byte(`{"data":[{"id":2,"folder_id":1,"filename":"plan.txt","byte_size":9,"downloadable":true,"download_url":"/api/v1/files/2/download"}],"meta":{"page":1,"per_page":100,"total_count":1}}`), 200, nil
+		if query.Get("folder_id") != "" {
+			return nil, 500, fmt.Errorf("sync should not depend on folder_id filters")
 		}
-		return []byte(`{"data":[],"meta":{"page":1,"per_page":100,"total_count":0}}`), 200, nil
+		return []byte(`{"data":[{"id":2,"folder_id":1,"filename":"plan.txt","byte_size":9,"downloadable":true,"download_url":"/api/v1/files/2/download"}],"meta":{"page":1,"per_page":100,"total_count":1}}`), 200, nil
 	default:
 		return nil, 404, fmt.Errorf("unexpected GET %s", path)
 	}

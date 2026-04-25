@@ -24,16 +24,20 @@ func Run(ctx context.Context, store drivestore.Store, service *drive.Service, sy
 	if err := store.EnsureRoot(); err != nil {
 		return Result{}, err
 	}
-	return syncFolder(ctx, store, service, store.DriveRoot(), nil, syncMode, time.Now())
+	folders, err := listAllFolders(ctx, service)
+	if err != nil {
+		return Result{}, err
+	}
+	files, err := listAllFiles(ctx, service)
+	if err != nil {
+		return Result{}, err
+	}
+	return syncFolderTree(ctx, store, service, store.DriveRoot(), 0, groupFolders(folders), groupFiles(files), syncMode, time.Now())
 }
 
-func syncFolder(ctx context.Context, store drivestore.Store, service *drive.Service, localPath string, parentID *int64, syncMode string, syncedAt time.Time) (Result, error) {
+func syncFolderTree(ctx context.Context, store drivestore.Store, service *drive.Service, localPath string, parentID int64, foldersByParent map[int64][]drive.Folder, filesByFolder map[int64][]drive.File, syncMode string, syncedAt time.Time) (Result, error) {
 	result := Result{}
-	files, err := listAllFiles(ctx, service, parentID)
-	if err != nil {
-		return result, err
-	}
-	for _, file := range files {
+	for _, file := range filesByFolder[parentID] {
 		var content []byte
 		if syncMode == config.DriveSyncFull && file.Downloadable {
 			body, err := service.DownloadFile(ctx, file)
@@ -49,18 +53,13 @@ func syncFolder(ctx context.Context, store drivestore.Store, service *drive.Serv
 		}
 		result.Files++
 	}
-	folders, err := listAllFolders(ctx, service, parentID)
-	if err != nil {
-		return result, err
-	}
-	for _, folder := range folders {
+	for _, folder := range foldersByParent[parentID] {
 		folderPath, err := store.StoreFolder(localPath, folder, syncedAt)
 		if err != nil {
 			return result, fmt.Errorf("store folder %d: %w", folder.ID, err)
 		}
 		result.Folders++
-		childID := folder.ID
-		child, err := syncFolder(ctx, store, service, folderPath, &childID, syncMode, syncedAt)
+		child, err := syncFolderTree(ctx, store, service, folderPath, folder.ID, foldersByParent, filesByFolder, syncMode, syncedAt)
 		result.Folders += child.Folders
 		result.Files += child.Files
 		result.DownloadedFiles += child.DownloadedFiles
@@ -72,11 +71,11 @@ func syncFolder(ctx context.Context, store drivestore.Store, service *drive.Serv
 	return result, nil
 }
 
-func listAllFolders(ctx context.Context, service *drive.Service, parentID *int64) ([]drive.Folder, error) {
+func listAllFolders(ctx context.Context, service *drive.Service) ([]drive.Folder, error) {
 	page := 1
 	all := []drive.Folder{}
 	for {
-		folders, pagination, err := service.ListFolders(ctx, drive.ListFoldersParams{ListParams: drive.ListParams{Page: page, PerPage: 100}, ParentID: parentID, Root: parentID == nil, Sort: "name"})
+		folders, pagination, err := service.ListFolders(ctx, drive.ListFoldersParams{ListParams: drive.ListParams{Page: page, PerPage: 100}, Sort: "name"})
 		if err != nil {
 			return all, fmt.Errorf("list folders page %d: %w", page, err)
 		}
@@ -88,11 +87,11 @@ func listAllFolders(ctx context.Context, service *drive.Service, parentID *int64
 	}
 }
 
-func listAllFiles(ctx context.Context, service *drive.Service, folderID *int64) ([]drive.File, error) {
+func listAllFiles(ctx context.Context, service *drive.Service) ([]drive.File, error) {
 	page := 1
 	all := []drive.File{}
 	for {
-		files, pagination, err := service.ListFiles(ctx, drive.ListFilesParams{ListParams: drive.ListParams{Page: page, PerPage: 100}, FolderID: folderID, Root: folderID == nil, Sort: "filename"})
+		files, pagination, err := service.ListFiles(ctx, drive.ListFilesParams{ListParams: drive.ListParams{Page: page, PerPage: 100}, Sort: "filename"})
 		if err != nil {
 			return all, fmt.Errorf("list files page %d: %w", page, err)
 		}
@@ -102,4 +101,28 @@ func listAllFiles(ctx context.Context, service *drive.Service, folderID *int64) 
 		}
 		page++
 	}
+}
+
+func groupFolders(folders []drive.Folder) map[int64][]drive.Folder {
+	grouped := make(map[int64][]drive.Folder)
+	for _, folder := range folders {
+		parentID := int64(0)
+		if folder.ParentID != nil {
+			parentID = *folder.ParentID
+		}
+		grouped[parentID] = append(grouped[parentID], folder)
+	}
+	return grouped
+}
+
+func groupFiles(files []drive.File) map[int64][]drive.File {
+	grouped := make(map[int64][]drive.File)
+	for _, file := range files {
+		folderID := int64(0)
+		if file.FolderID != nil {
+			folderID = *file.FolderID
+		}
+		grouped[folderID] = append(grouped[folderID], file)
+	}
+	return grouped
 }
