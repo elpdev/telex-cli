@@ -30,6 +30,25 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Verify package publishing secrets
+        shell: bash
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+        run: |
+          set -euo pipefail
+
+          missing=()
+          [[ -n "$HOMEBREW_TAP_GITHUB_TOKEN" ]] || missing+=(HOMEBREW_TAP_GITHUB_TOKEN)
+          [[ -n "$AUR_KEY" ]] || missing+=(AUR_KEY)
+
+          if (( ${#missing[@]} > 0 )); then
+            for secret in "${missing[@]}"; do
+              printf '::error::Missing required GitHub secret: %s\n' "$secret"
+            done
+            exit 1
+          fi
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -38,3 +57,5 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}

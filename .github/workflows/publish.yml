@@ -15,6 +15,11 @@ on:
           - patch
           - minor
           - major
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -26,6 +31,12 @@ concurrency:
 
 jobs:
   publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+      (contains(github.event.pull_request.labels.*.name, 'publish: patch') ||
+      contains(github.event.pull_request.labels.*.name, 'publish: minor') ||
+      contains(github.event.pull_request.labels.*.name, 'publish: major')))
     runs-on: ubuntu-latest
 
     steps:
@@ -33,6 +44,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.base.ref || github.ref }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -43,13 +55,54 @@ jobs:
       - name: Run Go tests
         run: go test ./...
 
+      - name: Verify package publishing secrets
+        shell: bash
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+        run: |
+          set -euo pipefail
+
+          missing=()
+          [[ -n "$HOMEBREW_TAP_GITHUB_TOKEN" ]] || missing+=(HOMEBREW_TAP_GITHUB_TOKEN)
+          [[ -n "$AUR_KEY" ]] || missing+=(AUR_KEY)
+
+          if (( ${#missing[@]} > 0 )); then
+            for secret in "${missing[@]}"; do
+              printf '::error::Missing required GitHub secret: %s\n' "$secret"
+            done
+            exit 1
+          fi
+
+      - name: Determine version bump
+        id: bump
+        shell: bash
+        env:
+          DISPATCH_BUMP: ${{ inputs.bump }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+
+          bump="${DISPATCH_BUMP:-}"
+          if [[ -z "$bump" ]]; then
+            if [[ "$PR_LABELS" == *'publish: major'* ]]; then
+              bump=major
+            elif [[ "$PR_LABELS" == *'publish: minor'* ]]; then
+              bump=minor
+            else
+              bump=patch
+            fi
+          fi
+
+          printf 'bump=%s\n' "$bump" >> "$GITHUB_OUTPUT"
+
       - name: Bump version and create tag
         id: version
         uses: mathieudutour/github-tag-action@v6.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           tag_prefix: v
-          default_bump: ${{ inputs.bump }}
+          default_bump: ${{ steps.bump.outputs.bump }}
           initial_version: 0.1.0
 
       - name: Fetch tags for changelog range
@@ -65,6 +118,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ steps.version.outputs.new_tag }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          AUR_KEY: ${{ secrets.AUR_KEY }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

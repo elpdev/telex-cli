@@ -42,6 +42,37 @@ archives:
 checksum:
   name_template: checksums.txt
 
+brews:
+  - name: telex
+    ids: [default]
+    directory: Formula
+    repository:
+      owner: elpdev
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_msg_template: "chore: update telex formula to {{ .Tag }}"
+    homepage: https://github.com/elpdev/telex-cli
+    description: "Terminal UI and CLI for telex.sh email workflows"
+    license: MIT
+    install: |
+      bin.install "telex"
+
+aurs:
+  - name: telex-cli-bin
+    ids: [default]
+    homepage: https://github.com/elpdev/telex-cli
+    description: "Terminal UI and CLI for telex.sh email workflows"
+    maintainers: ["elpdev <noreply@github.com>"]
+    license: MIT
+    private_key: "{{ .Env.AUR_KEY }}"
+    git_url: "ssh://aur@aur.archlinux.org/telex-cli-bin.git"
+    skip_upload: auto
+    package: |-
+      install -Dm755 telex "${pkgdir}/usr/bin/telex"
+
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
 
