@@ -3,9 +3,11 @@ package app
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -60,12 +62,13 @@ type Model struct {
 
 	configPath string
 	dataPath   string
+	prefsPath  string
 	instance   string
 	client     *api.Client
 }
 
 func New(meta BuildInfo) Model {
-	return NewWithDataPath(meta, "")
+	return assembleModel(meta, "", "", "", &config.UIPrefs{})
 }
 
 func NewWithDataPath(meta BuildInfo, dataPath string) Model {
@@ -73,21 +76,41 @@ func NewWithDataPath(meta BuildInfo, dataPath string) Model {
 }
 
 func NewWithPaths(meta BuildInfo, configPath, dataPath string) Model {
+	prefsPath := config.PrefsPathFor(configPath)
+	prefs, err := config.LoadPrefs(prefsPath)
+	if err != nil {
+		prefs = &config.UIPrefs{}
+	}
+	return assembleModel(meta, configPath, dataPath, prefsPath, prefs)
+}
+
+func assembleModel(meta BuildInfo, configPath, dataPath, prefsPath string, prefs *config.UIPrefs) Model {
 	log := debug.NewLog()
 	log.Info("App started")
+	chosen := theme.Phosphor()
+	if prefs.Theme != "" {
+		if t, ok := themeByName(prefs.Theme); ok {
+			chosen = t
+		}
+	}
+	sidebar := true
+	if prefs.SidebarVisible != nil {
+		sidebar = *prefs.SidebarVisible
+	}
 
 	m := Model{
 		activeScreen: defaultScreen,
 		screens:      make(map[string]screens.Screen),
-		showSidebar:  true,
+		showSidebar:  sidebar,
 		focus:        FocusMain,
 		keys:         DefaultKeyMap(),
 		commands:     commands.NewRegistry(),
-		theme:        theme.Phosphor(),
+		theme:        chosen,
 		logs:         log,
 		meta:         meta,
 		configPath:   configPath,
 		dataPath:     dataPath,
+		prefsPath:    prefsPath,
 		instance:     loadInstance(configPath),
 	}
 
@@ -95,6 +118,15 @@ func NewWithPaths(meta BuildInfo, configPath, dataPath string) Model {
 	m.registerCommands()
 	m.commandPalette = commands.NewPaletteModel(m.commands, theme.BuiltIns())
 	return m
+}
+
+func themeByName(name string) (theme.Theme, bool) {
+	for _, t := range theme.BuiltIns() {
+		if t.Name == name {
+			return t, true
+		}
+	}
+	return theme.Theme{}, false
 }
 
 func (m Model) Init() tea.Cmd {
@@ -112,17 +144,127 @@ func (m *Model) registerScreens() {
 	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody).WithJunkActions(m.junkMessage, m.notJunkMessage).WithSenderPolicyActions(m.blockSender, m.unblockSender, m.blockDomain, m.unblockDomain, m.trustSender, m.untrustSender)
 	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive).WithActions(m.downloadDriveFile, m.openDriveFile, m.uploadDriveFile, m.createDriveFolder, m.renameDriveFile, m.renameDriveFolder, m.deleteDriveFile, m.deleteDriveFolder)
 	m.screens["notes"] = screens.NewNotes(notestore.New(m.dataPath), m.syncNotes).WithActions(m.createNote, m.updateNote, m.deleteNote)
-	m.screens["settings"] = screens.NewSettings(screens.SettingsState{
-		ThemeName:      m.theme.Name,
-		SidebarVisible: m.showSidebar,
-		Version:        m.meta.Version,
-		Commit:         m.meta.Commit,
-		Date:           m.meta.Date,
-	})
+	m.screens["settings"] = m.buildSettings()
 	if m.devBuild() {
 		m.screens["logs"] = screens.NewLogs(m.logs)
 	}
 	m.refreshScreenOrder()
+}
+
+func (m *Model) buildSettings() screens.Settings {
+	state := m.computeSettingsState()
+	actions := m.settingsActions()
+	if existing, ok := m.screens["settings"].(screens.Settings); ok {
+		return existing.Reconfigure(state, m.theme, theme.BuiltIns(), actions)
+	}
+	return screens.NewSettings(state, m.theme, theme.BuiltIns(), actions)
+}
+
+func (m *Model) computeSettingsState() screens.SettingsState {
+	configFile, tokenFile := config.Paths(m.configPath)
+
+	driveSync := config.DriveSyncFull
+	if cfg, err := config.LoadFrom(configFile); err == nil && cfg != nil {
+		driveSync = cfg.DriveSyncMode()
+	}
+
+	authStatus := "Not signed in"
+	signedIn := false
+	if tc, err := config.LoadTokenFrom(tokenFile); err == nil && tc != nil && tc.Token != "" {
+		if tc.Valid() {
+			signedIn = true
+			authStatus = "Signed in · expires in " + humanDuration(time.Until(tc.ExpiresAt))
+		} else {
+			authStatus = "Token expired"
+		}
+	}
+
+	return screens.SettingsState{
+		ThemeName:      m.theme.Name,
+		SidebarVisible: m.showSidebar,
+		Instance:       m.instance,
+		AuthStatus:     authStatus,
+		SignedIn:       signedIn,
+		DataDir:        m.dataPath,
+		ConfigDir:      m.configDirPath(),
+		CacheSize:      computeCacheSize(m.dataPath),
+		DriveSyncMode:  driveSync,
+		Version:        m.meta.Version,
+		Commit:         m.meta.Commit,
+		Date:           m.meta.Date,
+	}
+}
+
+func (m *Model) settingsActions() screens.SettingsActions {
+	return screens.SettingsActions{
+		OpenPath: func(path string) tea.Cmd {
+			return func() tea.Msg {
+				if path == "" {
+					return nil
+				}
+				_ = startDetached(exec.Command("xdg-open", path))
+				return nil
+			}
+		},
+		OpenURL: func(target string) tea.Cmd {
+			return func() tea.Msg {
+				if target == "" {
+					return nil
+				}
+				_ = startDetached(exec.Command("xdg-open", target))
+				return nil
+			}
+		},
+		SignOut: func() tea.Cmd {
+			return func() tea.Msg { return settingsSignOutMsg{} }
+		},
+	}
+}
+
+func (m *Model) configDirPath() string {
+	if m.configPath != "" {
+		return filepath.Dir(filepath.Clean(m.configPath))
+	}
+	return config.Dir()
+}
+
+func computeCacheSize(dataPath string) int64 {
+	if dataPath == "" {
+		return 0
+	}
+	var size int64
+	_ = filepath.WalkDir(dataPath, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		size += info.Size()
+		return nil
+	})
+	return size
+}
+
+func humanDuration(d time.Duration) string {
+	if d <= 0 {
+		return "now"
+	}
+	d = d.Round(time.Second)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
 }
 
 func (m *Model) toggleMessageStar(ctx context.Context, id int64, starred bool) error {

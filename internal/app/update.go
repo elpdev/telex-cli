@@ -2,10 +2,12 @@ package app
 
 import (
 	"fmt"
+	"os"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/elpdev/telex-cli/internal/commands"
+	"github.com/elpdev/telex-cli/internal/config"
 	"github.com/elpdev/telex-cli/internal/screens"
 )
 
@@ -23,6 +25,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toggleSidebarMsg:
 		m.showSidebar = !m.showSidebar
 		m.logs.Info(fmt.Sprintf("Sidebar toggled: %t", m.showSidebar))
+		m.updateDerivedScreens()
+		return m, nil
+	case screens.SettingsThemePreviewMsg:
+		if t, ok := themeByName(msg.Name); ok {
+			m.theme = t
+			m.updateDerivedScreens()
+		}
+		return m, nil
+	case screens.SettingsThemeChangedMsg:
+		if t, ok := themeByName(msg.Name); ok {
+			m.theme = t
+			m.logs.Info(fmt.Sprintf("Theme selected: %s", m.theme.Name))
+			m.saveUIPrefs()
+			m.updateDerivedScreens()
+		}
+		return m, nil
+	case screens.SettingsThemeCancelMsg:
+		if t, ok := themeByName(msg.Name); ok {
+			m.theme = t
+			m.updateDerivedScreens()
+		}
+		return m, nil
+	case screens.SettingsSidebarChangedMsg:
+		m.showSidebar = msg.Visible
+		m.logs.Info(fmt.Sprintf("Sidebar default set: %t", m.showSidebar))
+		m.saveUIPrefs()
+		m.updateDerivedScreens()
+		return m, nil
+	case screens.SettingsDriveSyncChangedMsg:
+		if err := m.saveDriveSyncMode(msg.Mode); err != nil {
+			m.logs.Warn(fmt.Sprintf("Saving drive sync mode: %v", err))
+			return m, nil
+		}
+		m.logs.Info(fmt.Sprintf("Drive sync mode set: %s", msg.Mode))
+		m.updateDerivedScreens()
+		return m, nil
+	case settingsSignOutMsg:
+		if err := m.signOut(); err != nil {
+			m.logs.Warn(fmt.Sprintf("Sign out: %v", err))
+			return m, nil
+		}
+		m.logs.Info("Signed out")
 		m.updateDerivedScreens()
 		return m, nil
 	case quitMsg:
@@ -171,14 +215,44 @@ func (m Model) handleSidebarKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) updateDerivedScreens() {
-	m.screens["settings"] = screens.NewSettings(screens.SettingsState{
-		ThemeName:      m.theme.Name,
-		SidebarVisible: m.showSidebar,
-		Version:        m.meta.Version,
-		Commit:         m.meta.Commit,
-		Date:           m.meta.Date,
-	})
+	m.screens["settings"] = m.buildSettings()
 	if m.devBuild() {
 		m.screens["logs"] = screens.NewLogs(m.logs)
 	}
+}
+
+func (m *Model) saveUIPrefs() {
+	if m.prefsPath == "" {
+		return
+	}
+	prefs, err := config.LoadPrefs(m.prefsPath)
+	if err != nil {
+		m.logs.Warn(fmt.Sprintf("Loading UI prefs: %v", err))
+		prefs = &config.UIPrefs{}
+	}
+	prefs.Theme = m.theme.Name
+	visible := m.showSidebar
+	prefs.SidebarVisible = &visible
+	if err := prefs.SaveTo(m.prefsPath); err != nil {
+		m.logs.Warn(fmt.Sprintf("Saving UI prefs: %v", err))
+	}
+}
+
+func (m *Model) saveDriveSyncMode(mode string) error {
+	configFile, _ := config.Paths(m.configPath)
+	cfg, err := config.LoadFrom(configFile)
+	if err != nil {
+		return err
+	}
+	cfg.Drive.SyncMode = mode
+	return cfg.SaveTo(configFile)
+}
+
+func (m *Model) signOut() error {
+	_, tokenFile := config.Paths(m.configPath)
+	if err := os.Remove(tokenFile); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	m.client = nil
+	return nil
 }
