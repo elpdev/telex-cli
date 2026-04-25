@@ -1,0 +1,51 @@
+package calendarstore
+
+import (
+	"testing"
+	"time"
+
+	"github.com/elpdev/telex-cli/internal/calendar"
+)
+
+func TestStoreCalendarEventAndOccurrencesUnderCalendarRoot(t *testing.T) {
+	store := New(t.TempDir())
+	syncedAt := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	cal := calendar.Calendar{ID: 1, UserID: 2, Name: "Work", Color: "cyan", TimeZone: "UTC", Position: 1, Source: "local", CreatedAt: syncedAt, UpdatedAt: syncedAt}
+	if err := store.StoreCalendar(cal, syncedAt); err != nil {
+		t.Fatal(err)
+	}
+	cals, err := store.ListCalendars()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cals) != 1 || cals[0].RemoteID != 1 || cals[0].Name != "Work" {
+		t.Fatalf("calendars = %#v", cals)
+	}
+
+	event := calendar.CalendarEvent{ID: 9, CalendarID: 1, Title: "Standup", Description: "Daily sync", StartsAt: syncedAt, EndsAt: syncedAt.Add(30 * time.Minute), Status: "confirmed"}
+	if err := store.StoreEvent(event, syncedAt); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.ListEvents(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Meta.RemoteID != 9 || events[0].Description != "Daily sync" {
+		t.Fatalf("events = %#v", events)
+	}
+	if want := store.CalendarRoot(); events[0].Path[:len(want)] != want {
+		t.Fatalf("event path = %q, want under %q", events[0].Path, want)
+	}
+
+	occurrences := []calendar.CalendarOccurrence{{StartsAt: event.StartsAt, EndsAt: event.EndsAt, Event: event}}
+	if err := store.StoreOccurrences(occurrences, syncedAt); err != nil {
+		t.Fatal(err)
+	}
+	cached, err := store.ListOccurrences()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cached) != 1 || cached[0].EventID != 9 || cached[0].CalendarID != 1 {
+		t.Fatalf("occurrences = %#v", cached)
+	}
+}

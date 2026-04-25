@@ -14,6 +14,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/elpdev/telex-cli/internal/api"
+	"github.com/elpdev/telex-cli/internal/calendar"
+	"github.com/elpdev/telex-cli/internal/calendarstore"
 	"github.com/elpdev/telex-cli/internal/commands"
 	"github.com/elpdev/telex-cli/internal/config"
 	"github.com/elpdev/telex-cli/internal/debug"
@@ -143,6 +145,7 @@ func (m *Model) registerScreens() {
 	m.screens["home"] = screens.NewHome()
 	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody).WithJunkActions(m.junkMessage, m.notJunkMessage).WithSenderPolicyActions(m.blockSender, m.unblockSender, m.blockDomain, m.unblockDomain, m.trustSender, m.untrustSender)
 	m.screens["mail-admin"] = screens.NewMailAdmin(m.loadMailAdmin).WithActions(m.saveDomain, m.deleteDomain, m.validateDomainOutbound, m.saveInbox, m.deleteInbox, m.inboxPipeline)
+	m.screens["calendar"] = screens.NewCalendar(calendarstore.New(m.dataPath), m.syncCalendar).WithActions(m.deleteCalendarEvent)
 	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive).WithActions(m.downloadDriveFile, m.openDriveFile, m.uploadDriveFile, m.createDriveFolder, m.renameDriveFile, m.renameDriveFolder, m.deleteDriveFile, m.deleteDriveFolder)
 	m.screens["notes"] = screens.NewNotes(notestore.New(m.dataPath), m.syncNotes).WithActions(m.createNote, m.updateNote, m.deleteNote)
 	m.screens["settings"] = m.buildSettings()
@@ -869,6 +872,94 @@ func (m *Model) deleteNote(ctx context.Context, id int64) error {
 	return notestore.New(m.dataPath).DeleteNote(id)
 }
 
+func (m *Model) syncCalendar(ctx context.Context) (screens.CalendarSyncResult, error) {
+	service, err := m.calendarService()
+	if err != nil {
+		return screens.CalendarSyncResult{}, err
+	}
+	result, err := runCalendarSync(ctx, calendarstore.New(m.dataPath), service, calendarSyncOptions{})
+	return screens.CalendarSyncResult{Calendars: result.Calendars, Events: result.Events, Occurrences: result.Occurrences}, err
+}
+
+func (m *Model) deleteCalendarEvent(ctx context.Context, id int64) error {
+	service, err := m.calendarService()
+	if err != nil {
+		return err
+	}
+	if err := service.DeleteEvent(ctx, id); err != nil {
+		return err
+	}
+	return calendarstore.New(m.dataPath).DeleteEvent(id)
+}
+
+type calendarSyncResult struct {
+	Calendars   int
+	Events      int
+	Occurrences int
+}
+
+type calendarSyncOptions struct {
+	From       string
+	To         string
+	CalendarID int64
+}
+
+func runCalendarSync(ctx context.Context, store calendarstore.Store, service *calendar.Service, opts calendarSyncOptions) (calendarSyncResult, error) {
+	syncedAt := time.Now()
+	calendars, _, err := service.ListCalendars(ctx, calendar.ListParams{Page: 1, PerPage: 100})
+	if err != nil {
+		return calendarSyncResult{}, err
+	}
+	var result calendarSyncResult
+	for _, item := range calendars {
+		if opts.CalendarID > 0 && item.ID != opts.CalendarID {
+			continue
+		}
+		if err := store.StoreCalendar(item, syncedAt); err != nil {
+			return calendarSyncResult{}, err
+		}
+		result.Calendars++
+		page := 1
+		for {
+			events, pagination, err := service.ListEvents(ctx, calendar.EventListParams{ListParams: calendar.ListParams{Page: page, PerPage: 100}, CalendarID: item.ID, Sort: "starts_at"})
+			if err != nil {
+				return calendarSyncResult{}, err
+			}
+			for _, event := range events {
+				if err := store.StoreEvent(event, syncedAt); err != nil {
+					return calendarSyncResult{}, err
+				}
+				result.Events++
+			}
+			if pagination == nil || page*pagination.PerPage >= pagination.TotalCount {
+				break
+			}
+			page++
+		}
+	}
+	from, to := calendarDefaultRange(opts.From, opts.To)
+	occurrences, err := service.ListOccurrences(ctx, calendar.OccurrenceListParams{CalendarID: opts.CalendarID, StartsFrom: from, EndsTo: to})
+	if err != nil {
+		return calendarSyncResult{}, err
+	}
+	if err := store.StoreOccurrences(occurrences, syncedAt); err != nil {
+		return calendarSyncResult{}, err
+	}
+	result.Occurrences = len(occurrences)
+	return result, nil
+}
+
+func calendarDefaultRange(from, to string) (string, string) {
+	now := time.Now()
+	if from == "" {
+		from = now.Format("2006-01-02")
+	}
+	if to == "" {
+		to = now.AddDate(0, 0, 30).Format("2006-01-02")
+	}
+	return from, to
+}
+
 type notesSyncResult struct {
 	Folders int
 	Notes   int
@@ -1017,6 +1108,21 @@ func (m *Model) notesService() (*notes.Service, error) {
 	return notes.NewService(m.client), nil
 }
 
+func (m *Model) calendarService() (*calendar.Service, error) {
+	configFile, tokenFile := config.Paths(m.configPath)
+	cfg, err := config.LoadFrom(configFile)
+	if err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if m.client == nil {
+		m.client = api.NewClient(cfg, tokenFile)
+	}
+	return calendar.NewService(m.client), nil
+}
+
 func (m *Model) refreshScreenOrder() {
 	m.screenOrder = m.screenOrder[:0]
 	for id := range m.screens {
@@ -1026,7 +1132,7 @@ func (m *Model) refreshScreenOrder() {
 		m.screenOrder = append(m.screenOrder, id)
 	}
 	sort.Strings(m.screenOrder)
-	preferred := []string{"home", "mail", "notes", "drive", "settings", "logs"}
+	preferred := []string{"home", "mail", "calendar", "notes", "drive", "settings", "logs"}
 	ordered := make([]string, 0, len(m.screenOrder))
 	seen := make(map[string]bool)
 	for _, id := range preferred {
@@ -1065,6 +1171,15 @@ func (m *Model) registerCommands() {
 			return tea.Sequence(func() tea.Msg { return routeMsg{"drive"} }, actionMsg)
 		}
 	}
+	calendarAction := func(action string, alsoRoute bool) func() tea.Cmd {
+		return func() tea.Cmd {
+			actionMsg := func() tea.Msg { return screens.CalendarActionMsg{Action: action} }
+			if !alsoRoute {
+				return actionMsg
+			}
+			return tea.Sequence(func() tea.Msg { return routeMsg{"calendar"} }, actionMsg)
+		}
+	}
 	mailAdminAction := func(action string, alsoRoute bool) func() tea.Cmd {
 		return func() tea.Cmd {
 			actionMsg := func() tea.Msg { return screens.MailAdminActionMsg{Action: action} }
@@ -1084,6 +1199,10 @@ func (m *Model) registerCommands() {
 		}
 	}
 	onMail := func(ctx commands.Context) bool { return ctx.ActiveScreen == "mail" }
+	onCalendar := func(ctx commands.Context) bool { return ctx.ActiveScreen == "calendar" }
+	onCalendarItem := func(ctx commands.Context) bool {
+		return ctx.ActiveScreen == "calendar" && ctx.Selection != nil && ctx.Selection.Kind == "calendar-event" && ctx.Selection.HasItems
+	}
 	onDrive := func(ctx commands.Context) bool { return ctx.ActiveScreen == "drive" }
 	onNotes := func(ctx commands.Context) bool { return ctx.ActiveScreen == "notes" }
 	onNotesItem := func(ctx commands.Context) bool {
@@ -1108,6 +1227,7 @@ func (m *Model) registerCommands() {
 	m.commands.Register(commands.Command{ID: "go-home", Module: commands.ModuleGlobal, Title: "Go to Home", Description: "Open the home screen", Keywords: []string{"home", "start"}, Run: route("home")})
 	m.commands.Register(commands.Command{ID: "go-mail", Module: commands.ModuleMail, Title: "Open Mail", Description: "Switch to cached mail", Keywords: []string{"mail", "email", "inbox"}, Run: route("mail")})
 	m.commands.Register(commands.Command{ID: "go-mail-admin", Module: commands.ModuleMail, Title: "Open Mail Admin", Description: "Manage domains and inboxes", Keywords: []string{"mail", "admin", "domains", "inboxes"}, Run: route("mail-admin")})
+	m.commands.Register(commands.Command{ID: "go-calendar", Module: commands.ModuleCalendar, Title: "Open Calendar", Description: "Switch to cached Calendar", Keywords: []string{"calendar", "events", "agenda"}, Run: route("calendar")})
 	m.commands.Register(commands.Command{ID: "go-notes", Module: commands.ModuleNotes, Title: "Open Notes", Description: "Switch to cached Notes", Keywords: []string{"notes", "markdown", "memo"}, Run: route("notes")})
 	m.commands.Register(commands.Command{ID: "go-drive", Module: commands.ModuleDrive, Title: "Open Drive", Description: "Switch to local Drive mirror", Keywords: []string{"drive", "files", "documents"}, Run: route("drive")})
 	m.commands.Register(commands.Command{ID: "go-settings", Module: commands.ModuleSettings, Title: "Open Settings", Description: "Open application settings", Keywords: []string{"settings", "config"}, Run: route("settings")})
@@ -1122,6 +1242,11 @@ func (m *Model) registerCommands() {
 	m.commands.Register(commands.Command{ID: "domains-validate", Module: commands.ModuleMail, Title: "Validate selected domain", Description: "Validate outbound settings for the selected domain", Keywords: []string{"domain", "validate", "smtp", "outbound"}, Run: mailAdminAction("validate-domain", true)})
 	m.commands.Register(commands.Command{ID: "inboxes-new", Module: commands.ModuleMail, Title: "New inbox", Description: "Create an inbox on the selected domain", Keywords: []string{"inbox", "new", "create"}, Run: mailAdminAction("new-inbox", true)})
 	m.commands.Register(commands.Command{ID: "inboxes-pipeline", Module: commands.ModuleMail, Title: "Show selected inbox pipeline", Description: "Show pipeline metadata for the selected inbox", Keywords: []string{"inbox", "pipeline"}, Run: mailAdminAction("pipeline", true)})
+
+	// Calendar — module-level
+	m.commands.Register(commands.Command{ID: "calendar-sync", Module: commands.ModuleCalendar, Title: "Sync Calendar", Description: "Pull latest calendars, events, and occurrences", Shortcut: "S", Keywords: []string{"sync", "refresh", "agenda"}, Run: calendarAction("sync", true)})
+	m.commands.Register(commands.Command{ID: "calendar-today", Module: commands.ModuleCalendar, Title: "Jump to today", Description: "Move selection to the next occurrence today or later", Shortcut: "t", Keywords: []string{"today", "agenda"}, Available: onCalendar, Run: calendarAction("today", false)})
+	m.commands.Register(commands.Command{ID: "calendar-delete", Module: commands.ModuleCalendar, Title: "Delete selected event", Description: "Delete the highlighted calendar event after confirmation", Shortcut: "x", Keywords: []string{"delete", "remove", "event"}, Available: onCalendarItem, Run: calendarAction("delete", false)})
 
 	// Drive — module-level
 	m.commands.Register(commands.Command{ID: "drive-sync", Module: commands.ModuleDrive, Title: "Sync Drive", Description: "Pull latest Drive metadata and files", Shortcut: "S", Keywords: []string{"sync", "refresh"}, Run: driveAction("sync", true)})
@@ -1189,6 +1314,12 @@ func (m Model) paletteContext() commands.Context {
 	if m.activeScreen == "notes" {
 		if notesScreen, ok := m.screens["notes"].(screens.Notes); ok {
 			sel := notesScreen.Selection()
+			ctx.Selection = &commands.Selection{Kind: sel.Kind, Subject: sel.Subject, HasItems: sel.HasItem}
+		}
+	}
+	if m.activeScreen == "calendar" {
+		if calendarScreen, ok := m.screens["calendar"].(screens.Calendar); ok {
+			sel := calendarScreen.Selection()
 			ctx.Selection = &commands.Selection{Kind: sel.Kind, Subject: sel.Subject, HasItems: sel.HasItem}
 		}
 	}

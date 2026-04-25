@@ -33,10 +33,25 @@ func TestNotesScreenRegisteredInNavigationAndCommands(t *testing.T) {
 	if _, ok := model.screens["notes"]; !ok {
 		t.Fatal("expected notes screen to be registered")
 	}
-	if got := model.screenOrder; len(got) < 4 || got[2] != "notes" {
+	if got := model.screenOrder; len(got) < 5 || got[3] != "notes" {
 		t.Fatalf("screenOrder = %#v", got)
 	}
 	for _, id := range []string{"go-notes", "notes-sync", "notes-new", "notes-edit", "notes-delete", "notes-search"} {
+		if _, ok := model.commands.Find(id); !ok {
+			t.Fatalf("expected command %q", id)
+		}
+	}
+}
+
+func TestCalendarScreenRegisteredInNavigationAndCommands(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+	if _, ok := model.screens["calendar"]; !ok {
+		t.Fatal("expected calendar screen to be registered")
+	}
+	if got := model.screenOrder; len(got) < 4 || got[2] != "calendar" {
+		t.Fatalf("screenOrder = %#v", got)
+	}
+	for _, id := range []string{"go-calendar", "calendar-sync", "calendar-today", "calendar-delete"} {
 		if _, ok := model.commands.Find(id); !ok {
 			t.Fatalf("expected command %q", id)
 		}
