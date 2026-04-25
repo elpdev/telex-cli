@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -106,7 +108,7 @@ func (m Model) devBuild() bool { return m.meta.Version == "dev" }
 func (m *Model) registerScreens() {
 	m.screens["home"] = screens.NewHome()
 	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody)
-	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive)
+	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive).WithActions(m.downloadDriveFile, m.openDriveFile, m.uploadDriveFile, m.createDriveFolder, m.renameDriveFile, m.renameDriveFolder, m.deleteDriveFile, m.deleteDriveFolder)
 	m.screens["settings"] = screens.NewSettings(screens.SettingsState{
 		ThemeName:      m.theme.Name,
 		SidebarVisible: m.showSidebar,
@@ -362,6 +364,98 @@ func (m *Model) syncDrive(ctx context.Context) (screens.DriveSyncResult, error) 
 	return screens.DriveSyncResult{Folders: result.Folders, Files: result.Files, DownloadedFiles: result.DownloadedFiles, DownloadFailures: result.DownloadFailures}, err
 }
 
+func (m *Model) downloadDriveFile(ctx context.Context, meta drivestore.FileMeta) ([]byte, error) {
+	service, _, err := m.driveService()
+	if err != nil {
+		return nil, err
+	}
+	remote, err := service.ShowFile(ctx, meta.RemoteID)
+	if err != nil {
+		return nil, err
+	}
+	return service.DownloadFile(ctx, *remote)
+}
+
+func (m *Model) openDriveFile(path string) error {
+	opener := os.Getenv("OPENER")
+	if opener == "" {
+		opener = "xdg-open"
+	}
+	return exec.Command(opener, path).Run()
+}
+
+func (m *Model) uploadDriveFile(ctx context.Context, path string, folderID *int64) error {
+	service, _, err := m.driveService()
+	if err != nil {
+		return err
+	}
+	if _, err := service.UploadFile(ctx, path, folderID); err != nil {
+		return err
+	}
+	_, err = drivesync.Run(ctx, drivestore.New(m.dataPath), service, config.DriveSyncMetadataOnly)
+	return err
+}
+
+func (m *Model) createDriveFolder(ctx context.Context, input drive.FolderInput) error {
+	service, _, err := m.driveService()
+	if err != nil {
+		return err
+	}
+	if _, err := service.CreateFolder(ctx, input); err != nil {
+		return err
+	}
+	_, err = drivesync.Run(ctx, drivestore.New(m.dataPath), service, config.DriveSyncMetadataOnly)
+	return err
+}
+
+func (m *Model) renameDriveFile(ctx context.Context, id int64, input drive.FileInput) error {
+	service, _, err := m.driveService()
+	if err != nil {
+		return err
+	}
+	if _, err := service.UpdateFile(ctx, id, input); err != nil {
+		return err
+	}
+	_, err = drivesync.Run(ctx, drivestore.New(m.dataPath), service, config.DriveSyncMetadataOnly)
+	return err
+}
+
+func (m *Model) renameDriveFolder(ctx context.Context, id int64, input drive.FolderInput) error {
+	service, _, err := m.driveService()
+	if err != nil {
+		return err
+	}
+	if _, err := service.UpdateFolder(ctx, id, input); err != nil {
+		return err
+	}
+	_, err = drivesync.Run(ctx, drivestore.New(m.dataPath), service, config.DriveSyncMetadataOnly)
+	return err
+}
+
+func (m *Model) deleteDriveFile(ctx context.Context, id int64) error {
+	service, _, err := m.driveService()
+	if err != nil {
+		return err
+	}
+	if err := service.DeleteFile(ctx, id); err != nil {
+		return err
+	}
+	_, err = drivesync.Run(ctx, drivestore.New(m.dataPath), service, config.DriveSyncMetadataOnly)
+	return err
+}
+
+func (m *Model) deleteDriveFolder(ctx context.Context, id int64) error {
+	service, _, err := m.driveService()
+	if err != nil {
+		return err
+	}
+	if err := service.DeleteFolder(ctx, id); err != nil {
+		return err
+	}
+	_, err = drivesync.Run(ctx, drivestore.New(m.dataPath), service, config.DriveSyncMetadataOnly)
+	return err
+}
+
 func cachedRemoteMessage(message mail.Message) mailstore.CachedMessage {
 	return mailstore.CachedMessage{
 		Meta: mailstore.MessageMeta{
@@ -480,7 +574,17 @@ func (m *Model) registerCommands() {
 			return tea.Sequence(func() tea.Msg { return routeMsg{"mail"} }, actionMsg)
 		}
 	}
+	driveAction := func(action string, alsoRoute bool) func() tea.Cmd {
+		return func() tea.Cmd {
+			actionMsg := func() tea.Msg { return screens.DriveActionMsg{Action: action} }
+			if !alsoRoute {
+				return actionMsg
+			}
+			return tea.Sequence(func() tea.Msg { return routeMsg{"drive"} }, actionMsg)
+		}
+	}
 	onMail := func(ctx commands.Context) bool { return ctx.ActiveScreen == "mail" }
+	onDrive := func(ctx commands.Context) bool { return ctx.ActiveScreen == "drive" }
 	onMailDrafts := func(ctx commands.Context) bool {
 		return ctx.ActiveScreen == "mail" && ctx.Selection != nil && ctx.Selection.IsDraft && ctx.Selection.HasItems
 	}
@@ -507,6 +611,14 @@ func (m *Model) registerCommands() {
 
 	// Mail — module-level
 	m.commands.Register(commands.Command{ID: "mail-sync", Module: commands.ModuleMail, Title: "Sync mailbox", Description: "Pull latest messages, drafts, outbox", Keywords: []string{"sync", "refresh"}, Run: mailAction("sync", true)})
+
+	// Drive — module-level
+	m.commands.Register(commands.Command{ID: "drive-sync", Module: commands.ModuleDrive, Title: "Sync Drive", Description: "Pull latest Drive metadata and files", Shortcut: "S", Keywords: []string{"sync", "refresh"}, Run: driveAction("sync", true)})
+	m.commands.Register(commands.Command{ID: "drive-upload", Module: commands.ModuleDrive, Title: "Upload file", Description: "Upload a local file into the current Drive folder", Shortcut: "u", Keywords: []string{"upload", "file"}, Available: onDrive, Run: driveAction("upload", false)})
+	m.commands.Register(commands.Command{ID: "drive-new-folder", Module: commands.ModuleDrive, Title: "New folder", Description: "Create a folder in the current Drive folder", Shortcut: "n", Keywords: []string{"new", "folder", "create"}, Available: onDrive, Run: driveAction("new-folder", false)})
+	m.commands.Register(commands.Command{ID: "drive-rename", Module: commands.ModuleDrive, Title: "Rename selected", Description: "Rename the highlighted Drive item", Shortcut: "R", Keywords: []string{"rename"}, Available: onDrive, Run: driveAction("rename", false)})
+	m.commands.Register(commands.Command{ID: "drive-delete", Module: commands.ModuleDrive, Title: "Delete selected", Description: "Delete the highlighted Drive item after confirmation", Shortcut: "x", Keywords: []string{"delete", "remove"}, Available: onDrive, Run: driveAction("delete", false)})
+	m.commands.Register(commands.Command{ID: "drive-details", Module: commands.ModuleDrive, Title: "Show details", Description: "Toggle details for the highlighted Drive item", Shortcut: "i", Keywords: []string{"details", "info"}, Available: onDrive, Run: driveAction("details", false)})
 
 	// Mail / Drafts
 	m.commands.Register(commands.Command{ID: "drafts-compose", Module: commands.ModuleMail, Group: commands.GroupDrafts, Title: "Compose new", Description: "Start a new draft", Shortcut: "c", Keywords: []string{"compose", "new", "write"}, Run: mailAction("compose", true)})

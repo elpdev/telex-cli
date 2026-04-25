@@ -79,7 +79,7 @@ func (s Store) StoreFolder(parentPath string, folder drive.Folder, syncedAt time
 	if parentPath == "" {
 		parentPath = s.DriveRoot()
 	}
-	path := filepath.Join(parentPath, safePathName(folder.Name, "folder"))
+	path := s.folderPath(parentPath, folder)
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return "", err
 	}
@@ -100,8 +100,7 @@ func (s Store) StoreFile(parentPath string, file drive.File, content []byte, syn
 	if err := os.MkdirAll(parentPath, 0o700); err != nil {
 		return "", err
 	}
-	name := safePathName(file.Filename, "file")
-	path := filepath.Join(parentPath, name)
+	path := s.filePath(parentPath, file)
 	if content != nil {
 		if err := os.WriteFile(path, content, 0o600); err != nil {
 			return "", err
@@ -115,6 +114,37 @@ func (s Store) StoreFile(parentPath string, file drive.File, content []byte, syn
 		return "", err
 	}
 	return path, nil
+}
+
+func (s Store) FolderMetaForPath(path string) (*FolderMeta, error) {
+	return ReadFolderMeta(path)
+}
+
+func (s Store) FileMetaForPath(path string) (*FileMeta, error) {
+	return ReadFileMeta(path)
+}
+
+func (s Store) CurrentFolderRemoteID(path string) (*int64, error) {
+	if path == "" || filepath.Clean(path) == filepath.Clean(s.DriveRoot()) {
+		return nil, nil
+	}
+	meta, err := ReadFolderMeta(path)
+	if err != nil {
+		return nil, err
+	}
+	return &meta.RemoteID, nil
+}
+
+func (s Store) WriteFileContent(path string, meta FileMeta, content []byte, syncedAt time.Time) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		return err
+	}
+	meta.LocalContentCached = true
+	meta.SyncedAt = syncedAt
+	return writeTOML(fileMetaPath(path), meta)
 }
 
 func (s Store) List(path string) ([]Entry, error) {
@@ -194,6 +224,49 @@ func addMetadataOnlyFiles(path string, entries *[]Entry) {
 		filePath := strings.TrimSuffix(metaPath, ".meta.toml")
 		*entries = append(*entries, Entry{Name: meta.Filename, Path: filePath, Kind: "file", File: &meta, Cached: false, ByteSize: meta.ByteSize})
 	}
+}
+
+func (s Store) folderPath(parentPath string, folder drive.Folder) string {
+	base := safePathName(folder.Name, "folder")
+	path := filepath.Join(parentPath, base)
+	meta, err := ReadFolderMeta(path)
+	if err == nil && meta.RemoteID == folder.ID {
+		return path
+	}
+	if err == nil || pathExists(path) {
+		return filepath.Join(parentPath, withRemoteIDSuffix(base, folder.ID))
+	}
+	return path
+}
+
+func (s Store) filePath(parentPath string, file drive.File) string {
+	base := safePathName(file.Filename, "file")
+	path := filepath.Join(parentPath, base)
+	meta, err := ReadFileMeta(path)
+	if err == nil && meta.RemoteID == file.ID {
+		return path
+	}
+	if err == nil || pathExists(path) || pathExists(fileMetaPath(path)) {
+		return filepath.Join(parentPath, withRemoteIDSuffix(base, file.ID))
+	}
+	return path
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func withRemoteIDSuffix(name string, remoteID int64) string {
+	if remoteID == 0 {
+		return name
+	}
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	if base == "" {
+		base = strings.TrimPrefix(name, ext)
+	}
+	return fmt.Sprintf("%s-%d%s", base, remoteID, ext)
 }
 
 func safePathName(value, fallback string) string {

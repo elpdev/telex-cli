@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/elpdev/telex-cli/internal/components/filepicker"
 	"github.com/elpdev/telex-cli/internal/mail"
 	"github.com/elpdev/telex-cli/internal/mailstore"
 )
@@ -953,6 +954,90 @@ func TestMailScreenConfirmsDraftAttachmentDetach(t *testing.T) {
 	}
 	updated, _ = screen.Update(cmd())
 	screen = updated.(Mail)
+	readBack, err := mailstore.ReadDraft(draft.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readBack.Meta.Attachments) != 0 {
+		t.Fatalf("attachments = %#v", readBack.Meta.Attachments)
+	}
+}
+
+func TestMailScreenAttachPickerSelectionAddsAttachmentToDraft(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	mailbox := mailstore.MailboxMeta{SchemaVersion: mailstore.SchemaVersion, DomainID: 12, DomainName: "example.com", InboxID: 34, Address: "hello@example.com", LocalPart: "hello", Active: true, SyncedAt: time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC)}
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := store.CreateDraft(mailstore.DraftInput{Mailbox: mailbox, Subject: "Draft", To: []string{"to@example.net"}, Body: "body", Now: time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDir := t.TempDir()
+	source := filepath.Join(sourceDir, "report.txt")
+	if err := os.WriteFile(source, []byte("report"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	screen := NewMail(store)
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	for range 5 {
+		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
+		screen = updated.(Mail)
+		updated, _ = screen.Update(cmd())
+		screen = updated.(Mail)
+	}
+	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Text: "a", Code: 'a'}))
+	screen = updated.(Mail)
+	if !screen.filePickerActive {
+		t.Fatal("expected attachment picker to be active")
+	}
+	screen.filePicker = filepicker.New("", sourceDir, filepicker.ModeOpenFile)
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "enter"}))
+	screen = updated.(Mail)
+	if cmd == nil {
+		t.Fatal("expected attach command")
+	}
+	updated, _ = screen.Update(cmd())
+	screen = updated.(Mail)
+	readBack, err := mailstore.ReadDraft(draft.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readBack.Meta.Attachments) != 1 || readBack.Meta.Attachments[0].Filename != "report.txt" {
+		t.Fatalf("attachments = %#v", readBack.Meta.Attachments)
+	}
+	if !strings.Contains(stripScreenANSI(screen.View(100, 20)), "Draft saved") {
+		t.Fatalf("view = %q", stripScreenANSI(screen.View(100, 20)))
+	}
+}
+
+func TestMailScreenAttachPickerCancelDoesNotModifyDraft(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	mailbox := mailstore.MailboxMeta{SchemaVersion: mailstore.SchemaVersion, DomainID: 12, DomainName: "example.com", InboxID: 34, Address: "hello@example.com", LocalPart: "hello", Active: true, SyncedAt: time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC)}
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := store.CreateDraft(mailstore.DraftInput{Mailbox: mailbox, Subject: "Draft", To: []string{"to@example.net"}, Body: "body", Now: time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen := NewMail(store)
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	for range 5 {
+		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
+		screen = updated.(Mail)
+		updated, _ = screen.Update(cmd())
+		screen = updated.(Mail)
+	}
+	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Text: "a", Code: 'a'}))
+	screen = updated.(Mail)
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "esc"}))
+	screen = updated.(Mail)
+	if cmd != nil || screen.filePickerActive {
+		t.Fatalf("cmd = %v active = %v", cmd, screen.filePickerActive)
+	}
 	readBack, err := mailstore.ReadDraft(draft.Path)
 	if err != nil {
 		t.Fatal(err)

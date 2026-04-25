@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/elpdev/telex-cli/internal/articletext"
+	"github.com/elpdev/telex-cli/internal/components/filepicker"
 	"github.com/elpdev/telex-cli/internal/emailtext"
 	"github.com/elpdev/telex-cli/internal/mailstore"
 )
@@ -68,8 +69,8 @@ type Mail struct {
 	attachmentIndex       int
 	savingAttachment      bool
 	saveDirInput          string
-	attachingFile         bool
-	attachPathInput       string
+	filePickerActive      bool
+	filePicker            filepicker.Model
 	forwarding            bool
 	forwardToInput        string
 	article               string
@@ -484,6 +485,27 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			m.status = fmt.Sprintf("Could not save draft: %v", msg.err)
 			return m, nil
 		}
+		if msg.path == "" && msg.existingPath != "" {
+			draft, err := mailstore.ReadDraft(msg.existingPath)
+			if err != nil {
+				m.status = fmt.Sprintf("Could not save draft: %v", err)
+				return m, nil
+			}
+			if m.currentBox() == "drafts" {
+				loaded := m.load(m.mailboxIndex, m.currentBox())
+				m.allMessages = loaded.messages
+				m.applySearch()
+				m.clampSelection()
+			}
+			m.status = fmt.Sprintf("Draft saved: %s", draft.Meta.ID)
+			if draft.Meta.RemoteID > 0 && m.updateDraft != nil {
+				m.status = fmt.Sprintf("Draft saved locally; syncing remote draft %d...", draft.Meta.RemoteID)
+				return m, func() tea.Msg {
+					return remoteDraftUpdatedMsg{remoteID: draft.Meta.RemoteID, err: m.updateDraft(context.Background(), *draft)}
+				}
+			}
+			return m, nil
+		}
 		draft, err := saveEditedDraft(m.store, msg.mailbox, msg.path, msg.existingPath)
 		if err != nil {
 			m.status = fmt.Sprintf("Could not save draft: %v", err)
@@ -592,6 +614,9 @@ func (m Mail) View(width, height int) string {
 	if len(m.mailboxes) == 0 {
 		return style.Render("No synced mailboxes found.\n\nRun `telex sync` to populate the local mail cache.")
 	}
+	if m.filePickerActive {
+		return style.Render(m.filePicker.View(width, height))
+	}
 	if m.mode == mailModeArticle && len(m.messages) > 0 {
 		return style.Render(m.articleView(width, height))
 	}
@@ -633,7 +658,7 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if m.savingAttachment {
 		return m.handleAttachmentSaveKey(msg)
 	}
-	if m.attachingFile {
+	if m.filePickerActive {
 		return m.handleAttachFileKey(msg)
 	}
 	if m.forwarding {
@@ -930,27 +955,23 @@ func (m Mail) handleAttachmentSaveKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 }
 
 func (m Mail) handleAttachFileKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.attachingFile = false
-		m.attachPathInput = ""
+	picker, action := m.filePicker.Update(msg)
+	m.filePicker = picker
+	switch action.Type {
+	case filepicker.ActionCancel:
+		m.filePickerActive = false
 		m.status = "Cancelled"
 		return m, nil
-	case "enter":
-		path := strings.TrimSpace(m.attachPathInput)
-		m.attachingFile = false
-		m.attachPathInput = ""
-		return m.attachFileToSelectedDraft(path)
-	case "backspace":
-		if len(m.attachPathInput) > 0 {
-			m.attachPathInput = m.attachPathInput[:len(m.attachPathInput)-1]
-		}
-		m.status = "Attach file: " + m.attachPathInput
-		return m, nil
+	case filepicker.ActionSelect:
+		m.filePickerActive = false
+		return m.attachFileToSelectedDraft(action.Path)
 	}
-	if msg.Text != "" {
-		m.attachPathInput += msg.Text
-		m.status = "Attach file: " + m.attachPathInput
+	if m.filePicker.Err != nil {
+		m.status = fmt.Sprintf("File picker: %v", m.filePicker.Err)
+	} else if m.filePicker.Filtering {
+		m.status = "Attach file filter: " + m.filePicker.Filter
+	} else {
+		m.status = "Select file to attach"
 	}
 	return m, nil
 }
@@ -1004,9 +1025,13 @@ func (m Mail) startAttachFile() (Screen, tea.Cmd) {
 		m.status = "attach is only available from drafts"
 		return m, nil
 	}
-	m.attachingFile = true
-	m.attachPathInput = ""
-	m.status = "Attach file: "
+	cwd, err := os.Getwd()
+	if err != nil || cwd == "" {
+		cwd, _ = os.UserHomeDir()
+	}
+	m.filePicker = filepicker.New("", cwd, filepicker.ModeOpenFile)
+	m.filePickerActive = true
+	m.status = "Select file to attach"
 	return m, nil
 }
 
@@ -2549,7 +2574,7 @@ func (m Mail) Selection() MailSelection {
 }
 
 func (m Mail) handleAction(action string) (Screen, tea.Cmd) {
-	if m.confirm != "" || m.searching || m.savingAttachment || m.attachingFile || m.forwarding {
+	if m.confirm != "" || m.searching || m.savingAttachment || m.filePickerActive || m.forwarding {
 		return m, nil
 	}
 	switch action {

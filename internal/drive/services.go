@@ -66,6 +66,18 @@ func (s *Service) ShowFile(ctx context.Context, id int64) (*File, error) {
 	return &envelope.Data, nil
 }
 
+func (s *Service) ShowFolder(ctx context.Context, id int64) (*Folder, error) {
+	body, _, err := s.client.Get(ctx, fmt.Sprintf("/api/v1/folders/%d", id), nil)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[Folder](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
+}
+
 func (s *Service) CreateFolder(ctx context.Context, input FolderInput) (*Folder, error) {
 	body, _, err := s.client.Post(ctx, "/api/v1/folders", map[string]any{"folder": folderInputMap(input)})
 	if err != nil {
@@ -76,6 +88,42 @@ func (s *Service) CreateFolder(ctx context.Context, input FolderInput) (*Folder,
 		return nil, err
 	}
 	return &envelope.Data, nil
+}
+
+func (s *Service) UpdateFolder(ctx context.Context, id int64, input FolderInput) (*Folder, error) {
+	body, _, err := s.client.Patch(ctx, fmt.Sprintf("/api/v1/folders/%d", id), map[string]any{"folder": folderInputMap(input)})
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[Folder](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
+}
+
+func (s *Service) UpdateFile(ctx context.Context, id int64, input FileInput) (*File, error) {
+	body, _, err := s.client.Patch(ctx, fmt.Sprintf("/api/v1/files/%d", id), map[string]any{"stored_file": fileInputMap(input)})
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[File](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
+}
+
+func (s *Service) RenameFile(ctx context.Context, id int64, name string) (*File, error) {
+	return s.UpdateFile(ctx, id, FileInput{Filename: name})
+}
+
+func (s *Service) RenameFolder(ctx context.Context, id int64, name string) (*Folder, error) {
+	return s.UpdateFolder(ctx, id, FolderInput{Name: name})
+}
+
+func (s *Service) MoveFile(ctx context.Context, id int64, folderID *int64) (*File, error) {
+	return s.UpdateFile(ctx, id, FileInput{FolderID: folderID})
 }
 
 func (s *Service) DeleteFile(ctx context.Context, id int64) error {

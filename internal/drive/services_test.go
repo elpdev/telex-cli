@@ -56,6 +56,45 @@ func TestUploadFileUsesDirectUploadFlow(t *testing.T) {
 	}
 }
 
+func TestShowFolderUsesFolderEndpoint(t *testing.T) {
+	fake := &fakeClient{body: []byte(`{"data":{"id":42,"name":"Docs"}}`)}
+	service := NewService(fake)
+	folder, err := service.ShowFolder(context.Background(), 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.getPath != "/api/v1/folders/42" || folder.Name != "Docs" {
+		t.Fatalf("path=%q folder=%#v", fake.getPath, folder)
+	}
+}
+
+func TestUpdateFolderUsesPatchPayload(t *testing.T) {
+	fake := &fakeClient{body: []byte(`{"data":{"id":42,"name":"Renamed"}}`)}
+	service := NewService(fake)
+	parentID := int64(7)
+	_, err := service.UpdateFolder(context.Background(), 42, FolderInput{Name: "Renamed", ParentID: &parentID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"folder": map[string]any{"name": "Renamed", "parent_id": float64(7)}}
+	if fake.patchPath != "/api/v1/folders/42" || !jsonEqual(fake.patchBody, want) {
+		t.Fatalf("path=%q body=%#v", fake.patchPath, fake.patchBody)
+	}
+}
+
+func TestUpdateFileUsesPatchPayload(t *testing.T) {
+	fake := &fakeClient{body: []byte(`{"data":{"id":9,"filename":"renamed.txt"}}`)}
+	service := NewService(fake)
+	_, err := service.UpdateFile(context.Background(), 9, FileInput{Filename: "renamed.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"stored_file": map[string]any{"filename": "renamed.txt"}}
+	if fake.patchPath != "/api/v1/files/9" || !jsonEqual(fake.patchBody, want) {
+		t.Fatalf("path=%q body=%#v", fake.patchPath, fake.patchBody)
+	}
+}
+
 type fakeClient struct {
 	body           []byte
 	createFileBody []byte
@@ -64,6 +103,7 @@ type fakeClient struct {
 	postPath       string
 	postBody       any
 	patchPath      string
+	patchBody      any
 	deletePath     string
 	rawURL         string
 	rawHeaders     map[string]string
@@ -85,8 +125,9 @@ func (f *fakeClient) Post(_ context.Context, path string, body any) ([]byte, int
 	return f.body, 200, nil
 }
 
-func (f *fakeClient) Patch(_ context.Context, path string, _ any) ([]byte, int, error) {
+func (f *fakeClient) Patch(_ context.Context, path string, body any) ([]byte, int, error) {
 	f.patchPath = path
+	f.patchBody = normalizeJSON(body)
 	return f.body, 200, nil
 }
 
@@ -115,6 +156,12 @@ func normalizeJSON(value any) any {
 	var out any
 	_ = json.Unmarshal(payload, &out)
 	return out
+}
+
+func jsonEqual(a, b any) bool {
+	ab, _ := json.Marshal(a)
+	bb, _ := json.Marshal(b)
+	return string(ab) == string(bb)
 }
 
 func assertQuery(t *testing.T, query url.Values, key, want string) {
