@@ -170,5 +170,7 @@ func (m *Model) updateDerivedScreens() {
 		Commit:         m.meta.Commit,
 		Date:           m.meta.Date,
 	})
-	m.screens["logs"] = screens.NewLogs(m.logs)
+	if m.devBuild() {
+		m.screens["logs"] = screens.NewLogs(m.logs)
+	}
 }

@@ -58,6 +58,7 @@ type Mail struct {
 	mode          mailMode
 	loading       bool
 	syncing       bool
+	confirm       string
 	err           error
 	status        string
 	keys          MailKeyMap
@@ -389,6 +390,9 @@ func (m Mail) KeyBindings() []key.Binding {
 }
 
 func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+	if m.confirm != "" {
+		return m.handleConfirmKey(msg)
+	}
 	if m.searching {
 		return m.handleSearchKey(msg)
 	}
@@ -421,13 +425,13 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			return m.editReplyDraft()
 		}
 		if key.Matches(msg, m.keys.Send) {
-			return m.sendSelectedDraft()
+			return m.requestConfirm("send-draft", "Send this draft?")
 		}
 		if key.Matches(msg, m.keys.Extract) {
 			return m.editSelectedDraft()
 		}
 		if key.Matches(msg, m.keys.Delete) {
-			return m.deleteSelectedDraft()
+			return m.requestConfirm("delete-draft", "Delete this draft?")
 		}
 		if key.Matches(msg, m.keys.ToggleRead) {
 			return m.toggleSelectedRead()
@@ -439,7 +443,7 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			return m.moveSelectedMessage("archive")
 		}
 		if key.Matches(msg, m.keys.Trash) {
-			return m.moveSelectedMessage("trash")
+			return m.requestConfirm("trash", "Move this message to trash?")
 		}
 		if key.Matches(msg, m.keys.Restore) {
 			return m.moveSelectedMessage("restore")
@@ -470,16 +474,16 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			return m, nil
 		}
 		m.syncing = true
-		m.status = "Syncing..."
+		m.status = "Syncing mailboxes, outbox, and inbox..."
 		return m, m.syncCmd()
 	case key.Matches(msg, m.keys.Compose):
 		return m.editComposeDraft()
 	case key.Matches(msg, m.keys.Send):
-		return m.sendSelectedDraft()
+		return m.requestConfirm("send-draft", "Send this draft?")
 	case key.Matches(msg, m.keys.Extract):
 		return m.editSelectedDraft()
 	case key.Matches(msg, m.keys.Delete):
-		return m.deleteSelectedDraft()
+		return m.requestConfirm("delete-draft", "Delete this draft?")
 	case msg.String() == "/":
 		m.searching = true
 		m.searchInput = m.searchQuery
@@ -534,7 +538,7 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	case key.Matches(msg, m.keys.Archive):
 		return m.moveSelectedMessage("archive")
 	case key.Matches(msg, m.keys.Trash):
-		return m.moveSelectedMessage("trash")
+		return m.requestConfirm("trash", "Move this message to trash?")
 	case key.Matches(msg, m.keys.Restore):
 		return m.moveSelectedMessage("restore")
 	case key.Matches(msg, m.keys.Back):
@@ -623,6 +627,33 @@ func (m Mail) handleSearchKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		m.searchInput += msg.Text
 		m.status = "Search: " + m.searchInput
 	}
+	return m, nil
+}
+
+func (m Mail) handleConfirmKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+	switch strings.ToLower(msg.String()) {
+	case "y":
+		action := m.confirm
+		m.confirm = ""
+		switch action {
+		case "trash":
+			return m.moveSelectedMessage("trash")
+		case "send-draft":
+			return m.sendSelectedDraft()
+		case "delete-draft":
+			return m.deleteSelectedDraft()
+		}
+	case "n", "esc":
+		m.confirm = ""
+		m.status = "Cancelled"
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m Mail) requestConfirm(action, prompt string) (Screen, tea.Cmd) {
+	m.confirm = action
+	m.status = prompt + " Press y to confirm, n to cancel."
 	return m, nil
 }
 
@@ -1115,7 +1146,7 @@ func (m Mail) load(mailboxIndex int, box string) mailLoadedMsg {
 }
 
 func syncStatus(result MailSyncResult) string {
-	status := fmt.Sprintf("Synced %d inbox message(s)", result.InboxMessages)
+	status := fmt.Sprintf("Synced %d mailbox(es), %d inbox message(s)", result.ActiveMailboxes, result.InboxMessages)
 	if result.OutboxItems > 0 {
 		status = fmt.Sprintf("%s, %d outbox item(s)", status, result.OutboxItems)
 	}

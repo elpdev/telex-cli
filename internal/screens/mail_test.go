@@ -556,6 +556,11 @@ func TestMailScreenSendsSelectedDraft(t *testing.T) {
 	}
 	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "S", Code: 'S'}))
 	screen = updated.(Mail)
+	if cmd != nil {
+		t.Fatal("expected confirmation before send command")
+	}
+	updated, cmd = screen.Update(tea.KeyPressMsg(tea.Key{Text: "y", Code: 'y'}))
+	screen = updated.(Mail)
 	if cmd == nil {
 		t.Fatal("expected send command")
 	}
@@ -597,6 +602,11 @@ func TestMailScreenDraftSendFailureLeavesDraft(t *testing.T) {
 		screen = updated.(Mail)
 	}
 	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "S", Code: 'S'}))
+	screen = updated.(Mail)
+	if cmd != nil {
+		t.Fatal("expected confirmation before send command")
+	}
+	updated, cmd = screen.Update(tea.KeyPressMsg(tea.Key{Text: "y", Code: 'y'}))
 	screen = updated.(Mail)
 	if cmd == nil {
 		t.Fatal("expected send command")
@@ -770,6 +780,11 @@ func TestDeleteDraftRemovesSelectedDraft(t *testing.T) {
 	}
 	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "x", Code: 'x'}))
 	screen = updated.(Mail)
+	if cmd != nil {
+		t.Fatal("expected confirmation before delete command")
+	}
+	updated, cmd = screen.Update(tea.KeyPressMsg(tea.Key{Text: "y", Code: 'y'}))
+	screen = updated.(Mail)
 	if cmd == nil {
 		t.Fatal("expected delete command")
 	}
@@ -821,7 +836,7 @@ func TestMailScreenSyncsAndReloadsCurrentBox(t *testing.T) {
 		t.Fatal("expected sync command")
 	}
 	inProgress := stripScreenANSI(screen.View(100, 20))
-	if strings.Contains(inProgress, "Loading local mail cache") || !strings.Contains(inProgress, "Syncing...") {
+	if strings.Contains(inProgress, "Loading local mail cache") || !strings.Contains(inProgress, "Syncing mailboxes, outbox, and inbox...") {
 		t.Fatalf("in-progress view = %q", inProgress)
 	}
 	updated, _ = screen.Update(cmd())
@@ -830,7 +845,7 @@ func TestMailScreenSyncsAndReloadsCurrentBox(t *testing.T) {
 		t.Fatal("expected sync function to run")
 	}
 	view := stripScreenANSI(screen.View(100, 20))
-	if !strings.Contains(view, "Synced Subject") || !strings.Contains(view, "Synced 1 inbox message(s)") {
+	if !strings.Contains(view, "Synced Subject") || !strings.Contains(view, "Synced 0 mailbox(es), 1 inbox message(s)") {
 		t.Fatalf("view = %q", view)
 	}
 }
@@ -1055,6 +1070,11 @@ func TestMailScreenTrashFailureLeavesCacheUnchanged(t *testing.T) {
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "d", Code: 'd'}))
+	screen = updated.(Mail)
+	if cmd != nil {
+		t.Fatal("expected confirmation before trash command")
+	}
+	updated, cmd = screen.Update(tea.KeyPressMsg(tea.Key{Text: "y", Code: 'y'}))
 	screen = updated.(Mail)
 	if cmd == nil {
 		t.Fatal("expected trash command")

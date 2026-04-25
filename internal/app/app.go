@@ -96,6 +96,8 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+func (m Model) devBuild() bool { return m.meta.Version == "dev" }
+
 func (m *Model) registerScreens() {
 	m.screens["home"] = screens.NewHome()
 	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft)
@@ -106,7 +108,9 @@ func (m *Model) registerScreens() {
 		Commit:         m.meta.Commit,
 		Date:           m.meta.Date,
 	})
-	m.screens["logs"] = screens.NewLogs(m.logs)
+	if m.devBuild() {
+		m.screens["logs"] = screens.NewLogs(m.logs)
+	}
 	m.refreshScreenOrder()
 }
 
@@ -230,7 +234,9 @@ func (m *Model) registerCommands() {
 	m.commands.Register(commands.Command{ID: "go-home", Title: "Home", Description: "Open the home screen", Keywords: []string{"home", "start"}, Run: func() tea.Cmd { return func() tea.Msg { return routeMsg{"home"} } }})
 	m.commands.Register(commands.Command{ID: "go-mail", Title: "Mail", Description: "Open cached mail", Keywords: []string{"mail", "email", "inbox"}, Run: func() tea.Cmd { return func() tea.Msg { return routeMsg{"mail"} } }})
 	m.commands.Register(commands.Command{ID: "go-settings", Title: "Settings", Description: "Open application settings", Keywords: []string{"settings", "config"}, Run: func() tea.Cmd { return func() tea.Msg { return routeMsg{"settings"} } }})
-	m.commands.Register(commands.Command{ID: "go-logs", Title: "Logs", Description: "Open debug event log", Keywords: []string{"logs", "debug", "events"}, Run: func() tea.Cmd { return func() tea.Msg { return routeMsg{"logs"} } }})
+	if m.devBuild() {
+		m.commands.Register(commands.Command{ID: "go-logs", Title: "Logs", Description: "Open debug event log", Keywords: []string{"logs", "debug", "events"}, Run: func() tea.Cmd { return func() tea.Msg { return routeMsg{"logs"} } }})
+	}
 	m.commands.Register(commands.Command{ID: "toggle-sidebar", Title: "Toggle Sidebar", Description: "Show or hide sidebar navigation", Keywords: []string{"sidebar", "layout"}, Run: func() tea.Cmd { return func() tea.Msg { return toggleSidebarMsg{} } }})
 	m.commands.Register(commands.Command{ID: "themes", Title: "Themes", Description: "Preview and select a theme", Keywords: []string{"theme", "themes", "appearance", "colors", "dark", "muted", "phosphor", "miami"}})
 	m.commands.Register(commands.Command{ID: "quit", Title: "Quit", Description: "Exit Telex", Keywords: []string{"exit", "close"}, Run: func() tea.Cmd { return func() tea.Msg { return quitMsg{} } }})

@@ -147,6 +147,8 @@ func newDraftsCommand(rt *runtime) *cobra.Command {
 	cmd := &cobra.Command{Use: "drafts", Short: "Manage local drafts"}
 	cmd.AddCommand(newDraftCreateCommand(rt))
 	cmd.AddCommand(newDraftListCommand(rt))
+	cmd.AddCommand(newDraftShowCommand(rt))
+	cmd.AddCommand(newDraftEditCommand(rt))
 	cmd.AddCommand(newDraftSendCommand(rt))
 	return cmd
 }
@@ -228,6 +230,100 @@ func newDraftListCommand(rt *runtime) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
+	_ = cmd.MarkFlagRequired("mailbox")
+	return cmd
+}
+
+func newDraftShowCommand(rt *runtime) *cobra.Command {
+	var mailboxAddress string
+	var latest bool
+	cmd := &cobra.Command{
+		Use:   "show [draft-id]",
+		Short: "Show a local draft",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store := mailstore.New(rt.dataPath)
+			_, mailboxPath, err := store.FindMailboxByAddress(mailboxAddress)
+			if err != nil {
+				return err
+			}
+			draftID, err := resolveDraftID(mailboxAddress, mailboxPath, args, latest)
+			if err != nil {
+				return err
+			}
+			draft, err := mailstore.ReadDraft(filepath.Join(mailboxPath, "drafts", draftID))
+			if err != nil {
+				return err
+			}
+			writeRows(cmd.OutOrStdout(), []string{"key", "value"}, draftFields(*draft))
+			fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", draft.Body)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
+	cmd.Flags().BoolVar(&latest, "latest", false, "show the newest local draft")
+	_ = cmd.MarkFlagRequired("mailbox")
+	return cmd
+}
+
+func newDraftEditCommand(rt *runtime) *cobra.Command {
+	var mailboxAddress string
+	var latest bool
+	var subject string
+	var to []string
+	var cc []string
+	var bcc []string
+	var body string
+	cmd := &cobra.Command{
+		Use:   "edit [draft-id]",
+		Short: "Edit local draft fields",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store := mailstore.New(rt.dataPath)
+			mailbox, mailboxPath, err := store.FindMailboxByAddress(mailboxAddress)
+			if err != nil {
+				return err
+			}
+			draftID, err := resolveDraftID(mailboxAddress, mailboxPath, args, latest)
+			if err != nil {
+				return err
+			}
+			draftPath := filepath.Join(mailboxPath, "drafts", draftID)
+			draft, err := mailstore.ReadDraft(draftPath)
+			if err != nil {
+				return err
+			}
+			input := mailstore.DraftInput{Mailbox: *mailbox, Subject: draft.Meta.Subject, To: draft.Meta.To, CC: draft.Meta.CC, BCC: draft.Meta.BCC, Body: draft.Body, SourceMessageID: draft.Meta.SourceMessageID, ConversationID: draft.Meta.ConversationID, Now: time.Now()}
+			if cmd.Flags().Changed("subject") {
+				input.Subject = subject
+			}
+			if cmd.Flags().Changed("to") {
+				input.To = splitAddresses(to)
+			}
+			if cmd.Flags().Changed("cc") {
+				input.CC = splitAddresses(cc)
+			}
+			if cmd.Flags().Changed("bcc") {
+				input.BCC = splitAddresses(bcc)
+			}
+			if cmd.Flags().Changed("body") {
+				input.Body = body
+			}
+			updated, err := store.UpdateDraft(draftPath, input)
+			if err != nil {
+				return err
+			}
+			writeRows(cmd.OutOrStdout(), []string{"key", "value"}, draftFields(*updated))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
+	cmd.Flags().BoolVar(&latest, "latest", false, "edit the newest local draft")
+	cmd.Flags().StringVar(&subject, "subject", "", "draft subject")
+	cmd.Flags().StringSliceVar(&to, "to", nil, "recipient address, repeatable or comma-separated")
+	cmd.Flags().StringSliceVar(&cc, "cc", nil, "cc address, repeatable or comma-separated")
+	cmd.Flags().StringSliceVar(&bcc, "bcc", nil, "bcc address, repeatable or comma-separated")
+	cmd.Flags().StringVar(&body, "body", "", "Markdown body")
 	_ = cmd.MarkFlagRequired("mailbox")
 	return cmd
 }
@@ -395,6 +491,26 @@ func draftRows(drafts []mailstore.Draft) [][]string {
 			draft.Meta.UpdatedAt.Format("2006-01-02 15:04"),
 			draft.Path,
 		})
+	}
+	return rows
+}
+
+func draftFields(draft mailstore.Draft) [][]string {
+	rows := [][]string{
+		{"id", draft.Meta.ID},
+		{"from", draft.Meta.FromAddress},
+		{"to", strings.Join(draft.Meta.To, ", ")},
+		{"cc", strings.Join(draft.Meta.CC, ", ")},
+		{"bcc", strings.Join(draft.Meta.BCC, ", ")},
+		{"subject", draft.Meta.Subject},
+		{"updated_at", draft.Meta.UpdatedAt.Format("2006-01-02 15:04")},
+		{"path", draft.Path},
+	}
+	if draft.Meta.SourceMessageID > 0 {
+		rows = append(rows, []string{"source_message_id", strconv.FormatInt(draft.Meta.SourceMessageID, 10)})
+	}
+	if draft.Meta.ConversationID > 0 {
+		rows = append(rows, []string{"conversation_id", strconv.FormatInt(draft.Meta.ConversationID, 10)})
 	}
 	return rows
 }
