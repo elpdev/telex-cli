@@ -57,6 +57,127 @@ func TestLabelsUsesLabelsEndpoint(t *testing.T) {
 	}
 }
 
+func TestDomainCRUDUsesExpectedEndpoints(t *testing.T) {
+	active := true
+	startTLS := true
+	port := 587
+	fake := &fakeClient{body: []byte(`{"data":[{"id":12,"name":"agent.test"}],"meta":{"page":1,"per_page":25,"total_count":1}}`)}
+	service := NewService(fake)
+	_, _, err := service.ListDomains(context.Background(), DomainListParams{ListParams: ListParams{Page: 1, PerPage: 25}, Active: &active, Sort: "name"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.getPath != "/api/v1/domains" {
+		t.Fatalf("get path = %q", fake.getPath)
+	}
+	assertQuery(t, fake.query, "active", "true")
+	assertQuery(t, fake.query, "sort", "name")
+
+	input := DomainInput{Name: "agent.test", Active: &active, SMTPPort: &port, SMTPEnableStartTLSAuto: &startTLS}
+	fake.body = []byte(`{"data":{"id":12,"name":"agent.test"}}`)
+	if _, err := service.CreateDomain(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	if fake.postPath != "/api/v1/domains" {
+		t.Fatalf("post path = %q", fake.postPath)
+	}
+	outer := fake.postBody.(map[string]any)
+	inner := outer["domain"].(map[string]any)
+	assertJSONValue(t, inner["name"], "agent.test")
+	assertJSONValue(t, inner["smtp_port"], float64(587))
+
+	if _, err := service.UpdateDomain(context.Background(), 12, input); err != nil {
+		t.Fatal(err)
+	}
+	if fake.patchPath != "/api/v1/domains/12" {
+		t.Fatalf("patch path = %q", fake.patchPath)
+	}
+	if err := service.DeleteDomain(context.Background(), 12); err != nil {
+		t.Fatal(err)
+	}
+	if fake.deletePath != "/api/v1/domains/12" {
+		t.Fatalf("delete path = %q", fake.deletePath)
+	}
+}
+
+func TestDomainOutboundHelpersUseExpectedEndpoints(t *testing.T) {
+	fake := &fakeClient{body: []byte(`{"data":{"id":12,"outbound_ready":true,"valid":true}}`)}
+	service := NewService(fake)
+	if _, err := service.DomainOutboundStatus(context.Background(), 12); err != nil {
+		t.Fatal(err)
+	}
+	if fake.getPath != "/api/v1/domains/12/outbound_status" {
+		t.Fatalf("get path = %q", fake.getPath)
+	}
+	if _, err := service.ValidateDomainOutbound(context.Background(), 12, nil); err != nil {
+		t.Fatal(err)
+	}
+	if fake.postPath != "/api/v1/domains/12/validate_outbound" {
+		t.Fatalf("post path = %q", fake.postPath)
+	}
+}
+
+func TestInboxCRUDUsesExpectedEndpoints(t *testing.T) {
+	active := true
+	domainID := int64(12)
+	fake := &fakeClient{body: []byte(`{"data":[{"id":34,"domain_id":12,"local_part":"support"}],"meta":{"page":1,"per_page":25,"total_count":1}}`)}
+	service := NewService(fake)
+	_, _, err := service.ListInboxes(context.Background(), InboxListParams{ListParams: ListParams{Page: 1, PerPage: 25}, DomainID: 12, Active: &active, PipelineKey: "default", Count: "all", Sort: "address"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.getPath != "/api/v1/inboxes" {
+		t.Fatalf("get path = %q", fake.getPath)
+	}
+	assertQuery(t, fake.query, "domain_id", "12")
+	assertQuery(t, fake.query, "active", "true")
+	assertQuery(t, fake.query, "pipeline_key", "default")
+	assertQuery(t, fake.query, "count", "all")
+
+	input := InboxInput{DomainID: &domainID, LocalPart: "support", PipelineKey: "default", Active: &active}
+	fake.body = []byte(`{"data":{"id":34,"domain_id":12,"local_part":"support"}}`)
+	if _, err := service.CreateInbox(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	if fake.postPath != "/api/v1/inboxes" {
+		t.Fatalf("post path = %q", fake.postPath)
+	}
+	outer := fake.postBody.(map[string]any)
+	inner := outer["inbox"].(map[string]any)
+	assertJSONValue(t, inner["domain_id"], float64(12))
+	assertJSONValue(t, inner["local_part"], "support")
+
+	if _, err := service.UpdateInbox(context.Background(), 34, input); err != nil {
+		t.Fatal(err)
+	}
+	if fake.patchPath != "/api/v1/inboxes/34" {
+		t.Fatalf("patch path = %q", fake.patchPath)
+	}
+	if err := service.DeleteInbox(context.Background(), 34); err != nil {
+		t.Fatal(err)
+	}
+	if fake.deletePath != "/api/v1/inboxes/34" {
+		t.Fatalf("delete path = %q", fake.deletePath)
+	}
+}
+
+func TestInboxHelpersUseExpectedEndpoints(t *testing.T) {
+	fake := &fakeClient{body: []byte(`{"data":{"key":"default","valid":true}}`)}
+	service := NewService(fake)
+	if _, err := service.InboxPipeline(context.Background(), 34); err != nil {
+		t.Fatal(err)
+	}
+	if fake.getPath != "/api/v1/inboxes/34/pipeline" {
+		t.Fatalf("get path = %q", fake.getPath)
+	}
+	if _, err := service.TestInboxForwardingRules(context.Background(), 34, []ForwardingRule{{Name: "Ops", Active: true, TargetAddresses: []string{"ops@example.com"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if fake.postPath != "/api/v1/inboxes/34/test_forwarding_rules" {
+		t.Fatalf("post path = %q", fake.postPath)
+	}
+}
+
 func TestAssignMessageLabelsUsesLabelsEndpoint(t *testing.T) {
 	fake := &fakeClient{body: []byte(`{"data":{"id":99,"labels":[{"id":7,"name":"Billing"}]}}`)}
 	service := NewService(fake)

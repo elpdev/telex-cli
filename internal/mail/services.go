@@ -23,6 +23,164 @@ type Service struct {
 
 func NewService(client Client) *Service { return &Service{client: client} }
 
+func (s *Service) ListDomains(ctx context.Context, params DomainListParams) ([]Domain, *api.Pagination, error) {
+	body, _, err := s.client.Get(ctx, "/api/v1/domains", domainQuery(params))
+	if err != nil {
+		return nil, nil, err
+	}
+	envelope, err := api.DecodeEnvelope[[]Domain](body)
+	if err != nil {
+		return nil, nil, err
+	}
+	return envelope.Data, api.DecodePagination(envelope.Meta), nil
+}
+
+func (s *Service) ShowDomain(ctx context.Context, id int64) (*Domain, error) {
+	body, _, err := s.client.Get(ctx, fmt.Sprintf("/api/v1/domains/%d", id), nil)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[Domain](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
+}
+
+func (s *Service) CreateDomain(ctx context.Context, input DomainInput) (*Domain, error) {
+	body, _, err := s.client.Post(ctx, "/api/v1/domains", map[string]any{"domain": domainInputMap(input)})
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[Domain](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
+}
+
+func (s *Service) UpdateDomain(ctx context.Context, id int64, input DomainInput) (*Domain, error) {
+	body, _, err := s.client.Patch(ctx, fmt.Sprintf("/api/v1/domains/%d", id), map[string]any{"domain": domainInputMap(input)})
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[Domain](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
+}
+
+func (s *Service) DeleteDomain(ctx context.Context, id int64) error {
+	_, err := s.client.Delete(ctx, fmt.Sprintf("/api/v1/domains/%d", id))
+	return err
+}
+
+func (s *Service) DomainOutboundStatus(ctx context.Context, id int64) (*DomainOutboundStatus, error) {
+	body, _, err := s.client.Get(ctx, fmt.Sprintf("/api/v1/domains/%d/outbound_status", id), nil)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[DomainOutboundStatus](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
+}
+
+func (s *Service) ValidateDomainOutbound(ctx context.Context, id int64, input *DomainInput) (*DomainOutboundValidation, error) {
+	var payload any
+	if input != nil {
+		payload = map[string]any{"domain": domainInputMap(*input)}
+	}
+	body, _, err := s.client.Post(ctx, fmt.Sprintf("/api/v1/domains/%d/validate_outbound", id), payload)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[DomainOutboundValidation](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
+}
+
+func (s *Service) ListInboxes(ctx context.Context, params InboxListParams) ([]Inbox, *api.Pagination, error) {
+	body, _, err := s.client.Get(ctx, "/api/v1/inboxes", inboxQuery(params))
+	if err != nil {
+		return nil, nil, err
+	}
+	envelope, err := api.DecodeEnvelope[[]Inbox](body)
+	if err != nil {
+		return nil, nil, err
+	}
+	return envelope.Data, api.DecodePagination(envelope.Meta), nil
+}
+
+func (s *Service) ShowInbox(ctx context.Context, id int64) (*Inbox, error) {
+	body, _, err := s.client.Get(ctx, fmt.Sprintf("/api/v1/inboxes/%d", id), nil)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[Inbox](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
+}
+
+func (s *Service) CreateInbox(ctx context.Context, input InboxInput) (*Inbox, error) {
+	body, _, err := s.client.Post(ctx, "/api/v1/inboxes", map[string]any{"inbox": inboxInputMap(input)})
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[Inbox](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
+}
+
+func (s *Service) UpdateInbox(ctx context.Context, id int64, input InboxInput) (*Inbox, error) {
+	body, _, err := s.client.Patch(ctx, fmt.Sprintf("/api/v1/inboxes/%d", id), map[string]any{"inbox": inboxInputMap(input)})
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[Inbox](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
+}
+
+func (s *Service) DeleteInbox(ctx context.Context, id int64) error {
+	_, err := s.client.Delete(ctx, fmt.Sprintf("/api/v1/inboxes/%d", id))
+	return err
+}
+
+func (s *Service) InboxPipeline(ctx context.Context, id int64) (*InboxPipeline, error) {
+	body, _, err := s.client.Get(ctx, fmt.Sprintf("/api/v1/inboxes/%d/pipeline", id), nil)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[InboxPipeline](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
+}
+
+func (s *Service) TestInboxForwardingRules(ctx context.Context, id int64, rules []ForwardingRule) (*ForwardingRuleValidation, error) {
+	body, _, err := s.client.Post(ctx, fmt.Sprintf("/api/v1/inboxes/%d/test_forwarding_rules", id), map[string]any{"inbox": map[string]any{"forwarding_rules": rules}})
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[ForwardingRuleValidation](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
+}
+
 func (s *Service) Mailboxes(ctx context.Context) (*MailboxBootstrap, error) {
 	body, _, err := s.client.Get(ctx, "/api/v1/mailboxes", nil)
 	if err != nil {
@@ -324,6 +482,31 @@ func outboundMessageQuery(params OutboundMessageListParams) url.Values {
 	return query
 }
 
+func domainQuery(params DomainListParams) url.Values {
+	query := url.Values{}
+	setInt(query, "page", params.Page)
+	setInt(query, "per_page", params.PerPage)
+	if params.Active != nil {
+		query.Set("active", fmt.Sprintf("%t", *params.Active))
+	}
+	setString(query, "sort", params.Sort)
+	return query
+}
+
+func inboxQuery(params InboxListParams) url.Values {
+	query := url.Values{}
+	setInt(query, "page", params.Page)
+	setInt(query, "per_page", params.PerPage)
+	setInt64(query, "domain_id", params.DomainID)
+	if params.Active != nil {
+		query.Set("active", fmt.Sprintf("%t", *params.Active))
+	}
+	setString(query, "pipeline_key", params.PipelineKey)
+	setString(query, "count", params.Count)
+	setString(query, "sort", params.Sort)
+	return query
+}
+
 func setString(query url.Values, key, value string) {
 	if value != "" {
 		query.Set(key, value)
@@ -385,6 +568,79 @@ func outboundInputMap(input *OutboundMessageInput) map[string]any {
 	}
 	if len(input.Metadata) > 0 {
 		payload["metadata"] = input.Metadata
+	}
+	return payload
+}
+
+func domainInputMap(input DomainInput) map[string]any {
+	payload := map[string]any{}
+	if input.Name != "" {
+		payload["name"] = input.Name
+	}
+	if input.Active != nil {
+		payload["active"] = *input.Active
+	}
+	if input.OutboundFromName != "" {
+		payload["outbound_from_name"] = input.OutboundFromName
+	}
+	if input.OutboundFromAddress != "" {
+		payload["outbound_from_address"] = input.OutboundFromAddress
+	}
+	if input.UseFromAddressForReplyTo != nil {
+		payload["use_from_address_for_reply_to"] = *input.UseFromAddressForReplyTo
+	}
+	if input.ReplyToAddress != "" {
+		payload["reply_to_address"] = input.ReplyToAddress
+	}
+	if input.SMTPHost != "" {
+		payload["smtp_host"] = input.SMTPHost
+	}
+	if input.SMTPPort != nil {
+		payload["smtp_port"] = *input.SMTPPort
+	}
+	if input.SMTPAuthentication != "" {
+		payload["smtp_authentication"] = input.SMTPAuthentication
+	}
+	if input.SMTPEnableStartTLSAuto != nil {
+		payload["smtp_enable_starttls_auto"] = *input.SMTPEnableStartTLSAuto
+	}
+	if input.SMTPUsername != "" {
+		payload["smtp_username"] = input.SMTPUsername
+	}
+	if input.SMTPPassword != "" {
+		payload["smtp_password"] = input.SMTPPassword
+	}
+	if input.DriveFolderID != nil {
+		payload["drive_folder_id"] = *input.DriveFolderID
+	}
+	return payload
+}
+
+func inboxInputMap(input InboxInput) map[string]any {
+	payload := map[string]any{}
+	if input.DomainID != nil {
+		payload["domain_id"] = *input.DomainID
+	}
+	if input.LocalPart != "" {
+		payload["local_part"] = input.LocalPart
+	}
+	if input.PipelineKey != "" {
+		payload["pipeline_key"] = input.PipelineKey
+	}
+	if input.Description != "" {
+		payload["description"] = input.Description
+	}
+	if input.Active != nil {
+		payload["active"] = *input.Active
+	}
+	if input.DriveFolderID != nil {
+		payload["drive_folder_id"] = *input.DriveFolderID
+	}
+	if input.PipelineOverrides != nil {
+		payload["pipeline_overrides"] = input.PipelineOverrides
+	}
+	if input.ForwardingRules != nil {
+		payload["forwarding_rules"] = input.ForwardingRules
 	}
 	return payload
 }

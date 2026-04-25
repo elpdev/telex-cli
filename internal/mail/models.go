@@ -32,38 +32,120 @@ type MailboxBootstrap struct {
 }
 
 type Domain struct {
-	ID                          int64     `json:"id"`
-	Name                        string    `json:"name"`
-	Active                      bool      `json:"active"`
-	OutboundFromName            string    `json:"outbound_from_name"`
-	OutboundFromAddress         string    `json:"outbound_from_address"`
-	UseFromAddressForReplyTo    bool      `json:"use_from_address_for_reply_to"`
-	ReplyToAddress              string    `json:"reply_to_address"`
-	SMTPHost                    string    `json:"smtp_host"`
-	SMTPPort                    int       `json:"smtp_port"`
-	SMTPAuthentication          string    `json:"smtp_authentication"`
-	SMTPEnableStartTLSAuto      bool      `json:"smtp_enable_starttls_auto"`
-	SMTPUsername                string    `json:"smtp_username"`
-	OutboundReady               bool      `json:"outbound_ready"`
-	OutboundConfigurationErrors []string  `json:"outbound_configuration_errors"`
-	CreatedAt                   time.Time `json:"created_at"`
-	UpdatedAt                   time.Time `json:"updated_at"`
+	ID                          int64          `json:"id"`
+	UserID                      int64          `json:"user_id"`
+	DriveFolderID               int64          `json:"drive_folder_id"`
+	Name                        string         `json:"name"`
+	Active                      bool           `json:"active"`
+	OutboundFromName            string         `json:"outbound_from_name"`
+	OutboundFromAddress         string         `json:"outbound_from_address"`
+	UseFromAddressForReplyTo    bool           `json:"use_from_address_for_reply_to"`
+	ReplyToAddress              string         `json:"reply_to_address"`
+	SMTPHost                    string         `json:"smtp_host"`
+	SMTPPort                    int            `json:"smtp_port"`
+	SMTPAuthentication          string         `json:"smtp_authentication"`
+	SMTPEnableStartTLSAuto      bool           `json:"smtp_enable_starttls_auto"`
+	SMTPUsername                string         `json:"smtp_username"`
+	OutboundReady               bool           `json:"outbound_ready"`
+	OutboundConfigurationErrors []string       `json:"outbound_configuration_errors"`
+	OutboundIdentity            map[string]any `json:"outbound_identity"`
+	CreatedAt                   time.Time      `json:"created_at"`
+	UpdatedAt                   time.Time      `json:"updated_at"`
 }
 
 type Inbox struct {
-	ID                    int64            `json:"id"`
-	DomainID              int64            `json:"domain_id"`
-	Address               string           `json:"address"`
-	LocalPart             string           `json:"local_part"`
-	PipelineKey           string           `json:"pipeline_key"`
-	PipelineOverrides     map[string]any   `json:"pipeline_overrides"`
-	ForwardingRules       []map[string]any `json:"forwarding_rules"`
-	ActiveForwardingRules []map[string]any `json:"active_forwarding_rules"`
-	Description           string           `json:"description"`
-	Active                bool             `json:"active"`
-	MessageCount          int              `json:"message_count"`
-	CreatedAt             time.Time        `json:"created_at"`
-	UpdatedAt             time.Time        `json:"updated_at"`
+	ID                     int64            `json:"id"`
+	DomainID               int64            `json:"domain_id"`
+	DriveFolderID          int64            `json:"drive_folder_id"`
+	EffectiveDriveFolderID int64            `json:"effective_drive_folder_id"`
+	Address                string           `json:"address"`
+	LocalPart              string           `json:"local_part"`
+	PipelineKey            string           `json:"pipeline_key"`
+	PipelineOverrides      map[string]any   `json:"pipeline_overrides"`
+	ForwardingRules        []map[string]any `json:"forwarding_rules"`
+	ActiveForwardingRules  []map[string]any `json:"active_forwarding_rules"`
+	Description            string           `json:"description"`
+	Active                 bool             `json:"active"`
+	MessageCount           int              `json:"message_count"`
+	CreatedAt              time.Time        `json:"created_at"`
+	UpdatedAt              time.Time        `json:"updated_at"`
+}
+
+type DomainListParams struct {
+	ListParams
+	Active *bool
+	Sort   string
+}
+
+type InboxListParams struct {
+	ListParams
+	DomainID    int64
+	Active      *bool
+	PipelineKey string
+	Count       string
+	Sort        string
+}
+
+type DomainInput struct {
+	Name                     string
+	Active                   *bool
+	OutboundFromName         string
+	OutboundFromAddress      string
+	UseFromAddressForReplyTo *bool
+	ReplyToAddress           string
+	SMTPHost                 string
+	SMTPPort                 *int
+	SMTPAuthentication       string
+	SMTPEnableStartTLSAuto   *bool
+	SMTPUsername             string
+	SMTPPassword             string
+	DriveFolderID            *int64
+}
+
+type InboxInput struct {
+	DomainID          *int64
+	LocalPart         string
+	PipelineKey       string
+	Description       string
+	Active            *bool
+	DriveFolderID     *int64
+	PipelineOverrides map[string]any
+	ForwardingRules   []ForwardingRule
+}
+
+type ForwardingRule struct {
+	Name               string   `json:"name"`
+	Active             bool     `json:"active"`
+	FromAddressPattern string   `json:"from_address_pattern"`
+	SubjectPattern     string   `json:"subject_pattern"`
+	SubaddressPattern  string   `json:"subaddress_pattern"`
+	TargetAddresses    []string `json:"target_addresses"`
+}
+
+type DomainOutboundStatus struct {
+	ID                          int64          `json:"id"`
+	OutboundReady               bool           `json:"outbound_ready"`
+	OutboundConfigurationErrors []string       `json:"outbound_configuration_errors"`
+	OutboundIdentity            map[string]any `json:"outbound_identity"`
+}
+
+type DomainOutboundValidation struct {
+	Valid                       bool                `json:"valid"`
+	OutboundReady               bool                `json:"outbound_ready"`
+	Errors                      map[string][]string `json:"errors"`
+	OutboundConfigurationErrors []string            `json:"outbound_configuration_errors"`
+}
+
+type InboxPipeline struct {
+	Key       string         `json:"key"`
+	Steps     []string       `json:"steps"`
+	Overrides map[string]any `json:"overrides"`
+}
+
+type ForwardingRuleValidation struct {
+	Valid           bool             `json:"valid"`
+	Errors          []string         `json:"errors"`
+	ForwardingRules []ForwardingRule `json:"forwarding_rules"`
 }
 
 type Attachment struct {

@@ -43,6 +43,23 @@ func TestNotesScreenRegisteredInNavigationAndCommands(t *testing.T) {
 	}
 }
 
+func TestMailAdminScreenRegisteredInNavigationAndCommands(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+	if _, ok := model.screens["mail-admin"]; !ok {
+		t.Fatal("expected mail admin screen to be registered")
+	}
+	for _, id := range model.screenOrder {
+		if id == "mail-admin" {
+			t.Fatalf("mail-admin should be hidden from primary sidebar: %#v", model.screenOrder)
+		}
+	}
+	for _, id := range []string{"go-mail-admin", "mail-admin-refresh", "domains-new", "domains-validate", "inboxes-new", "inboxes-pipeline"} {
+		if _, ok := model.commands.Find(id); !ok {
+			t.Fatalf("expected command %q", id)
+		}
+	}
+}
+
 func TestTabCyclesFocusOutsideConversationView(t *testing.T) {
 	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
 	model = sendKey(t, model, tea.Key{Code: tea.KeyTab})

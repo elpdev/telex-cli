@@ -142,6 +142,7 @@ func (m Model) devBuild() bool { return m.meta.Version == "dev" }
 func (m *Model) registerScreens() {
 	m.screens["home"] = screens.NewHome()
 	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody).WithJunkActions(m.junkMessage, m.notJunkMessage).WithSenderPolicyActions(m.blockSender, m.unblockSender, m.blockDomain, m.unblockDomain, m.trustSender, m.untrustSender)
+	m.screens["mail-admin"] = screens.NewMailAdmin(m.loadMailAdmin).WithActions(m.saveDomain, m.deleteDomain, m.validateDomainOutbound, m.saveInbox, m.deleteInbox, m.inboxPipeline)
 	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive).WithActions(m.downloadDriveFile, m.openDriveFile, m.uploadDriveFile, m.createDriveFolder, m.renameDriveFile, m.renameDriveFolder, m.deleteDriveFile, m.deleteDriveFolder)
 	m.screens["notes"] = screens.NewNotes(notestore.New(m.dataPath), m.syncNotes).WithActions(m.createNote, m.updateNote, m.deleteNote)
 	m.screens["settings"] = m.buildSettings()
@@ -215,6 +216,9 @@ func (m *Model) settingsActions() screens.SettingsActions {
 				return nil
 			}
 		},
+		OpenMailAdmin: func() tea.Cmd {
+			return func() tea.Msg { return routeMsg{"mail-admin"} }
+		},
 		SignOut: func() tea.Cmd {
 			return func() tea.Msg { return settingsSignOutMsg{} }
 		},
@@ -278,6 +282,80 @@ func (m *Model) toggleMessageStar(ctx context.Context, id int64, starred bool) e
 		_, err = service.UnstarMessage(ctx, id)
 	}
 	return err
+}
+
+func (m *Model) loadMailAdmin(ctx context.Context) ([]mail.Domain, []mail.Inbox, error) {
+	service, err := m.mailService()
+	if err != nil {
+		return nil, nil, err
+	}
+	domains, _, err := service.ListDomains(ctx, mail.DomainListParams{ListParams: mail.ListParams{Page: 1, PerPage: 100}, Sort: "name"})
+	if err != nil {
+		return nil, nil, err
+	}
+	inboxes, _, err := service.ListInboxes(ctx, mail.InboxListParams{ListParams: mail.ListParams{Page: 1, PerPage: 250}, Count: "all", Sort: "address"})
+	if err != nil {
+		return nil, nil, err
+	}
+	return domains, inboxes, nil
+}
+
+func (m *Model) saveDomain(ctx context.Context, id *int64, input mail.DomainInput) error {
+	service, err := m.mailService()
+	if err != nil {
+		return err
+	}
+	if id == nil {
+		_, err = service.CreateDomain(ctx, input)
+		return err
+	}
+	_, err = service.UpdateDomain(ctx, *id, input)
+	return err
+}
+
+func (m *Model) deleteDomain(ctx context.Context, id int64) error {
+	service, err := m.mailService()
+	if err != nil {
+		return err
+	}
+	return service.DeleteDomain(ctx, id)
+}
+
+func (m *Model) validateDomainOutbound(ctx context.Context, id int64) (*mail.DomainOutboundValidation, error) {
+	service, err := m.mailService()
+	if err != nil {
+		return nil, err
+	}
+	return service.ValidateDomainOutbound(ctx, id, nil)
+}
+
+func (m *Model) saveInbox(ctx context.Context, id *int64, input mail.InboxInput) error {
+	service, err := m.mailService()
+	if err != nil {
+		return err
+	}
+	if id == nil {
+		_, err = service.CreateInbox(ctx, input)
+		return err
+	}
+	_, err = service.UpdateInbox(ctx, *id, input)
+	return err
+}
+
+func (m *Model) deleteInbox(ctx context.Context, id int64) error {
+	service, err := m.mailService()
+	if err != nil {
+		return err
+	}
+	return service.DeleteInbox(ctx, id)
+}
+
+func (m *Model) inboxPipeline(ctx context.Context, id int64) (*mail.InboxPipeline, error) {
+	service, err := m.mailService()
+	if err != nil {
+		return nil, err
+	}
+	return service.InboxPipeline(ctx, id)
 }
 
 func (m *Model) toggleMessageRead(ctx context.Context, id int64, read bool) error {
@@ -942,6 +1020,9 @@ func (m *Model) notesService() (*notes.Service, error) {
 func (m *Model) refreshScreenOrder() {
 	m.screenOrder = m.screenOrder[:0]
 	for id := range m.screens {
+		if id == "mail-admin" {
+			continue
+		}
 		m.screenOrder = append(m.screenOrder, id)
 	}
 	sort.Strings(m.screenOrder)
@@ -984,6 +1065,15 @@ func (m *Model) registerCommands() {
 			return tea.Sequence(func() tea.Msg { return routeMsg{"drive"} }, actionMsg)
 		}
 	}
+	mailAdminAction := func(action string, alsoRoute bool) func() tea.Cmd {
+		return func() tea.Cmd {
+			actionMsg := func() tea.Msg { return screens.MailAdminActionMsg{Action: action} }
+			if !alsoRoute {
+				return actionMsg
+			}
+			return tea.Sequence(func() tea.Msg { return routeMsg{"mail-admin"} }, actionMsg)
+		}
+	}
 	notesAction := func(action string, alsoRoute bool) func() tea.Cmd {
 		return func() tea.Cmd {
 			actionMsg := func() tea.Msg { return screens.NotesActionMsg{Action: action} }
@@ -1017,6 +1107,7 @@ func (m *Model) registerCommands() {
 	// Navigation
 	m.commands.Register(commands.Command{ID: "go-home", Module: commands.ModuleGlobal, Title: "Go to Home", Description: "Open the home screen", Keywords: []string{"home", "start"}, Run: route("home")})
 	m.commands.Register(commands.Command{ID: "go-mail", Module: commands.ModuleMail, Title: "Open Mail", Description: "Switch to cached mail", Keywords: []string{"mail", "email", "inbox"}, Run: route("mail")})
+	m.commands.Register(commands.Command{ID: "go-mail-admin", Module: commands.ModuleMail, Title: "Open Mail Admin", Description: "Manage domains and inboxes", Keywords: []string{"mail", "admin", "domains", "inboxes"}, Run: route("mail-admin")})
 	m.commands.Register(commands.Command{ID: "go-notes", Module: commands.ModuleNotes, Title: "Open Notes", Description: "Switch to cached Notes", Keywords: []string{"notes", "markdown", "memo"}, Run: route("notes")})
 	m.commands.Register(commands.Command{ID: "go-drive", Module: commands.ModuleDrive, Title: "Open Drive", Description: "Switch to local Drive mirror", Keywords: []string{"drive", "files", "documents"}, Run: route("drive")})
 	m.commands.Register(commands.Command{ID: "go-settings", Module: commands.ModuleSettings, Title: "Open Settings", Description: "Open application settings", Keywords: []string{"settings", "config"}, Run: route("settings")})
@@ -1026,6 +1117,11 @@ func (m *Model) registerCommands() {
 
 	// Mail — module-level
 	m.commands.Register(commands.Command{ID: "mail-sync", Module: commands.ModuleMail, Title: "Sync mailbox", Description: "Pull latest messages, drafts, outbox", Keywords: []string{"sync", "refresh"}, Run: mailAction("sync", true)})
+	m.commands.Register(commands.Command{ID: "mail-admin-refresh", Module: commands.ModuleMail, Title: "Refresh Mail Admin", Description: "Reload remote domains and inboxes", Keywords: []string{"refresh", "reload", "domains", "inboxes"}, Run: mailAdminAction("refresh", true)})
+	m.commands.Register(commands.Command{ID: "domains-new", Module: commands.ModuleMail, Title: "New domain", Description: "Create a managed mail domain", Keywords: []string{"domain", "new", "create"}, Run: mailAdminAction("new-domain", true)})
+	m.commands.Register(commands.Command{ID: "domains-validate", Module: commands.ModuleMail, Title: "Validate selected domain", Description: "Validate outbound settings for the selected domain", Keywords: []string{"domain", "validate", "smtp", "outbound"}, Run: mailAdminAction("validate-domain", true)})
+	m.commands.Register(commands.Command{ID: "inboxes-new", Module: commands.ModuleMail, Title: "New inbox", Description: "Create an inbox on the selected domain", Keywords: []string{"inbox", "new", "create"}, Run: mailAdminAction("new-inbox", true)})
+	m.commands.Register(commands.Command{ID: "inboxes-pipeline", Module: commands.ModuleMail, Title: "Show selected inbox pipeline", Description: "Show pipeline metadata for the selected inbox", Keywords: []string{"inbox", "pipeline"}, Run: mailAdminAction("pipeline", true)})
 
 	// Drive — module-level
 	m.commands.Register(commands.Command{ID: "drive-sync", Module: commands.ModuleDrive, Title: "Sync Drive", Description: "Pull latest Drive metadata and files", Shortcut: "S", Keywords: []string{"sync", "refresh"}, Run: driveAction("sync", true)})

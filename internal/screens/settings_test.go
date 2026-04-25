@@ -100,8 +100,8 @@ func TestSettingsThemeSelectEnterAndEsc(t *testing.T) {
 
 func TestSettingsDriveSyncCycles(t *testing.T) {
 	s := newTestSettings()
-	// Cursor: theme, sidebar, instance, status, sign-out, data-dir, cache-size, drive-sync (7 downs)
-	for i := 0; i < 7; i++ {
+	// Cursor: theme, sidebar, instance, status, mail-admin, sign-out, data-dir, cache-size, drive-sync (8 downs)
+	for i := 0; i < 8; i++ {
 		s, _ = runUpdate(t, s, keyMsg(tea.Key{Code: tea.KeyDown}))
 	}
 	if got := s.focusedRow().id; got != "drive-sync" {
@@ -125,8 +125,8 @@ func TestSettingsSignOutRequiresConfirmation(t *testing.T) {
 		},
 	}
 	s := NewSettings(SettingsState{ThemeName: "Phosphor"}, theme.Phosphor(), theme.BuiltIns(), actions)
-	// Move to sign-out row: theme, sidebar, instance, status, sign-out (4 downs)
-	for i := 0; i < 4; i++ {
+	// Move to sign-out row: theme, sidebar, instance, status, mail-admin, sign-out (5 downs)
+	for i := 0; i < 5; i++ {
 		s, _ = runUpdate(t, s, keyMsg(tea.Key{Code: tea.KeyDown}))
 	}
 	if got := s.focusedRow().id; got != "sign-out" {
@@ -144,5 +144,26 @@ func TestSettingsSignOutRequiresConfirmation(t *testing.T) {
 	_, _ = runUpdate(t, s, keyMsg(tea.Key{Code: tea.KeyEnter}))
 	if !called {
 		t.Fatal("expected SignOut callback to run after second enter")
+	}
+}
+
+func TestSettingsMailAdminAction(t *testing.T) {
+	called := false
+	actions := SettingsActions{
+		OpenMailAdmin: func() tea.Cmd {
+			return func() tea.Msg { called = true; return nil }
+		},
+	}
+	s := NewSettings(SettingsState{ThemeName: "Phosphor"}, theme.Phosphor(), theme.BuiltIns(), actions)
+	// Move to Mail Admin row: theme, sidebar, instance, status, mail-admin (4 downs)
+	for i := 0; i < 4; i++ {
+		s, _ = runUpdate(t, s, keyMsg(tea.Key{Code: tea.KeyDown}))
+	}
+	if got := s.focusedRow().id; got != "mail-admin" {
+		t.Fatalf("focus after 4 downs = %q, want %q", got, "mail-admin")
+	}
+	_, _ = runUpdate(t, s, keyMsg(tea.Key{Code: tea.KeyEnter}))
+	if !called {
+		t.Fatal("expected OpenMailAdmin callback to run")
 	}
 }

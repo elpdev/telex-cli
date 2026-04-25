@@ -28,9 +28,10 @@ type SettingsState struct {
 }
 
 type SettingsActions struct {
-	OpenPath func(path string) tea.Cmd
-	OpenURL  func(url string) tea.Cmd
-	SignOut  func() tea.Cmd
+	OpenPath      func(path string) tea.Cmd
+	OpenURL       func(url string) tea.Cmd
+	OpenMailAdmin func() tea.Cmd
+	SignOut       func() tea.Cmd
 }
 
 type SettingsThemePreviewMsg struct{ Name string }
@@ -79,6 +80,7 @@ var settingsRows = []settingsRowDef{
 	{kind: rowSection, id: "section-account", label: "Account"},
 	{kind: rowReadonly, id: "instance", label: "Instance"},
 	{kind: rowReadonly, id: "auth-status", label: "Status"},
+	{kind: rowAction, id: "mail-admin", label: "Mail Admin"},
 	{kind: rowAction, id: "sign-out", label: "Sign out"},
 
 	{kind: rowSection, id: "section-storage", label: "Storage"},
@@ -213,6 +215,11 @@ func (s Settings) activateRow() (Screen, tea.Cmd) {
 	case "drive-sync":
 		next := nextDriveSyncMode(s.state.DriveSyncMode)
 		return s, func() tea.Msg { return SettingsDriveSyncChangedMsg{Mode: next} }
+	case "mail-admin":
+		if s.actions.OpenMailAdmin != nil {
+			return s, s.actions.OpenMailAdmin()
+		}
+		return s, nil
 	case "sign-out":
 		if s.confirming != "sign-out" {
 			s.confirming = "sign-out"
@@ -374,6 +381,8 @@ func (s Settings) rowValue(row settingsRowDef) string {
 		return valueOrDash(s.state.Instance)
 	case "auth-status":
 		return valueOrDash(s.state.AuthStatus)
+	case "mail-admin":
+		return "Manage domains and inboxes"
 	case "data-dir":
 		return valueOrDash(s.state.DataDir)
 	case "cache-size":
