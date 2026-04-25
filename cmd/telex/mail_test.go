@@ -80,6 +80,22 @@ func TestMailSyncCommandExists(t *testing.T) {
 	}
 }
 
+func TestMailSearchCommandExists(t *testing.T) {
+	cmd := newRootCommand(buildInfo{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mail", "search", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "--received-from") || !strings.Contains(got, "--subaddress") {
+		t.Fatalf("help = %q", got)
+	}
+}
+
 func TestInboxListCommandReadsLocalCache(t *testing.T) {
 	dataDir := t.TempDir()
 	store := mailstore.New(dataDir)

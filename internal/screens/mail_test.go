@@ -688,6 +688,46 @@ func TestMailScreenSearchFiltersCurrentBox(t *testing.T) {
 	}
 }
 
+func TestMailScreenRemoteSearchShowsTransientResults(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	mailbox := mailstore.MailboxMeta{SchemaVersion: mailstore.SchemaVersion, DomainID: 12, DomainName: "example.com", InboxID: 34, Address: "hello@example.com", LocalPart: "hello", Active: true, SyncedAt: time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC)}
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StoreInboxMessage(mailbox, mail.Message{ID: 1, Subject: "Cached", FromAddress: "cache@example.net", SystemState: "inbox", ReceivedAt: time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)}, nil, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	var gotParams MailSearchParams
+	screen := NewMailWithActions(store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, func(ctx context.Context, params MailSearchParams) ([]mailstore.CachedMessage, error) {
+		gotParams = params
+		return []mailstore.CachedMessage{{
+			Meta: mailstore.MessageMeta{SchemaVersion: mailstore.SchemaVersion, Kind: "remote-message", RemoteID: 99, InboxID: params.InboxID, Mailbox: params.Mailbox, Subject: "Remote Invoice", FromAddress: "billing@example.net", ReceivedAt: time.Date(2026, 4, 25, 10, 0, 0, 0, time.UTC)},
+			Path: "remote:99",
+		}}, nil
+	})
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	for _, key := range []tea.KeyPressMsg{
+		tea.KeyPressMsg(tea.Key{Code: 'f', Mod: tea.ModCtrl}),
+		tea.KeyPressMsg(tea.Key{Text: "invoice"}),
+		tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}),
+	} {
+		updated, cmd := screen.Update(key)
+		screen = updated.(Mail)
+		if cmd != nil {
+			updated, _ = screen.Update(cmd())
+			screen = updated.(Mail)
+		}
+	}
+	if gotParams.Query != "invoice" || gotParams.InboxID != mailbox.InboxID || gotParams.Mailbox != "inbox" {
+		t.Fatalf("params = %#v", gotParams)
+	}
+	view := stripScreenANSI(screen.View(100, 20))
+	if strings.Contains(view, "Cached") || !strings.Contains(view, "Remote Invoice") || !strings.Contains(view, "Remote results: invoice") {
+		t.Fatalf("view = %q", view)
+	}
+}
+
 func TestMailScreenShowsAndCachesAttachment(t *testing.T) {
 	store := mailstore.New(t.TempDir())
 	mailbox := mailstore.MailboxMeta{SchemaVersion: mailstore.SchemaVersion, DomainID: 12, DomainName: "example.com", InboxID: 34, Address: "hello@example.com", LocalPart: "hello", Active: true, SyncedAt: time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC)}

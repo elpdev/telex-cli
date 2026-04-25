@@ -101,7 +101,7 @@ func (m Model) devBuild() bool { return m.meta.Version == "dev" }
 
 func (m *Model) registerScreens() {
 	m.screens["home"] = screens.NewHome()
-	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment)
+	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail)
 	m.screens["settings"] = screens.NewSettings(screens.SettingsState{
 		ThemeName:      m.theme.Name,
 		SidebarVisible: m.showSidebar,
@@ -275,6 +275,71 @@ func (m *Model) downloadAttachment(ctx context.Context, attachment mailstore.Att
 	return body, err
 }
 
+func (m *Model) searchMail(ctx context.Context, params screens.MailSearchParams) ([]mailstore.CachedMessage, error) {
+	service, err := m.mailService()
+	if err != nil {
+		return nil, err
+	}
+	messages, _, err := service.ListMessages(ctx, mail.MessageListParams{
+		ListParams: mail.ListParams{Page: params.Page, PerPage: params.PerPage},
+		InboxID:    params.InboxID,
+		Mailbox:    params.Mailbox,
+		Query:      params.Query,
+		Sort:       params.Sort,
+	})
+	if err != nil {
+		return nil, err
+	}
+	results := make([]mailstore.CachedMessage, 0, len(messages))
+	for _, message := range messages {
+		results = append(results, cachedRemoteMessage(message))
+	}
+	return results, nil
+}
+
+func cachedRemoteMessage(message mail.Message) mailstore.CachedMessage {
+	return mailstore.CachedMessage{
+		Meta: mailstore.MessageMeta{
+			SchemaVersion:  mailstore.SchemaVersion,
+			Kind:           "remote-message",
+			RemoteID:       message.ID,
+			ConversationID: message.ConversationID,
+			InboxID:        message.InboxID,
+			Mailbox:        message.SystemState,
+			Status:         message.Status,
+			Subject:        message.Subject,
+			FromAddress:    message.FromAddress,
+			FromName:       message.FromName,
+			To:             message.ToAddresses,
+			CC:             message.CCAddresses,
+			Read:           message.Read,
+			Starred:        message.Starred,
+			Attachments:    remoteAttachmentMetas(message.Attachments),
+			ReceivedAt:     message.ReceivedAt,
+			SyncedAt:       time.Now(),
+		},
+		Path:     fmt.Sprintf("remote:%d", message.ID),
+		BodyText: message.TextBody,
+	}
+}
+
+func remoteAttachmentMetas(attachments []mail.Attachment) []mailstore.AttachmentMeta {
+	metas := make([]mailstore.AttachmentMeta, 0, len(attachments))
+	for _, attachment := range attachments {
+		metas = append(metas, mailstore.AttachmentMeta{
+			ID:          attachment.ID,
+			Filename:    attachment.Filename,
+			ContentType: attachment.ContentType,
+			ByteSize:    attachment.ByteSize,
+			Previewable: attachment.Previewable,
+			PreviewKind: attachment.PreviewKind,
+			PreviewURL:  attachment.PreviewURL,
+			DownloadURL: attachment.DownloadURL,
+		})
+	}
+	return metas
+}
+
 func (m *Model) mailService() (*mail.Service, error) {
 	if m.client == nil {
 		configFile, tokenFile := config.Paths(m.configPath)
@@ -314,15 +379,86 @@ func (m *Model) refreshScreenOrder() {
 }
 
 func (m *Model) registerCommands() {
-	m.commands.Register(commands.Command{ID: "go-home", Title: "Home", Description: "Open the home screen", Keywords: []string{"home", "start"}, Run: func() tea.Cmd { return func() tea.Msg { return routeMsg{"home"} } }})
-	m.commands.Register(commands.Command{ID: "go-mail", Title: "Mail", Description: "Open cached mail", Keywords: []string{"mail", "email", "inbox"}, Run: func() tea.Cmd { return func() tea.Msg { return routeMsg{"mail"} } }})
-	m.commands.Register(commands.Command{ID: "go-settings", Title: "Settings", Description: "Open application settings", Keywords: []string{"settings", "config"}, Run: func() tea.Cmd { return func() tea.Msg { return routeMsg{"settings"} } }})
-	if m.devBuild() {
-		m.commands.Register(commands.Command{ID: "go-logs", Title: "Logs", Description: "Open debug event log", Keywords: []string{"logs", "debug", "events"}, Run: func() tea.Cmd { return func() tea.Msg { return routeMsg{"logs"} } }})
+	route := func(id string) func() tea.Cmd {
+		return func() tea.Cmd { return func() tea.Msg { return routeMsg{id} } }
 	}
-	m.commands.Register(commands.Command{ID: "toggle-sidebar", Title: "Toggle Sidebar", Description: "Show or hide sidebar navigation", Keywords: []string{"sidebar", "layout"}, Run: func() tea.Cmd { return func() tea.Msg { return toggleSidebarMsg{} } }})
-	m.commands.Register(commands.Command{ID: "themes", Title: "Themes", Description: "Preview and select a theme", Keywords: []string{"theme", "themes", "appearance", "colors", "dark", "muted", "phosphor", "miami"}})
-	m.commands.Register(commands.Command{ID: "quit", Title: "Quit", Description: "Exit Telex", Keywords: []string{"exit", "close"}, Run: func() tea.Cmd { return func() tea.Msg { return quitMsg{} } }})
+	mailAction := func(action string, alsoRoute bool) func() tea.Cmd {
+		return func() tea.Cmd {
+			actionMsg := func() tea.Msg { return screens.MailActionMsg{Action: action} }
+			if !alsoRoute {
+				return actionMsg
+			}
+			return tea.Sequence(func() tea.Msg { return routeMsg{"mail"} }, actionMsg)
+		}
+	}
+	onMail := func(ctx commands.Context) bool { return ctx.ActiveScreen == "mail" }
+	onMailDrafts := func(ctx commands.Context) bool {
+		return ctx.ActiveScreen == "mail" && ctx.Selection != nil && ctx.Selection.IsDraft && ctx.Selection.HasItems
+	}
+	onMailMessages := func(ctx commands.Context) bool {
+		return ctx.ActiveScreen == "mail" && ctx.Selection != nil && ctx.Selection.Kind == "message" && ctx.Selection.HasItems
+	}
+	subjectDescribe := func(prefix string) func(commands.Context) string {
+		return func(ctx commands.Context) string {
+			if ctx.Selection != nil && ctx.Selection.Subject != "" {
+				return prefix + " · " + ctx.Selection.Subject
+			}
+			return prefix
+		}
+	}
+
+	// Navigation
+	m.commands.Register(commands.Command{ID: "go-home", Module: commands.ModuleGlobal, Title: "Go to Home", Description: "Open the home screen", Keywords: []string{"home", "start"}, Run: route("home")})
+	m.commands.Register(commands.Command{ID: "go-mail", Module: commands.ModuleMail, Title: "Open Mail", Description: "Switch to cached mail", Keywords: []string{"mail", "email", "inbox"}, Run: route("mail")})
+	m.commands.Register(commands.Command{ID: "go-settings", Module: commands.ModuleSettings, Title: "Open Settings", Description: "Open application settings", Keywords: []string{"settings", "config"}, Run: route("settings")})
+	if m.devBuild() {
+		m.commands.Register(commands.Command{ID: "go-logs", Module: commands.ModuleGlobal, Title: "Open Logs", Description: "Open debug event log", Keywords: []string{"logs", "debug", "events"}, Run: route("logs")})
+	}
+
+	// Mail — module-level
+	m.commands.Register(commands.Command{ID: "mail-sync", Module: commands.ModuleMail, Title: "Sync mailbox", Description: "Pull latest messages, drafts, outbox", Keywords: []string{"sync", "refresh"}, Run: mailAction("sync", true)})
+
+	// Mail / Drafts
+	m.commands.Register(commands.Command{ID: "drafts-compose", Module: commands.ModuleMail, Group: commands.GroupDrafts, Title: "Compose new", Description: "Start a new draft", Shortcut: "c", Keywords: []string{"compose", "new", "write"}, Run: mailAction("compose", true)})
+	m.commands.Register(commands.Command{ID: "drafts-actions", Module: commands.ModuleMail, Group: commands.GroupDrafts, Title: "Actions on selected draft…", Description: "Open focused list of draft actions", Available: onMailDrafts, OpensPage: "draft-actions"})
+	m.commands.Register(commands.Command{ID: "drafts-send", Module: commands.ModuleMail, Group: commands.GroupDrafts, Title: "Send", Description: "Send the highlighted draft", Shortcut: "S", Keywords: []string{"send", "deliver"}, Available: onMailDrafts, Describe: subjectDescribe("Send the highlighted draft"), Run: mailAction("send-draft", false)})
+	m.commands.Register(commands.Command{ID: "drafts-edit", Module: commands.ModuleMail, Group: commands.GroupDrafts, Title: "Edit", Description: "Open the draft in $EDITOR", Shortcut: "e", Keywords: []string{"edit", "write"}, Available: onMailDrafts, Run: mailAction("edit-draft", false)})
+	m.commands.Register(commands.Command{ID: "drafts-discard", Module: commands.ModuleMail, Group: commands.GroupDrafts, Title: "Discard", Description: "Delete the highlighted draft", Shortcut: "x", Keywords: []string{"delete", "discard", "remove"}, Available: onMailDrafts, Run: mailAction("delete-draft", false)})
+	m.commands.Register(commands.Command{ID: "drafts-attach", Module: commands.ModuleMail, Group: commands.GroupDrafts, Title: "Attach file…", Description: "Attach a file to the draft", Shortcut: "a", Keywords: []string{"attach", "file", "upload"}, Available: onMailDrafts, Run: mailAction("attach", false)})
+
+	// Mail / Messages
+	m.commands.Register(commands.Command{ID: "messages-actions", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Actions on selected message…", Description: "Open focused list of message actions", Available: onMailMessages, OpensPage: "message-actions"})
+	m.commands.Register(commands.Command{ID: "messages-reply", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Reply", Description: "Reply to the highlighted message", Shortcut: "r", Keywords: []string{"reply", "respond"}, Available: onMailMessages, Describe: subjectDescribe("Reply"), Run: mailAction("reply", false)})
+	m.commands.Register(commands.Command{ID: "messages-forward", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Forward", Description: "Forward the highlighted message", Shortcut: "f", Keywords: []string{"forward"}, Available: onMailMessages, Describe: subjectDescribe("Forward"), Run: mailAction("forward", false)})
+	m.commands.Register(commands.Command{ID: "messages-archive", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Archive", Description: "Archive the highlighted message", Shortcut: "a", Keywords: []string{"archive"}, Available: onMailMessages, Describe: subjectDescribe("Archive"), Run: mailAction("archive", false)})
+	m.commands.Register(commands.Command{ID: "messages-trash", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Move to trash", Description: "Trash the highlighted message", Shortcut: "d", Keywords: []string{"trash", "delete"}, Available: onMailMessages, Describe: subjectDescribe("Trash"), Run: mailAction("trash", false)})
+	m.commands.Register(commands.Command{ID: "messages-star", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Toggle star", Description: "Star/unstar the highlighted message", Shortcut: "s", Keywords: []string{"star", "favorite"}, Available: onMailMessages, Run: mailAction("toggle-star", false)})
+	m.commands.Register(commands.Command{ID: "messages-read", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Toggle read", Description: "Mark read/unread", Shortcut: "u", Keywords: []string{"read", "unread"}, Available: onMailMessages, Run: mailAction("toggle-read", false)})
+	m.commands.Register(commands.Command{ID: "messages-restore", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Restore", Description: "Move back to inbox from archive/trash", Shortcut: "R", Keywords: []string{"restore"}, Available: func(ctx commands.Context) bool {
+		return onMail(ctx) && ctx.Selection != nil && (ctx.Selection.Mailbox == "archive" || ctx.Selection.Mailbox == "trash")
+	}, Run: mailAction("restore", false)})
+
+	// Global
+	m.commands.Register(commands.Command{ID: "toggle-sidebar", Module: commands.ModuleGlobal, Title: "Toggle sidebar", Description: "Show or hide sidebar navigation", Keywords: []string{"sidebar", "layout"}, Run: func() tea.Cmd { return func() tea.Msg { return toggleSidebarMsg{} } }})
+	m.commands.Register(commands.Command{ID: "themes", Module: commands.ModuleGlobal, Title: "Themes…", Description: "Preview and select a theme", Keywords: []string{"theme", "themes", "appearance", "colors", "dark", "muted", "phosphor", "miami"}, OpensPage: "themes"})
+	m.commands.Register(commands.Command{ID: "quit", Module: commands.ModuleGlobal, Title: "Quit", Description: "Exit Telex", Keywords: []string{"exit", "close"}, Run: func() tea.Cmd { return func() tea.Msg { return quitMsg{} } }})
+}
+
+func (m Model) paletteContext() commands.Context {
+	ctx := commands.Context{ActiveScreen: m.activeScreen}
+	if m.activeScreen == "mail" {
+		if mail, ok := m.screens["mail"].(screens.Mail); ok {
+			sel := mail.Selection()
+			ctx.Selection = &commands.Selection{
+				Kind:     sel.BoxLikes,
+				Subject:  sel.Subject,
+				Mailbox:  sel.Box,
+				IsDraft:  sel.IsDraft,
+				HasItems: sel.HasItem,
+			}
+		}
+	}
+	return ctx
 }
 
 func (m *Model) switchScreen(id string) {

@@ -62,6 +62,9 @@ telex mail inbox show <id> --mailbox hello@example.com
 # List messages from the server
 telex mail messages list
 
+# Search remote messages (sender, recipients, subject, body, attachment filenames)
+telex mail search invoice --sender billing --received-from 2026-04-01 --received-to 2026-04-30
+
 # Show a remote message
 telex mail messages show <id>
 

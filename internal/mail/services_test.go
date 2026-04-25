@@ -11,11 +11,18 @@ func TestListMessagesBuildsExpectedQuery(t *testing.T) {
 	fake := &fakeClient{body: []byte(`{"data":[],"meta":{"page":1,"per_page":25,"total_count":0}}`)}
 	service := NewService(fake)
 	_, _, err := service.ListMessages(context.Background(), MessageListParams{
-		ListParams: ListParams{Page: 1, PerPage: 25},
-		InboxID:    42,
-		Mailbox:    "inbox",
-		Query:      "hello",
-		Sort:       "-received_at",
+		ListParams:   ListParams{Page: 1, PerPage: 25},
+		InboxID:      42,
+		Mailbox:      "inbox",
+		LabelID:      7,
+		Query:        "hello",
+		Sender:       "billing",
+		Recipient:    "finance@example.com",
+		Status:       "processed",
+		Subaddress:   "receipts",
+		ReceivedFrom: "2026-04-09",
+		ReceivedTo:   "2026-04-10",
+		Sort:         "-received_at",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -24,7 +31,14 @@ func TestListMessagesBuildsExpectedQuery(t *testing.T) {
 	assertQuery(t, fake.query, "per_page", "25")
 	assertQuery(t, fake.query, "inbox_id", "42")
 	assertQuery(t, fake.query, "mailbox", "inbox")
+	assertQuery(t, fake.query, "label_id", "7")
 	assertQuery(t, fake.query, "q", "hello")
+	assertQuery(t, fake.query, "sender", "billing")
+	assertQuery(t, fake.query, "recipient", "finance@example.com")
+	assertQuery(t, fake.query, "status", "processed")
+	assertQuery(t, fake.query, "subaddress", "receipts")
+	assertQuery(t, fake.query, "received_from", "2026-04-09")
+	assertQuery(t, fake.query, "received_to", "2026-04-10")
 	assertQuery(t, fake.query, "sort", "-received_at")
 }
 

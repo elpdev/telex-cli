@@ -33,74 +33,80 @@ var mailBoxes = []string{"inbox", "archive", "trash", "sent", "outbox", "drafts"
 var extractArticleURL = articletext.NewExtractor().ExtractURL
 
 type Mail struct {
-	store            mailstore.Store
-	toggleRead       ToggleReadFunc
-	toggleStar       ToggleStarFunc
-	archive          MessageActionFunc
-	trash            MessageActionFunc
-	restore          MessageActionFunc
-	sync             SyncFunc
-	sendDraft        SendDraftFunc
-	updateDraft      UpdateDraftFunc
-	deleteDraft      DeleteDraftFunc
-	forward          ForwardFunc
-	download         DownloadAttachmentFunc
-	mailboxes        []mailstore.MailboxMeta
-	mailboxIndex     int
-	boxIndex         int
-	allMessages      []mailstore.CachedMessage
-	messages         []mailstore.CachedMessage
-	messageIndex     int
-	searching        bool
-	searchQuery      string
-	searchInput      string
-	detailScroll     int
-	links            []emailtext.Link
-	linkIndex        int
-	attachmentIndex  int
-	savingAttachment bool
-	saveDirInput     string
-	attachingFile    bool
-	attachPathInput  string
-	forwarding       bool
-	forwardToInput   string
-	article          string
-	articleURL       string
-	articleScroll    int
-	mode             mailMode
-	loading          bool
-	syncing          bool
-	confirm          string
-	err              error
-	status           string
-	keys             MailKeyMap
+	store             mailstore.Store
+	toggleRead        ToggleReadFunc
+	toggleStar        ToggleStarFunc
+	archive           MessageActionFunc
+	trash             MessageActionFunc
+	restore           MessageActionFunc
+	sync              SyncFunc
+	sendDraft         SendDraftFunc
+	updateDraft       UpdateDraftFunc
+	deleteDraft       DeleteDraftFunc
+	forward           ForwardFunc
+	download          DownloadAttachmentFunc
+	remoteSearch      RemoteSearchFunc
+	mailboxes         []mailstore.MailboxMeta
+	mailboxIndex      int
+	boxIndex          int
+	allMessages       []mailstore.CachedMessage
+	messages          []mailstore.CachedMessage
+	messageIndex      int
+	searching         bool
+	searchQuery       string
+	searchInput       string
+	remoteSearching   bool
+	remoteSearchQuery string
+	remoteSearchInput string
+	remoteResults     bool
+	detailScroll      int
+	links             []emailtext.Link
+	linkIndex         int
+	attachmentIndex   int
+	savingAttachment  bool
+	saveDirInput      string
+	attachingFile     bool
+	attachPathInput   string
+	forwarding        bool
+	forwardToInput    string
+	article           string
+	articleURL        string
+	articleScroll     int
+	mode              mailMode
+	loading           bool
+	syncing           bool
+	confirm           string
+	err               error
+	status            string
+	keys              MailKeyMap
 }
 
 type MailKeyMap struct {
-	Up          key.Binding
-	Down        key.Binding
-	Previous    key.Binding
-	Next        key.Binding
-	BoxPrev     key.Binding
-	BoxNext     key.Binding
-	Open        key.Binding
-	OpenHTML    key.Binding
-	Links       key.Binding
-	Extract     key.Binding
-	Compose     key.Binding
-	Reply       key.Binding
-	Forward     key.Binding
-	Send        key.Binding
-	Delete      key.Binding
-	Attachments key.Binding
-	ToggleRead  key.Binding
-	ToggleStar  key.Binding
-	Archive     key.Binding
-	Trash       key.Binding
-	Restore     key.Binding
-	Copy        key.Binding
-	Back        key.Binding
-	Refresh     key.Binding
+	Up           key.Binding
+	Down         key.Binding
+	Previous     key.Binding
+	Next         key.Binding
+	BoxPrev      key.Binding
+	BoxNext      key.Binding
+	Open         key.Binding
+	OpenHTML     key.Binding
+	Links        key.Binding
+	Extract      key.Binding
+	Compose      key.Binding
+	Reply        key.Binding
+	Forward      key.Binding
+	Send         key.Binding
+	Delete       key.Binding
+	Attachments  key.Binding
+	ToggleRead   key.Binding
+	ToggleStar   key.Binding
+	Archive      key.Binding
+	Trash        key.Binding
+	Restore      key.Binding
+	Copy         key.Binding
+	Back         key.Binding
+	Refresh      key.Binding
+	RemoteSearch key.Binding
 }
 
 type mailLoadedMsg struct {
@@ -113,6 +119,12 @@ type mailSyncedMsg struct {
 	result MailSyncResult
 	loaded mailLoadedMsg
 	err    error
+}
+
+type remoteSearchLoadedMsg struct {
+	query    string
+	messages []mailstore.CachedMessage
+	err      error
 }
 
 type htmlOpenFinishedMsg struct {
@@ -212,6 +224,16 @@ type UpdateDraftFunc func(context.Context, mailstore.Draft) error
 type DeleteDraftFunc func(context.Context, mailstore.Draft) error
 type ForwardFunc func(context.Context, int64, mailstore.Draft) (int64, string, error)
 type DownloadAttachmentFunc func(context.Context, mailstore.AttachmentMeta) ([]byte, error)
+type RemoteSearchFunc func(context.Context, MailSearchParams) ([]mailstore.CachedMessage, error)
+
+type MailSearchParams struct {
+	InboxID int64
+	Mailbox string
+	Query   string
+	Page    int
+	PerPage int
+	Sort    string
+}
 
 type MailSyncResult struct {
 	ActiveMailboxes  int
@@ -227,36 +249,41 @@ func NewMail(store mailstore.Store) Mail {
 	return NewMailWithActions(store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
-func NewMailWithActions(store mailstore.Store, toggleRead ToggleReadFunc, toggleStar ToggleStarFunc, archive MessageActionFunc, trash MessageActionFunc, restore MessageActionFunc, sync SyncFunc, sendDraft SendDraftFunc, updateDraft UpdateDraftFunc, deleteDraft DeleteDraftFunc, forward ForwardFunc, download DownloadAttachmentFunc) Mail {
-	return Mail{store: store, toggleRead: toggleRead, toggleStar: toggleStar, archive: archive, trash: trash, restore: restore, sync: sync, sendDraft: sendDraft, updateDraft: updateDraft, deleteDraft: deleteDraft, forward: forward, download: download, keys: DefaultMailKeyMap(), loading: true}
+func NewMailWithActions(store mailstore.Store, toggleRead ToggleReadFunc, toggleStar ToggleStarFunc, archive MessageActionFunc, trash MessageActionFunc, restore MessageActionFunc, sync SyncFunc, sendDraft SendDraftFunc, updateDraft UpdateDraftFunc, deleteDraft DeleteDraftFunc, forward ForwardFunc, download DownloadAttachmentFunc, remoteSearch ...RemoteSearchFunc) Mail {
+	var search RemoteSearchFunc
+	if len(remoteSearch) > 0 {
+		search = remoteSearch[0]
+	}
+	return Mail{store: store, toggleRead: toggleRead, toggleStar: toggleStar, archive: archive, trash: trash, restore: restore, sync: sync, sendDraft: sendDraft, updateDraft: updateDraft, deleteDraft: deleteDraft, forward: forward, download: download, remoteSearch: search, keys: DefaultMailKeyMap(), loading: true}
 }
 
 func DefaultMailKeyMap() MailKeyMap {
 	return MailKeyMap{
-		Up:          key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "message up")),
-		Down:        key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "message down")),
-		Previous:    key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("left/h", "mailbox prev")),
-		Next:        key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("right/l", "mailbox next")),
-		BoxPrev:     key.NewBinding(key.WithKeys("["), key.WithHelp("[", "box prev")),
-		BoxNext:     key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "box next")),
-		Open:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
-		OpenHTML:    key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open html")),
-		Links:       key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "links")),
-		Extract:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "extract")),
-		Compose:     key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "compose")),
-		Reply:       key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reply")),
-		Forward:     key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "forward")),
-		Send:        key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "send draft")),
-		Delete:      key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "delete draft")),
-		Attachments: key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "attachments")),
-		ToggleRead:  key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "read/unread")),
-		ToggleStar:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "star/unstar")),
-		Archive:     key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "archive")),
-		Trash:       key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "trash")),
-		Restore:     key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restore")),
-		Copy:        key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy link")),
-		Back:        key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-		Refresh:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload cache")),
+		Up:           key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "message up")),
+		Down:         key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "message down")),
+		Previous:     key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("left/h", "mailbox prev")),
+		Next:         key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("right/l", "mailbox next")),
+		BoxPrev:      key.NewBinding(key.WithKeys("["), key.WithHelp("[", "box prev")),
+		BoxNext:      key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "box next")),
+		Open:         key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
+		OpenHTML:     key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open html")),
+		Links:        key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "links")),
+		Extract:      key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "extract")),
+		Compose:      key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "compose")),
+		Reply:        key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reply")),
+		Forward:      key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "forward")),
+		Send:         key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "send draft")),
+		Delete:       key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "delete draft")),
+		Attachments:  key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "attachments")),
+		ToggleRead:   key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "read/unread")),
+		ToggleStar:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "star/unstar")),
+		Archive:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "archive")),
+		Trash:        key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "trash")),
+		Restore:      key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restore")),
+		Copy:         key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy link")),
+		Back:         key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+		Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload cache")),
+		RemoteSearch: key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "remote search")),
 	}
 }
 
@@ -266,6 +293,7 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case mailLoadedMsg:
 		m.loading = false
+		m.remoteResults = false
 		m.err = msg.err
 		m.status = ""
 		if msg.err == nil {
@@ -278,6 +306,7 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	case mailSyncedMsg:
 		m.loading = false
 		m.syncing = false
+		m.remoteResults = false
 		m.err = msg.loaded.err
 		if msg.loaded.err == nil {
 			m.mailboxes = msg.loaded.mailboxes
@@ -290,6 +319,21 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			return m, nil
 		}
 		m.status = syncStatus(msg.result)
+		return m, nil
+	case remoteSearchLoadedMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Remote search failed: %v", msg.err)
+			return m, nil
+		}
+		m.remoteResults = true
+		m.remoteSearchQuery = msg.query
+		m.searchQuery = ""
+		m.allMessages = msg.messages
+		m.applySearch()
+		m.messageIndex = 0
+		m.clampSelection()
+		m.status = fmt.Sprintf("Remote search: %s (%d result(s), transient)", msg.query, len(msg.messages))
 		return m, nil
 	case htmlOpenFinishedMsg:
 		if msg.err != nil {
@@ -460,6 +504,8 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			m.status = fmt.Sprintf("Opened attachment: %s", msg.path)
 		}
 		return m, nil
+	case MailActionMsg:
+		return m.handleAction(msg.Action)
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -495,7 +541,7 @@ func (m Mail) View(width, height int) string {
 func (m Mail) Title() string { return "Mail" }
 
 func (m Mail) KeyBindings() []key.Binding {
-	return []key.Binding{m.keys.Up, m.keys.Down, m.keys.Previous, m.keys.Next, m.keys.BoxPrev, m.keys.BoxNext, m.keys.Open, m.keys.OpenHTML, m.keys.Links, m.keys.Attachments, m.keys.Extract, m.keys.Compose, m.keys.Reply, m.keys.Forward, m.keys.Send, m.keys.Delete, m.keys.ToggleRead, m.keys.ToggleStar, m.keys.Archive, m.keys.Trash, m.keys.Restore, m.keys.Copy, m.keys.Back, m.keys.Refresh}
+	return []key.Binding{m.keys.Up, m.keys.Down, m.keys.Previous, m.keys.Next, m.keys.BoxPrev, m.keys.BoxNext, m.keys.Open, m.keys.OpenHTML, m.keys.Links, m.keys.Attachments, m.keys.Extract, m.keys.Compose, m.keys.Reply, m.keys.Forward, m.keys.Send, m.keys.Delete, m.keys.ToggleRead, m.keys.ToggleStar, m.keys.Archive, m.keys.Trash, m.keys.Restore, m.keys.Copy, m.keys.Back, m.keys.Refresh, m.keys.RemoteSearch}
 }
 
 func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
@@ -504,6 +550,9 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	}
 	if m.searching {
 		return m.handleSearchKey(msg)
+	}
+	if m.remoteSearching {
+		return m.handleRemoteSearchKey(msg)
 	}
 	if m.savingAttachment {
 		return m.handleAttachmentSaveKey(msg)
@@ -622,6 +671,19 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		m.searching = true
 		m.searchInput = m.searchQuery
 		m.status = "Search: " + m.searchInput
+		return m, nil
+	case key.Matches(msg, m.keys.RemoteSearch):
+		if m.remoteSearch == nil {
+			m.status = "Remote search is not configured"
+			return m, nil
+		}
+		if !m.currentBoxSupportsRemoteSearch() {
+			m.status = "Remote search is available for inbox, archive, and trash"
+			return m, nil
+		}
+		m.remoteSearching = true
+		m.remoteSearchInput = m.remoteSearchQuery
+		m.status = "Remote search: " + m.remoteSearchInput
 		return m, nil
 	case key.Matches(msg, m.keys.BoxPrev):
 		if m.boxIndex > 0 {
@@ -936,6 +998,47 @@ func (m Mail) handleSearchKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return m, nil
 }
 
+func (m Mail) handleRemoteSearchKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.remoteSearching = false
+		m.remoteSearchInput = ""
+		m.status = ""
+		return m, nil
+	case "enter":
+		query := strings.TrimSpace(m.remoteSearchInput)
+		m.remoteSearching = false
+		m.remoteSearchInput = ""
+		if query == "" {
+			m.status = "Remote search query is empty"
+			return m, nil
+		}
+		return m.startRemoteSearch(query)
+	case "backspace":
+		if len(m.remoteSearchInput) > 0 {
+			m.remoteSearchInput = m.remoteSearchInput[:len(m.remoteSearchInput)-1]
+		}
+		m.status = "Remote search: " + m.remoteSearchInput
+		return m, nil
+	}
+	if msg.Text != "" {
+		m.remoteSearchInput += msg.Text
+		m.status = "Remote search: " + m.remoteSearchInput
+	}
+	return m, nil
+}
+
+func (m Mail) startRemoteSearch(query string) (Screen, tea.Cmd) {
+	mailbox := m.mailboxes[m.mailboxIndex]
+	params := MailSearchParams{InboxID: mailbox.InboxID, Mailbox: remoteMailboxName(m.currentBox()), Query: query, Page: 1, PerPage: 25, Sort: "-received_at"}
+	m.loading = true
+	m.status = "Searching remote mail..."
+	return m, func() tea.Msg {
+		messages, err := m.remoteSearch(context.Background(), params)
+		return remoteSearchLoadedMsg{query: query, messages: messages, err: err}
+	}
+}
+
 func (m Mail) handleConfirmKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	switch strings.ToLower(msg.String()) {
 	case "y":
@@ -969,6 +1072,10 @@ func (m Mail) toggleSelectedRead() (Screen, tea.Cmd) {
 	if len(m.messages) == 0 {
 		return m, nil
 	}
+	if m.remoteResults {
+		m.status = "Remote search results are read-only; run sync to cache actions"
+		return m, nil
+	}
 	if !m.currentBoxSupportsMessageActions() {
 		m.status = "Read/unread is only available for message boxes"
 		return m, nil
@@ -996,6 +1103,10 @@ func (m Mail) toggleSelectedStar() (Screen, tea.Cmd) {
 	if len(m.messages) == 0 {
 		return m, nil
 	}
+	if m.remoteResults {
+		m.status = "Remote search results are read-only; run sync to cache actions"
+		return m, nil
+	}
 	if !m.currentBoxSupportsMessageActions() {
 		m.status = "Star/unstar is only available for message boxes"
 		return m, nil
@@ -1021,6 +1132,10 @@ func (m Mail) toggleSelectedStar() (Screen, tea.Cmd) {
 
 func (m Mail) moveSelectedMessage(action string) (Screen, tea.Cmd) {
 	if len(m.messages) == 0 {
+		return m, nil
+	}
+	if m.remoteResults {
+		m.status = "Remote search results are read-only; run sync to cache actions"
 		return m, nil
 	}
 	fromBox := m.currentBox()
@@ -1761,12 +1876,31 @@ func (m Mail) currentBox() string {
 }
 
 func (m Mail) currentBoxSupportsMessageActions() bool {
+	if m.remoteResults {
+		return false
+	}
 	switch m.currentBox() {
 	case "inbox", "archive", "trash":
 		return true
 	default:
 		return false
 	}
+}
+
+func (m Mail) currentBoxSupportsRemoteSearch() bool {
+	switch m.currentBox() {
+	case "inbox", "archive", "trash":
+		return true
+	default:
+		return false
+	}
+}
+
+func remoteMailboxName(box string) string {
+	if box == "archive" {
+		return "archived"
+	}
+	return box
 }
 
 func (m *Mail) clampSelection() {
@@ -1787,7 +1921,7 @@ func (m Mail) listView(width, height int) string {
 	mailbox := m.mailboxes[m.mailboxIndex]
 	box := m.currentBox()
 	b.WriteString(fmt.Sprintf("Mailbox %d/%d: %s | Box %d/%d: %s\n", m.mailboxIndex+1, len(m.mailboxes), mailbox.Address, m.boxIndex+1, len(mailBoxes), box))
-	b.WriteString("Use h/l to switch mailboxes, [/] to switch boxes, / search, c compose, enter to read, r reload.")
+	b.WriteString("Use h/l to switch mailboxes, [/] to switch boxes, / filter, ctrl+f remote search, c compose, enter to read, r reload.")
 	if box == "inbox" {
 		b.WriteString(" a archive, d trash.")
 	} else if box == "archive" || box == "trash" {
@@ -1801,6 +1935,9 @@ func (m Mail) listView(width, height int) string {
 	}
 	if m.searchQuery != "" {
 		b.WriteString(fmt.Sprintf("Filter: %s (%d/%d)\n", m.searchQuery, len(m.messages), len(m.allMessages)))
+	}
+	if m.remoteResults {
+		b.WriteString(fmt.Sprintf("Remote results: %s (%d result(s), transient)\n", m.remoteSearchQuery, len(m.messages)))
 	}
 	b.WriteString("\n")
 	if len(m.messages) == 0 {
@@ -2028,4 +2165,99 @@ func formatBytes(size int64) string {
 	default:
 		return ""
 	}
+}
+
+// MailActionMsg triggers a mail action equivalent to a key binding. Used by the
+// command palette to invoke actions on the currently-selected row.
+type MailActionMsg struct {
+	Action string
+}
+
+// MailSelection describes what the mail screen has focused right now. The
+// command palette reads this to gate selection-aware commands and to render
+// dynamic descriptions (e.g. the subject of the draft about to be sent).
+type MailSelection struct {
+	Box      string
+	Subject  string
+	HasItem  bool
+	IsDraft  bool
+	BoxLikes string
+}
+
+func (m Mail) Selection() MailSelection {
+	box := m.currentBox()
+	sel := MailSelection{Box: box, IsDraft: box == "drafts"}
+	if box == "inbox" || box == "archive" || box == "trash" {
+		sel.BoxLikes = "message"
+	} else if box == "drafts" {
+		sel.BoxLikes = "draft"
+	}
+	if len(m.messages) == 0 || m.messageIndex < 0 || m.messageIndex >= len(m.messages) {
+		return sel
+	}
+	msg := m.messages[m.messageIndex]
+	sel.Subject = msg.Meta.Subject
+	sel.HasItem = true
+	return sel
+}
+
+func (m Mail) handleAction(action string) (Screen, tea.Cmd) {
+	if m.confirm != "" || m.searching || m.savingAttachment || m.attachingFile || m.forwarding {
+		return m, nil
+	}
+	switch action {
+	case "compose":
+		return m.editComposeDraft()
+	case "sync":
+		if m.sync == nil || m.syncing {
+			return m, nil
+		}
+		m.syncing = true
+		m.status = "Syncing mailboxes, outbox, and inbox..."
+		return m, m.syncCmd()
+	case "send-draft":
+		if m.currentBox() != "drafts" || len(m.messages) == 0 {
+			return m, nil
+		}
+		return m.requestConfirm("send-draft", "Send this draft?")
+	case "edit-draft":
+		return m.editSelectedDraft()
+	case "delete-draft":
+		if m.currentBox() != "drafts" || len(m.messages) == 0 {
+			return m, nil
+		}
+		return m.requestConfirm("delete-draft", "Delete this draft?")
+	case "attach":
+		return m.startAttachFile()
+	case "reply":
+		if m.currentBox() != "inbox" || len(m.messages) == 0 {
+			return m, nil
+		}
+		return m.editReplyDraft()
+	case "forward":
+		if len(m.messages) == 0 {
+			return m, nil
+		}
+		return m.startForward()
+	case "archive":
+		if m.currentBox() != "inbox" || len(m.messages) == 0 {
+			return m, nil
+		}
+		return m.moveSelectedMessage("archive")
+	case "trash":
+		if m.currentBox() != "inbox" || len(m.messages) == 0 {
+			return m, nil
+		}
+		return m.requestConfirm("trash", "Move this message to trash?")
+	case "restore":
+		if len(m.messages) == 0 {
+			return m, nil
+		}
+		return m.moveSelectedMessage("restore")
+	case "toggle-star":
+		return m.toggleSelectedStar()
+	case "toggle-read":
+		return m.toggleSelectedRead()
+	}
+	return m, nil
 }

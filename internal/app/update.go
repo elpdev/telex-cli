@@ -65,7 +65,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if executed := m.commandPalette.ExecutedCommand(); executed != nil {
 			m.showCommandPalette = false
-			m.commandPalette.Reset(m.theme.Name)
+			m.commandPalette.Reset(m.theme.Name, m.paletteContext())
 			return m, func() tea.Msg { return commandsExecutedMsg{Title: executed.Title, Cmd: executed.Run()} }
 		}
 		return m, cmd
@@ -81,7 +81,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Commands):
 		m.showCommandPalette = true
-		m.commandPalette.Reset(m.theme.Name)
+		m.commandPalette.Reset(m.theme.Name, m.paletteContext())
 		return m, nil
 	case key.Matches(msg, m.keys.Help):
 		m.showHelp = true
@@ -117,11 +117,11 @@ func (m Model) handlePaletteAction(action commands.PaletteAction) (tea.Model, te
 	switch action.Type {
 	case commands.PaletteActionClose:
 		m.showCommandPalette = false
-		m.commandPalette.Reset(m.theme.Name)
+		m.commandPalette.Reset(m.theme.Name, m.paletteContext())
 		return m, nil
 	case commands.PaletteActionExecute:
 		m.showCommandPalette = false
-		m.commandPalette.Reset(m.theme.Name)
+		m.commandPalette.Reset(m.theme.Name, m.paletteContext())
 		return m, func() tea.Msg { return commandsExecutedMsg{Title: action.Command.Title, Cmd: action.Command.Run()} }
 	case commands.PaletteActionPreviewTheme:
 		m.theme = *action.Theme
@@ -132,7 +132,7 @@ func (m Model) handlePaletteAction(action commands.PaletteAction) (tea.Model, te
 		m.logs.Info(fmt.Sprintf("Theme selected: %s", m.theme.Name))
 		m.updateDerivedScreens()
 		m.showCommandPalette = false
-		m.commandPalette.Reset(m.theme.Name)
+		m.commandPalette.Reset(m.theme.Name, m.paletteContext())
 		return m, nil
 	case commands.PaletteActionCancelTheme:
 		m.theme = *action.Theme

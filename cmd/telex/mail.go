@@ -23,7 +23,24 @@ func newMailCommand(rt *runtime) *cobra.Command {
 	cmd.AddCommand(newInboxCommand(rt))
 	cmd.AddCommand(newDraftsCommand(rt))
 	cmd.AddCommand(newOutboxCommand(rt))
+	cmd.AddCommand(newMailSearchCommand(rt))
 	cmd.AddCommand(newMessagesCommand(rt))
+	return cmd
+}
+
+func newMailSearchCommand(rt *runtime) *cobra.Command {
+	var params mail.MessageListParams
+	cmd := &cobra.Command{
+		Use:   "search <query>",
+		Short: "Search remote messages",
+		Long:  "Search remote messages. The query matches sender, recipients, subject, body text, and attachment filenames.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			params.Query = args[0]
+			return runMessageList(cmd, rt, params)
+		},
+	}
+	addMessageListFlags(cmd, &params)
 	return cmd
 }
 
@@ -813,33 +830,44 @@ func newMessagesListCommand(rt *runtime) *cobra.Command {
 		Use:   "list",
 		Short: "List messages",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			service, err := mailService(rt)
-			if err != nil {
-				return err
-			}
-			messages, _, err := service.ListMessages(rt.context(), params)
-			if err != nil {
-				return err
-			}
-			rows := make([][]string, 0, len(messages))
-			for _, message := range messages {
-				rows = append(rows, messageRow(message))
-			}
-			writeRows(cmd.OutOrStdout(), []string{"id", "subject", "from", "status", "mailbox", "read", "starred", "received_at"}, rows)
-			return nil
+			return runMessageList(cmd, rt, params)
 		},
 	}
+	addMessageListFlags(cmd, &params)
+	return cmd
+}
+
+func addMessageListFlags(cmd *cobra.Command, params *mail.MessageListParams) {
 	cmd.Flags().IntVar(&params.Page, "page", 1, "page number")
 	cmd.Flags().IntVar(&params.PerPage, "per-page", 25, "items per page")
 	cmd.Flags().Int64Var(&params.InboxID, "inbox-id", 0, "filter by inbox ID")
-	cmd.Flags().StringVar(&params.Mailbox, "mailbox", "", "filter by mailbox")
+	cmd.Flags().StringVar(&params.Mailbox, "mailbox", "", "filter by mailbox: inbox, junk, archived, trash")
 	cmd.Flags().Int64Var(&params.LabelID, "label-id", 0, "filter by label ID")
 	cmd.Flags().StringVarP(&params.Query, "query", "q", "", "search query")
-	cmd.Flags().StringVar(&params.Sender, "sender", "", "filter by sender")
-	cmd.Flags().StringVar(&params.Recipient, "recipient", "", "filter by recipient")
-	cmd.Flags().StringVar(&params.Status, "status", "", "filter by status")
+	cmd.Flags().StringVar(&params.Sender, "sender", "", "filter by sender name or address")
+	cmd.Flags().StringVar(&params.Recipient, "recipient", "", "filter by recipient address")
+	cmd.Flags().StringVar(&params.Status, "status", "", "filter by processing status")
+	cmd.Flags().StringVar(&params.Subaddress, "subaddress", "", "filter by inbox subaddress")
+	cmd.Flags().StringVar(&params.ReceivedFrom, "received-from", "", "filter by received date from YYYY-MM-DD")
+	cmd.Flags().StringVar(&params.ReceivedTo, "received-to", "", "filter by received date to YYYY-MM-DD")
 	cmd.Flags().StringVar(&params.Sort, "sort", "-received_at", "sort order")
-	return cmd
+}
+
+func runMessageList(cmd *cobra.Command, rt *runtime, params mail.MessageListParams) error {
+	service, err := mailService(rt)
+	if err != nil {
+		return err
+	}
+	messages, _, err := service.ListMessages(rt.context(), params)
+	if err != nil {
+		return err
+	}
+	rows := make([][]string, 0, len(messages))
+	for _, message := range messages {
+		rows = append(rows, messageRow(message))
+	}
+	writeRows(cmd.OutOrStdout(), []string{"id", "subject", "from", "status", "mailbox", "read", "starred", "received_at"}, rows)
+	return nil
 }
 
 func newMessagesShowCommand(rt *runtime) *cobra.Command {
