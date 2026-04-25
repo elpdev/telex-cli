@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/elpdev/telex-cli/internal/emailtext"
 	"github.com/elpdev/telex-cli/internal/notes"
 	"github.com/elpdev/telex-cli/internal/notestore"
 )
@@ -195,7 +196,7 @@ func (n Notes) View(width, height int) string {
 	}
 	b.WriteString("\n")
 	if n.detail != nil {
-		b.WriteString(n.detailView())
+		b.WriteString(n.detailView(width))
 		return style.Render(b.String())
 	}
 	rows := n.visibleRows()
@@ -535,18 +536,30 @@ func (n Notes) breadcrumb() string {
 	return strings.Join(paths, " / ")
 }
 
-func (n Notes) detailView() string {
+func (n Notes) detailView(width int) string {
 	if n.detail == nil {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString(n.detail.Meta.Title + "\n")
 	b.WriteString(fmt.Sprintf("ID: %d\nFolder: %s\nUpdated: %s\nPath: %s\n\n", n.detail.Meta.RemoteID, formatNotesID(n.detail.Meta.FolderID), n.detail.Meta.RemoteUpdatedAt.Format(time.RFC3339), n.detail.Path))
-	b.WriteString(n.detail.Body)
-	if !strings.HasSuffix(n.detail.Body, "\n") {
+	rendered, err := emailtext.RenderMarkdown(n.detail.Body, notesBodyWidth(width))
+	if err != nil {
+		b.WriteString(fmt.Sprintf("Markdown render error: %v", err))
+	} else {
+		b.WriteString(rendered)
+	}
+	if !strings.HasSuffix(b.String(), "\n") {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func notesBodyWidth(width int) int {
+	if width < 24 {
+		return 20
+	}
+	return width - 4
 }
 
 func findNotesFolder(tree *notes.FolderTree, id int64) *notes.FolderTree {

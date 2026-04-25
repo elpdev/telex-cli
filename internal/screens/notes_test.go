@@ -3,6 +3,7 @@ package screens
 import (
 	"context"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -25,9 +26,16 @@ func TestNotesScreenLoadsCachedNotesAndOpensDetail(t *testing.T) {
 	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	screen = updated.(Notes)
 	view = screen.View(80, 20)
-	if !strings.Contains(view, "# Cached") || !strings.Contains(view, "ID: 9") {
+	plain := stripNotesANSI(view)
+	if !strings.Contains(plain, "Cached") || !strings.Contains(plain, "ID: 9") || strings.Contains(plain, "# Cached") {
 		t.Fatalf("detail view = %q", view)
 	}
+}
+
+var notesANSIRE = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+
+func stripNotesANSI(value string) string {
+	return notesANSIRE.ReplaceAllString(value, "")
 }
 
 func TestNotesScreenNavigatesFolderTree(t *testing.T) {
