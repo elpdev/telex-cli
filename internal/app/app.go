@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"sort"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/elpdev/telex-cli/internal/commands"
 	"github.com/elpdev/telex-cli/internal/debug"
+	"github.com/elpdev/telex-cli/internal/mailstore"
 	"github.com/elpdev/telex-cli/internal/screens"
 	"github.com/elpdev/telex-cli/internal/theme"
-	tea "charm.land/bubbletea/v2"
 )
 
 const defaultScreen = "home"
@@ -40,9 +41,15 @@ type Model struct {
 	theme theme.Theme
 	logs  *debug.Log
 	meta  BuildInfo
+
+	dataPath string
 }
 
 func New(meta BuildInfo) Model {
+	return NewWithDataPath(meta, "")
+}
+
+func NewWithDataPath(meta BuildInfo, dataPath string) Model {
 	log := debug.NewLog()
 	log.Info("App started")
 
@@ -56,6 +63,7 @@ func New(meta BuildInfo) Model {
 		theme:        theme.Phosphor(),
 		logs:         log,
 		meta:         meta,
+		dataPath:     dataPath,
 	}
 
 	m.registerScreens()
@@ -74,6 +82,7 @@ func (m Model) Init() tea.Cmd {
 
 func (m *Model) registerScreens() {
 	m.screens["home"] = screens.NewHome()
+	m.screens["mail"] = screens.NewMail(mailstore.New(m.dataPath))
 	m.screens["settings"] = screens.NewSettings(screens.SettingsState{
 		ThemeName:      m.theme.Name,
 		SidebarVisible: m.showSidebar,
@@ -92,7 +101,7 @@ func (m *Model) refreshScreenOrder() {
 		m.screenOrder = append(m.screenOrder, id)
 	}
 	sort.Strings(m.screenOrder)
-	preferred := []string{"home", "settings", "help", "logs"}
+	preferred := []string{"home", "mail", "settings", "help", "logs"}
 	ordered := make([]string, 0, len(m.screenOrder))
 	seen := make(map[string]bool)
 	for _, id := range preferred {
@@ -111,6 +120,7 @@ func (m *Model) refreshScreenOrder() {
 
 func (m *Model) registerCommands() {
 	m.commands.Register(commands.Command{ID: "go-home", Title: "Go to Home", Description: "Open the home screen", Keywords: []string{"home", "start"}, Run: func() tea.Cmd { return func() tea.Msg { return routeMsg{"home"} } }})
+	m.commands.Register(commands.Command{ID: "go-mail", Title: "Go to Mail", Description: "Open cached mail", Keywords: []string{"mail", "email", "inbox"}, Run: func() tea.Cmd { return func() tea.Msg { return routeMsg{"mail"} } }})
 	m.commands.Register(commands.Command{ID: "go-settings", Title: "Go to Settings", Description: "Open application settings", Keywords: []string{"settings", "config"}, Run: func() tea.Cmd { return func() tea.Msg { return routeMsg{"settings"} } }})
 	m.commands.Register(commands.Command{ID: "go-help", Title: "Go to Help", Description: "Open keyboard and command documentation", Keywords: []string{"help", "keys", "docs"}, Run: func() tea.Cmd { return func() tea.Msg { return routeMsg{"help"} } }})
 	m.commands.Register(commands.Command{ID: "go-logs", Title: "Go to Logs", Description: "Open debug event log", Keywords: []string{"logs", "debug", "events"}, Run: func() tea.Cmd { return func() tea.Msg { return routeMsg{"logs"} } }})

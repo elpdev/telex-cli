@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -117,6 +118,35 @@ func ReadMailboxMeta(path string) (*MailboxMeta, error) {
 		return nil, err
 	}
 	return &meta, nil
+}
+
+func (s Store) ListMailboxes() ([]MailboxMeta, error) {
+	root := s.MailRoot()
+	mailboxes := []MailboxMeta{}
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() || path == root {
+			return nil
+		}
+		if _, err := os.Stat(filepath.Join(path, "meta.toml")); err != nil {
+			return nil
+		}
+		meta, err := ReadMailboxMeta(path)
+		if err != nil {
+			return err
+		}
+		mailboxes = append(mailboxes, *meta)
+		return filepath.SkipDir
+	}); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	sort.Slice(mailboxes, func(i, j int) bool { return mailboxes[i].Address < mailboxes[j].Address })
+	return mailboxes, nil
 }
 
 func domainsByID(domains []mail.Domain) map[int64]mail.Domain {

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/elpdev/telex-cli/internal/mail"
 	"github.com/elpdev/telex-cli/internal/mailstore"
 )
 
@@ -53,6 +55,90 @@ func TestResolveDraftIDRequiresChoiceWhenMultipleDraftsExist(t *testing.T) {
 	_, err = resolveDraftID("nunya@highlydisposable.com", mailboxPath, nil, false)
 	if err == nil || !strings.Contains(err.Error(), "provide a draft ID or use --latest") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRootSyncCommandExists(t *testing.T) {
+	cmd := newRootCommand(buildInfo{})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"sync", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMailSyncCommandExists(t *testing.T) {
+	cmd := newRootCommand(buildInfo{})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mail", "sync", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInboxListCommandReadsLocalCache(t *testing.T) {
+	dataDir := t.TempDir()
+	store := mailstore.New(dataDir)
+	mailbox := testCommandMailboxMeta()
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StoreInboxMessage(mailbox, mail.Message{
+		ID:          123,
+		Subject:     "Cached Message",
+		FromAddress: "sender@example.net",
+		SystemState: "inbox",
+		ReceivedAt:  time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC),
+	}, &mail.MessageBody{Text: "cached body"}, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newRootCommand(buildInfo{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--data-dir", dataDir, "mail", "inbox", "list", "--mailbox", mailbox.Address})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "Cached Message") || !strings.Contains(got, "sender@example.net") {
+		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestInboxShowCommandHandlesMetadataOnlyCache(t *testing.T) {
+	dataDir := t.TempDir()
+	store := mailstore.New(dataDir)
+	mailbox := testCommandMailboxMeta()
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StoreInboxMessage(mailbox, mail.Message{
+		ID:          456,
+		Subject:     "Metadata Only",
+		FromAddress: "sender@example.net",
+		SystemState: "inbox",
+		ReceivedAt:  time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC),
+	}, nil, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newRootCommand(buildInfo{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--data-dir", dataDir, "mail", "inbox", "show", "456", "--mailbox", mailbox.Address})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "Metadata Only") || !strings.Contains(got, "body not cached") {
+		t.Fatalf("output = %q", got)
 	}
 }
 

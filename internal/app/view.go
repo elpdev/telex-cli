@@ -3,14 +3,14 @@ package app
 import (
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/elpdev/telex-cli/internal/components/footer"
 	"github.com/elpdev/telex-cli/internal/components/header"
 	"github.com/elpdev/telex-cli/internal/components/modal"
 	"github.com/elpdev/telex-cli/internal/components/sidebar"
 	"github.com/elpdev/telex-cli/internal/layout"
-	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/bubbles/key"
 )
 
 func (m Model) View() tea.View {

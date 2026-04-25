@@ -3,10 +3,10 @@ package app
 import (
 	"fmt"
 
-	"github.com/elpdev/telex-cli/internal/commands"
-	"github.com/elpdev/telex-cli/internal/screens"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/elpdev/telex-cli/internal/commands"
+	"github.com/elpdev/telex-cli/internal/screens"
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -19,7 +19,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.switchScreen(msg.ScreenID)
 		m.showCommandPalette = false
 		m.updateDerivedScreens()
-		return m, nil
+		return m, m.screens[m.activeScreen].Init()
 	case toggleSidebarMsg:
 		m.showSidebar = !m.showSidebar
 		m.logs.Info(fmt.Sprintf("Sidebar toggled: %t", m.showSidebar))
@@ -87,7 +87,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.showHelp = true
 		return m, nil
 	case key.Matches(msg, m.keys.Cancel):
-		return m, nil
+		active := m.screens[m.activeScreen]
+		updated, cmd := active.Update(msg)
+		m.screens[m.activeScreen] = updated
+		return m, cmd
 	case key.Matches(msg, m.keys.Focus):
 		if m.focus == FocusMain && m.showSidebar {
 			m.focus = FocusSidebar
@@ -156,7 +159,7 @@ func (m Model) handleSidebarKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.switchScreen(m.screenOrder[idx])
 	m.updateDerivedScreens()
-	return m, nil
+	return m, m.screens[m.activeScreen].Init()
 }
 
 func (m *Model) updateDerivedScreens() {

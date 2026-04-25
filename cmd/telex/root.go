@@ -41,30 +41,44 @@ func newRootCommand(meta buildInfo) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTUI(meta)
+			return runTUI(meta, rt.dataPath)
 		},
 	}
 	cmd.PersistentFlags().StringVar(&rt.configPath, "config", "", "config file path")
 	cmd.PersistentFlags().StringVar(&rt.dataPath, "data-dir", "", "local data directory")
 	cmd.PersistentFlags().StringVarP(&rt.format, "format", "f", "table", "output format: table, json, text")
-	cmd.AddCommand(newTUICommand(meta))
+	cmd.AddCommand(newTUICommand(rt))
+	cmd.AddCommand(newSyncCommand(rt))
 	cmd.AddCommand(newAccountCommand(rt))
 	cmd.AddCommand(newMailCommand(rt))
 	return cmd
 }
 
-func newTUICommand(meta buildInfo) *cobra.Command {
+func newSyncCommand(rt *runtime) *cobra.Command {
+	var mailboxAddress string
+	cmd := &cobra.Command{
+		Use:   "sync",
+		Short: "Sync local Telex data",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runMailSync(cmd, rt, mailboxAddress)
+		},
+	}
+	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "limit mail sync to one synced mailbox address")
+	return cmd
+}
+
+func newTUICommand(rt *runtime) *cobra.Command {
 	return &cobra.Command{
 		Use:   "tui",
 		Short: "Launch the full-screen TUI",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTUI(meta)
+			return runTUI(rt.meta, rt.dataPath)
 		},
 	}
 }
 
-func runTUI(meta buildInfo) error {
-	program := tea.NewProgram(app.New(meta))
+func runTUI(meta buildInfo, dataPath string) error {
+	program := tea.NewProgram(app.NewWithDataPath(meta, dataPath))
 	_, err := program.Run()
 	return err
 }

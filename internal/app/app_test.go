@@ -15,6 +15,19 @@ func TestSwitchScreenForTest(t *testing.T) {
 	}
 }
 
+func TestRouteRunsScreenInitCommand(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+	updated, cmd := model.Update(routeMsg{ScreenID: "mail"})
+	model = updated.(Model)
+
+	if model.CurrentScreenID() != "mail" {
+		t.Fatalf("expected mail screen, got %q", model.CurrentScreenID())
+	}
+	if cmd == nil {
+		t.Fatal("expected route to run screen init command")
+	}
+}
+
 func TestCommandPaletteThemePreviewCanReturnToRoot(t *testing.T) {
 	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
 	model = openThemePalette(t, model)

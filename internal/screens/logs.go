@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/elpdev/telex-cli/internal/debug"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/elpdev/telex-cli/internal/debug"
 )
 
 type Logs struct {
