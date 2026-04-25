@@ -732,7 +732,7 @@ func (m Mail) handleAttachmentsKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	case key.Matches(msg, m.keys.Open):
 		return m.openAttachment()
 	case key.Matches(msg, m.keys.Delete):
-		return m.detachSelectedDraftAttachment()
+		return m.requestConfirm("detach-attachment", "Detach this attachment from the draft?")
 	case key.Matches(msg, m.keys.Copy):
 		return m.copyAttachmentURL()
 	case key.Matches(msg, m.keys.Send):
@@ -948,6 +948,8 @@ func (m Mail) handleConfirmKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			return m.sendSelectedDraft()
 		case "delete-draft":
 			return m.deleteSelectedDraft()
+		case "detach-attachment":
+			return m.detachSelectedDraftAttachment()
 		}
 	case "n", "esc":
 		m.confirm = ""

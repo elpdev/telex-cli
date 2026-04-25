@@ -775,6 +775,63 @@ func TestMailScreenSavesAttachmentToDirectory(t *testing.T) {
 	}
 }
 
+func TestMailScreenConfirmsDraftAttachmentDetach(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	mailbox := mailstore.MailboxMeta{SchemaVersion: mailstore.SchemaVersion, DomainID: 12, DomainName: "example.com", InboxID: 34, Address: "hello@example.com", LocalPart: "hello", Active: true, SyncedAt: time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC)}
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := store.CreateDraft(mailstore.DraftInput{Mailbox: mailbox, Subject: "Draft", To: []string{"to@example.net"}, Body: "body", Now: time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "invoice.pdf")
+	if err := os.WriteFile(source, []byte("pdf"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mailstore.AttachFileToDraft(draft.Path, source, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	screen := NewMail(store)
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	for range 5 {
+		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
+		screen = updated.(Mail)
+		if cmd == nil {
+			t.Fatal("expected box load command")
+		}
+		updated, _ = screen.Update(cmd())
+		screen = updated.(Mail)
+	}
+	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	screen = updated.(Mail)
+	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Text: "A", Code: 'A'}))
+	screen = updated.(Mail)
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "x", Code: 'x'}))
+	screen = updated.(Mail)
+	if cmd != nil {
+		t.Fatal("expected confirmation before detach command")
+	}
+	if !strings.Contains(stripScreenANSI(screen.View(100, 20)), "Detach this attachment") {
+		t.Fatalf("view = %q", stripScreenANSI(screen.View(100, 20)))
+	}
+	updated, cmd = screen.Update(tea.KeyPressMsg(tea.Key{Text: "y", Code: 'y'}))
+	screen = updated.(Mail)
+	if cmd == nil {
+		t.Fatal("expected detach command")
+	}
+	updated, _ = screen.Update(cmd())
+	screen = updated.(Mail)
+	readBack, err := mailstore.ReadDraft(draft.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readBack.Meta.Attachments) != 0 {
+		t.Fatalf("attachments = %#v", readBack.Meta.Attachments)
+	}
+}
+
 func TestParseDraftFile(t *testing.T) {
 	fields, err := parseDraftFile("From: hello@example.com\nTo: a@example.net, b@example.net\nCc: c@example.net\nBcc: d@example.net\nSubject: Hello\nX-Telex-Draft-Kind: forward\n\nDraft body")
 	if err != nil {
