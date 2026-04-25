@@ -379,6 +379,7 @@ func cachedRemoteMessage(message mail.Message) mailstore.CachedMessage {
 			CC:             message.CCAddresses,
 			Read:           message.Read,
 			Starred:        message.Starred,
+			Labels:         remoteLabelMetas(message.Labels),
 			Attachments:    remoteAttachmentMetas(message.Attachments),
 			ReceivedAt:     message.ReceivedAt,
 			SyncedAt:       time.Now(),
@@ -386,6 +387,14 @@ func cachedRemoteMessage(message mail.Message) mailstore.CachedMessage {
 		Path:     fmt.Sprintf("remote:%d", message.ID),
 		BodyText: message.TextBody,
 	}
+}
+
+func remoteLabelMetas(labels []mail.Label) []mailstore.LabelMeta {
+	metas := make([]mailstore.LabelMeta, 0, len(labels))
+	for _, label := range labels {
+		metas = append(metas, mailstore.LabelMeta{ID: label.ID, Name: label.Name, Color: label.Color})
+	}
+	return metas
 }
 
 func remoteAttachmentMetas(attachments []mail.Attachment) []mailstore.AttachmentMeta {

@@ -35,6 +35,18 @@ func (s *Service) Mailboxes(ctx context.Context) (*MailboxBootstrap, error) {
 	return &envelope.Data, nil
 }
 
+func (s *Service) Labels(ctx context.Context) ([]Label, error) {
+	body, _, err := s.client.Get(ctx, "/api/v1/labels", nil)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[[]Label](body)
+	if err != nil {
+		return nil, err
+	}
+	return envelope.Data, nil
+}
+
 func (s *Service) ListMessages(ctx context.Context, params MessageListParams) ([]Message, *api.Pagination, error) {
 	body, _, err := s.client.Get(ctx, "/api/v1/messages", messageQuery(params))
 	if err != nil {
@@ -65,6 +77,18 @@ func (s *Service) MessageBody(ctx context.Context, id int64) (*MessageBody, erro
 		return nil, err
 	}
 	envelope, err := api.DecodeEnvelope[MessageBody](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
+}
+
+func (s *Service) AssignMessageLabels(ctx context.Context, id int64, labelIDs []int64) (*Message, error) {
+	body, _, err := s.client.Patch(ctx, fmt.Sprintf("/api/v1/messages/%d/labels", id), map[string]any{"label_ids": labelIDs})
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[Message](body)
 	if err != nil {
 		return nil, err
 	}

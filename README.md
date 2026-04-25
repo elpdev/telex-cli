@@ -65,6 +65,11 @@ telex mail messages list
 # Search remote messages (sender, recipients, subject, body, attachment filenames)
 telex mail search invoice --sender billing --received-from 2026-04-01 --received-to 2026-04-30
 
+# List labels and update message labels
+telex mail labels list
+telex mail messages labels <id> --add <label-id>
+telex mail messages labels <id> --remove <label-id>
+
 # Show a remote message
 telex mail messages show <id>
 

@@ -107,6 +107,34 @@ func TestConversationsTimelineCommandExists(t *testing.T) {
 	}
 }
 
+func TestLabelsCommandsExist(t *testing.T) {
+	for _, args := range [][]string{
+		{"mail", "labels", "list", "--help"},
+		{"mail", "messages", "labels", "123", "--help"},
+	} {
+		cmd := newRootCommand(buildInfo{})
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		cmd.SetArgs(args)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+}
+
+func TestUpdatedLabelIDsAddsAndRemoves(t *testing.T) {
+	got := updatedLabelIDs([]mail.Label{{ID: 3}, {ID: 1}}, []int64{2, 3}, []int64{1})
+	want := []int64{2, 3}
+	if len(got) != len(want) {
+		t.Fatalf("ids = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ids = %#v, want %#v", got, want)
+		}
+	}
+}
+
 func TestInboxListCommandReadsLocalCache(t *testing.T) {
 	dataDir := t.TempDir()
 	store := mailstore.New(dataDir)

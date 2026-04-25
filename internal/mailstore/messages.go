@@ -30,9 +30,16 @@ type MessageMeta struct {
 	CC             []string         `toml:"cc"`
 	Read           bool             `toml:"read"`
 	Starred        bool             `toml:"starred"`
+	Labels         []LabelMeta      `toml:"labels"`
 	Attachments    []AttachmentMeta `toml:"attachments"`
 	ReceivedAt     time.Time        `toml:"received_at"`
 	SyncedAt       time.Time        `toml:"synced_at"`
+}
+
+type LabelMeta struct {
+	ID    int64  `toml:"id"`
+	Name  string `toml:"name"`
+	Color string `toml:"color"`
 }
 
 type AttachmentMeta struct {
@@ -84,6 +91,7 @@ func (s Store) StoreInboxMessage(mailbox MailboxMeta, message mail.Message, body
 		CC:             message.CCAddresses,
 		Read:           message.Read,
 		Starred:        message.Starred,
+		Labels:         labelMetas(message.Labels),
 		Attachments:    attachmentMetas(message.Attachments),
 		ReceivedAt:     receivedAt,
 		SyncedAt:       syncedAt,
@@ -100,6 +108,14 @@ func (s Store) StoreInboxMessage(mailbox MailboxMeta, message mail.Message, body
 		}
 	}
 	return path, nil
+}
+
+func labelMetas(labels []mail.Label) []LabelMeta {
+	metas := make([]LabelMeta, 0, len(labels))
+	for _, label := range labels {
+		metas = append(metas, LabelMeta{ID: label.ID, Name: label.Name, Color: label.Color})
+	}
+	return metas
 }
 
 func attachmentMetas(attachments []mail.Attachment) []AttachmentMeta {

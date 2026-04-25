@@ -42,6 +42,44 @@ func TestListMessagesBuildsExpectedQuery(t *testing.T) {
 	assertQuery(t, fake.query, "sort", "-received_at")
 }
 
+func TestLabelsUsesLabelsEndpoint(t *testing.T) {
+	fake := &fakeClient{body: []byte(`{"data":[{"id":7,"name":"Billing","color":"#ff0"}]}`)}
+	service := NewService(fake)
+	labels, err := service.Labels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.getPath != "/api/v1/labels" {
+		t.Fatalf("get path = %q", fake.getPath)
+	}
+	if len(labels) != 1 || labels[0].ID != 7 || labels[0].Name != "Billing" {
+		t.Fatalf("labels = %#v", labels)
+	}
+}
+
+func TestAssignMessageLabelsUsesLabelsEndpoint(t *testing.T) {
+	fake := &fakeClient{body: []byte(`{"data":{"id":99,"labels":[{"id":7,"name":"Billing"}]}}`)}
+	service := NewService(fake)
+	message, err := service.AssignMessageLabels(context.Background(), 99, []int64{7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.patchPath != "/api/v1/messages/99/labels" {
+		t.Fatalf("patch path = %q", fake.patchPath)
+	}
+	body, ok := fake.patchBody.(map[string]any)
+	if !ok {
+		t.Fatalf("patch body = %#v", fake.patchBody)
+	}
+	ids, ok := body["label_ids"].([]any)
+	if !ok || len(ids) != 1 || ids[0] != float64(7) {
+		t.Fatalf("label_ids = %#v", body["label_ids"])
+	}
+	if len(message.Labels) != 1 || message.Labels[0].ID != 7 {
+		t.Fatalf("message = %#v", message)
+	}
+}
+
 func TestArchiveMessageUsesActionEndpoint(t *testing.T) {
 	fake := &fakeClient{body: []byte(`{"data":{"id":99,"subject":"Archived"}}`)}
 	service := NewService(fake)
@@ -161,6 +199,8 @@ type fakeClient struct {
 	getPath       string
 	postPath      string
 	postBody      any
+	patchPath     string
+	patchBody     any
 	multipartPath string
 	multipartFile string
 	deletePath    string
@@ -184,7 +224,9 @@ func (f *fakeClient) PostMultipartFile(_ context.Context, path, _, filePath stri
 	return f.body, 200, nil
 }
 
-func (f *fakeClient) Patch(_ context.Context, _ string, _ any) ([]byte, int, error) {
+func (f *fakeClient) Patch(_ context.Context, path string, body any) ([]byte, int, error) {
+	f.patchPath = path
+	f.patchBody = normalizeJSON(body)
 	return f.body, 200, nil
 }
 

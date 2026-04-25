@@ -2061,6 +2061,7 @@ func cachedMessageMatches(message mailstore.CachedMessage, query string) bool {
 		message.Meta.Subject,
 		message.Meta.FromAddress,
 		message.Meta.FromName,
+		strings.Join(cachedLabelNames(message.Meta.Labels), " "),
 		strings.Join(message.Meta.To, " "),
 		strings.Join(message.Meta.CC, " "),
 		message.Meta.Status,
@@ -2074,6 +2075,16 @@ func cachedMessageMatches(message mailstore.CachedMessage, query string) bool {
 		}
 	}
 	return false
+}
+
+func cachedLabelNames(labels []mailstore.LabelMeta) []string {
+	names := make([]string, 0, len(labels))
+	for _, label := range labels {
+		if strings.TrimSpace(label.Name) != "" {
+			names = append(names, label.Name)
+		}
+	}
+	return names
 }
 
 func (m *Mail) updateMessageByPath(path string, update func(*mailstore.CachedMessage)) {
@@ -2195,7 +2206,11 @@ func (m Mail) listView(width, height int) string {
 		if message.Meta.Starred {
 			star = "!"
 		}
-		line := fmt.Sprintf("%s%s%s %-16s %-48s %s", cursor, read, star, truncate(message.Meta.FromAddress, 16), truncate(message.Meta.Subject, 48), message.Meta.ReceivedAt.Format("Jan 02 15:04"))
+		labelSuffix := ""
+		if names := cachedLabelNames(message.Meta.Labels); len(names) > 0 {
+			labelSuffix = " [" + strings.Join(names, ",") + "]"
+		}
+		line := fmt.Sprintf("%s%s%s %-16s %-48s %s%s", cursor, read, star, truncate(message.Meta.FromAddress, 16), truncate(message.Meta.Subject, 48), message.Meta.ReceivedAt.Format("Jan 02 15:04"), labelSuffix)
 		b.WriteString(truncate(line, width))
 		b.WriteByte('\n')
 	}
@@ -2223,6 +2238,9 @@ func (m Mail) detailView(width, height int) string {
 	}
 	if len(message.Meta.Attachments) > 0 {
 		b.WriteString(fmt.Sprintf("Attachments: %d (A to view)\n", len(message.Meta.Attachments)))
+	}
+	if names := cachedLabelNames(message.Meta.Labels); len(names) > 0 {
+		b.WriteString(fmt.Sprintf("Labels: %s\n", strings.Join(names, ", ")))
 	}
 	if m.currentBoxSupportsMessageActions() {
 		b.WriteString(fmt.Sprintf("Read: %t\n", message.Meta.Read))

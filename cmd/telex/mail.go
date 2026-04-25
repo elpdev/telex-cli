@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 func newMailCommand(rt *runtime) *cobra.Command {
 	cmd := &cobra.Command{Use: "mail", Short: "Email commands"}
 	cmd.AddCommand(newMailSyncCommand(rt))
+	cmd.AddCommand(newLabelsCommand(rt))
 	cmd.AddCommand(newMailboxesCommand(rt))
 	cmd.AddCommand(newInboxCommand(rt))
 	cmd.AddCommand(newDraftsCommand(rt))
@@ -27,6 +29,35 @@ func newMailCommand(rt *runtime) *cobra.Command {
 	cmd.AddCommand(newConversationsCommand(rt))
 	cmd.AddCommand(newMessagesCommand(rt))
 	return cmd
+}
+
+func newLabelsCommand(rt *runtime) *cobra.Command {
+	cmd := &cobra.Command{Use: "labels", Short: "Manage remote labels"}
+	cmd.AddCommand(newLabelsListCommand(rt))
+	return cmd
+}
+
+func newLabelsListCommand(rt *runtime) *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List remote labels",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			service, err := mailService(rt)
+			if err != nil {
+				return err
+			}
+			labels, err := service.Labels(rt.context())
+			if err != nil {
+				return err
+			}
+			rows := make([][]string, 0, len(labels))
+			for _, label := range labels {
+				rows = append(rows, labelRow(label))
+			}
+			writeRows(cmd.OutOrStdout(), []string{"id", "name", "color"}, rows)
+			return nil
+		},
+	}
 }
 
 func newMailSearchCommand(rt *runtime) *cobra.Command {
@@ -815,6 +846,7 @@ func newMessagesCommand(rt *runtime) *cobra.Command {
 	cmd.AddCommand(newMessagesListCommand(rt))
 	cmd.AddCommand(newMessagesShowCommand(rt))
 	cmd.AddCommand(newMessagesBodyCommand(rt))
+	cmd.AddCommand(newMessageLabelsCommand(rt))
 	cmd.AddCommand(newMessageActionCommand(rt, "archive", "Archive a message", func(s *mail.Service, id int64) (*mail.Message, error) { return s.ArchiveMessage(rt.context(), id) }))
 	cmd.AddCommand(newMessageActionCommand(rt, "restore", "Restore a message", func(s *mail.Service, id int64) (*mail.Message, error) { return s.RestoreMessage(rt.context(), id) }))
 	cmd.AddCommand(newMessageActionCommand(rt, "trash", "Move a message to trash", func(s *mail.Service, id int64) (*mail.Message, error) { return s.TrashMessage(rt.context(), id) }))
@@ -822,6 +854,51 @@ func newMessagesCommand(rt *runtime) *cobra.Command {
 	cmd.AddCommand(newMessageActionCommand(rt, "mark-unread", "Mark a message unread", func(s *mail.Service, id int64) (*mail.Message, error) { return s.MarkMessageUnread(rt.context(), id) }))
 	cmd.AddCommand(newMessageActionCommand(rt, "star", "Star a message", func(s *mail.Service, id int64) (*mail.Message, error) { return s.StarMessage(rt.context(), id) }))
 	cmd.AddCommand(newMessageActionCommand(rt, "unstar", "Unstar a message", func(s *mail.Service, id int64) (*mail.Message, error) { return s.UnstarMessage(rt.context(), id) }))
+	return cmd
+}
+
+func newMessageLabelsCommand(rt *runtime) *cobra.Command {
+	var add []int64
+	var remove []int64
+	var set []int64
+	cmd := &cobra.Command{
+		Use:   "labels <id>",
+		Short: "Show or update message labels",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID(args[0])
+			if err != nil {
+				return err
+			}
+			service, err := mailService(rt)
+			if err != nil {
+				return err
+			}
+			message, err := service.ShowMessage(rt.context(), id)
+			if err != nil {
+				return err
+			}
+			if len(add) > 0 || len(remove) > 0 || len(set) > 0 {
+				ids := set
+				if len(set) == 0 {
+					ids = updatedLabelIDs(message.Labels, add, remove)
+				}
+				message, err = service.AssignMessageLabels(rt.context(), id, ids)
+				if err != nil {
+					return err
+				}
+			}
+			rows := make([][]string, 0, len(message.Labels))
+			for _, label := range message.Labels {
+				rows = append(rows, labelRow(label))
+			}
+			writeRows(cmd.OutOrStdout(), []string{"id", "name", "color"}, rows)
+			return nil
+		},
+	}
+	cmd.Flags().Int64SliceVar(&add, "add", nil, "label ID to add, repeatable or comma-separated")
+	cmd.Flags().Int64SliceVar(&remove, "remove", nil, "label ID to remove, repeatable or comma-separated")
+	cmd.Flags().Int64SliceVar(&set, "set", nil, "replace labels with these IDs, repeatable or comma-separated")
 	return cmd
 }
 
@@ -1038,6 +1115,41 @@ func conversationTimelineRow(entry mail.ConversationTimelineEntry) []string {
 	}
 }
 
+func labelRow(label mail.Label) []string {
+	return []string{strconv.FormatInt(label.ID, 10), label.Name, label.Color}
+}
+
+func updatedLabelIDs(current []mail.Label, add, remove []int64) []int64 {
+	ids := make(map[int64]bool, len(current)+len(add))
+	for _, label := range current {
+		ids[label.ID] = true
+	}
+	for _, id := range add {
+		if id > 0 {
+			ids[id] = true
+		}
+	}
+	for _, id := range remove {
+		delete(ids, id)
+	}
+	out := make([]int64, 0, len(ids))
+	for id := range ids {
+		out = append(out, id)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func cachedLabelNames(labels []mailstore.LabelMeta) []string {
+	names := make([]string, 0, len(labels))
+	for _, label := range labels {
+		if strings.TrimSpace(label.Name) != "" {
+			names = append(names, label.Name)
+		}
+	}
+	return names
+}
+
 func cachedMessageRow(message mailstore.CachedMessage) []string {
 	return []string{
 		strconv.FormatInt(message.Meta.RemoteID, 10),
@@ -1061,6 +1173,7 @@ func cachedMessageFields(message mailstore.CachedMessage) [][]string {
 		{"mailbox", message.Meta.Mailbox},
 		{"read", strconv.FormatBool(message.Meta.Read)},
 		{"starred", strconv.FormatBool(message.Meta.Starred)},
+		{"labels", strings.Join(cachedLabelNames(message.Meta.Labels), ", ")},
 		{"received_at", message.Meta.ReceivedAt.Format("2006-01-02 15:04")},
 		{"path", message.Path},
 	}
