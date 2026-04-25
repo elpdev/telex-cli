@@ -21,7 +21,7 @@ func (m Model) View() tea.View {
 	dims := layout.Calculate(m.width, m.height, m.showSidebar)
 	active := m.screens[m.activeScreen]
 
-	head := header.View(header.Model{AppName: "Telex", ScreenTitle: active.Title(), Version: m.meta.Version}, dims.Header.Width, dims.Header.Height, m.theme)
+	head := header.View(header.Model{AppName: "Telex", ScreenTitle: active.Title(), Version: m.meta.Version, Instance: m.instance}, dims.Header.Width, dims.Header.Height, m.theme)
 	foot := footer.View(m.keys.ShortHelp(), dims.Footer.Width, dims.Footer.Height, m.theme)
 	mainFrameWidth, mainFrameHeight := m.theme.Main.GetFrameSize()
 	mainWidth := max(0, dims.Main.Width-mainFrameWidth)

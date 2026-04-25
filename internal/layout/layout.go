@@ -1,16 +1,23 @@
 package layout
 
 const (
-	headerHeight = 2
-	footerHeight = 2
-	sidebarWidth = 18
+	compactHeaderHeight = 2
+	bannerHeaderHeight  = 4
+	bannerMinWidth      = 48
+	bannerMinHeight     = 14
+	footerHeight        = 2
+	sidebarWidth        = 18
 )
 
 func Calculate(width, height int, showSidebar bool) Dimensions {
 	width = max(0, width)
 	height = max(0, height)
 
-	header := min(headerHeight, height)
+	wantedHeader := compactHeaderHeight
+	if width >= bannerMinWidth && height >= bannerMinHeight {
+		wantedHeader = bannerHeaderHeight
+	}
+	header := min(wantedHeader, height)
 	footer := 0
 	if height > header {
 		footer = min(footerHeight, height-header)

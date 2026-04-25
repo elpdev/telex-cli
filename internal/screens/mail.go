@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -26,14 +27,28 @@ const (
 	mailReadWidth = 100
 )
 
+var mailBoxes = []string{"inbox", "archive", "trash", "sent", "outbox", "drafts"}
+
 var extractArticleURL = articletext.NewExtractor().ExtractURL
 
 type Mail struct {
 	store         mailstore.Store
+	toggleRead    ToggleReadFunc
+	toggleStar    ToggleStarFunc
+	archive       MessageActionFunc
+	trash         MessageActionFunc
+	restore       MessageActionFunc
+	sync          SyncFunc
+	sendDraft     SendDraftFunc
 	mailboxes     []mailstore.MailboxMeta
 	mailboxIndex  int
+	boxIndex      int
+	allMessages   []mailstore.CachedMessage
 	messages      []mailstore.CachedMessage
 	messageIndex  int
+	searching     bool
+	searchQuery   string
+	searchInput   string
 	detailScroll  int
 	links         []emailtext.Link
 	linkIndex     int
@@ -42,29 +57,47 @@ type Mail struct {
 	articleScroll int
 	mode          mailMode
 	loading       bool
+	syncing       bool
 	err           error
 	status        string
 	keys          MailKeyMap
 }
 
 type MailKeyMap struct {
-	Up       key.Binding
-	Down     key.Binding
-	Previous key.Binding
-	Next     key.Binding
-	Open     key.Binding
-	OpenHTML key.Binding
-	Links    key.Binding
-	Extract  key.Binding
-	Copy     key.Binding
-	Back     key.Binding
-	Refresh  key.Binding
+	Up         key.Binding
+	Down       key.Binding
+	Previous   key.Binding
+	Next       key.Binding
+	BoxPrev    key.Binding
+	BoxNext    key.Binding
+	Open       key.Binding
+	OpenHTML   key.Binding
+	Links      key.Binding
+	Extract    key.Binding
+	Compose    key.Binding
+	Reply      key.Binding
+	Send       key.Binding
+	Delete     key.Binding
+	ToggleRead key.Binding
+	ToggleStar key.Binding
+	Archive    key.Binding
+	Trash      key.Binding
+	Restore    key.Binding
+	Copy       key.Binding
+	Back       key.Binding
+	Refresh    key.Binding
 }
 
 type mailLoadedMsg struct {
 	mailboxes []mailstore.MailboxMeta
 	messages  []mailstore.CachedMessage
 	err       error
+}
+
+type mailSyncedMsg struct {
+	result MailSyncResult
+	loaded mailLoadedMsg
+	err    error
 }
 
 type htmlOpenFinishedMsg struct {
@@ -88,23 +121,93 @@ type articleExtractedMsg struct {
 	err     error
 }
 
+type messageReadToggledMsg struct {
+	index int
+	path  string
+	read  bool
+	err   error
+}
+
+type messageStarToggledMsg struct {
+	index   int
+	path    string
+	starred bool
+	err     error
+}
+
+type messageMovedMsg struct {
+	index  int
+	path   string
+	action string
+	err    error
+}
+
+type draftEditedMsg struct {
+	path         string
+	existingPath string
+	mailbox      mailstore.MailboxMeta
+	err          error
+}
+
+type draftDeletedMsg struct {
+	index int
+	path  string
+	err   error
+}
+
+type draftSentMsg struct {
+	index int
+	path  string
+	err   error
+}
+
+type ToggleReadFunc func(context.Context, int64, bool) error
+type ToggleStarFunc func(context.Context, int64, bool) error
+type MessageActionFunc func(context.Context, int64) error
+type SyncFunc func(context.Context) (MailSyncResult, error)
+type SendDraftFunc func(context.Context, mailstore.MailboxMeta, mailstore.Draft) error
+
+type MailSyncResult struct {
+	ActiveMailboxes  int
+	SkippedMailboxes int
+	OutboxItems      int
+	InboxMessages    int
+	BodyErrors       int
+	InboxErrors      int
+}
+
 func NewMail(store mailstore.Store) Mail {
-	return Mail{store: store, keys: DefaultMailKeyMap(), loading: true}
+	return NewMailWithActions(store, nil, nil, nil, nil, nil, nil, nil)
+}
+
+func NewMailWithActions(store mailstore.Store, toggleRead ToggleReadFunc, toggleStar ToggleStarFunc, archive MessageActionFunc, trash MessageActionFunc, restore MessageActionFunc, sync SyncFunc, sendDraft SendDraftFunc) Mail {
+	return Mail{store: store, toggleRead: toggleRead, toggleStar: toggleStar, archive: archive, trash: trash, restore: restore, sync: sync, sendDraft: sendDraft, keys: DefaultMailKeyMap(), loading: true}
 }
 
 func DefaultMailKeyMap() MailKeyMap {
 	return MailKeyMap{
-		Up:       key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "message up")),
-		Down:     key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "message down")),
-		Previous: key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("left/h", "mailbox prev")),
-		Next:     key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("right/l", "mailbox next")),
-		Open:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
-		OpenHTML: key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open html")),
-		Links:    key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "links")),
-		Extract:  key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "extract")),
-		Copy:     key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy link")),
-		Back:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-		Refresh:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload cache")),
+		Up:         key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "message up")),
+		Down:       key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "message down")),
+		Previous:   key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("left/h", "mailbox prev")),
+		Next:       key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("right/l", "mailbox next")),
+		BoxPrev:    key.NewBinding(key.WithKeys("["), key.WithHelp("[", "box prev")),
+		BoxNext:    key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "box next")),
+		Open:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
+		OpenHTML:   key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open html")),
+		Links:      key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "links")),
+		Extract:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "extract")),
+		Compose:    key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "compose")),
+		Reply:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reply")),
+		Send:       key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "send draft")),
+		Delete:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "delete draft")),
+		ToggleRead: key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "read/unread")),
+		ToggleStar: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "star/unstar")),
+		Archive:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "archive")),
+		Trash:      key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "trash")),
+		Restore:    key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restore")),
+		Copy:       key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy link")),
+		Back:       key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+		Refresh:    key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload cache")),
 	}
 }
 
@@ -118,9 +221,26 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		m.status = ""
 		if msg.err == nil {
 			m.mailboxes = msg.mailboxes
-			m.messages = msg.messages
+			m.allMessages = msg.messages
+			m.applySearch()
 			m.clampSelection()
 		}
+		return m, nil
+	case mailSyncedMsg:
+		m.loading = false
+		m.syncing = false
+		m.err = msg.loaded.err
+		if msg.loaded.err == nil {
+			m.mailboxes = msg.loaded.mailboxes
+			m.allMessages = msg.loaded.messages
+			m.applySearch()
+			m.clampSelection()
+		}
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Sync failed: %v", msg.err)
+			return m, nil
+		}
+		m.status = syncStatus(msg.result)
 		return m, nil
 	case htmlOpenFinishedMsg:
 		if msg.err != nil {
@@ -154,6 +274,85 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		m.status = ""
 		m.mode = mailModeArticle
 		return m, nil
+	case messageReadToggledMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not update read state: %v", msg.err)
+			return m, nil
+		}
+		m.updateMessageByPath(msg.path, func(message *mailstore.CachedMessage) { message.Meta.Read = msg.read })
+		if msg.read {
+			m.status = "Marked read"
+		} else {
+			m.status = "Marked unread"
+		}
+		return m, nil
+	case messageStarToggledMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not update star state: %v", msg.err)
+			return m, nil
+		}
+		m.updateMessageByPath(msg.path, func(message *mailstore.CachedMessage) { message.Meta.Starred = msg.starred })
+		if msg.starred {
+			m.status = "Starred"
+		} else {
+			m.status = "Unstarred"
+		}
+		return m, nil
+	case messageMovedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not %s message: %v", msg.action, msg.err)
+			return m, nil
+		}
+		m.removeMessageByPath(msg.path)
+		m.mode = mailModeList
+		m.detailScroll = 0
+		m.clampSelection()
+		switch msg.action {
+		case "archive":
+			m.status = "Archived"
+		case "trash":
+			m.status = "Moved to trash"
+		case "restore":
+			m.status = "Restored"
+		}
+		return m, nil
+	case draftEditedMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not save draft: %v", msg.err)
+			return m, nil
+		}
+		draft, err := saveEditedDraft(m.store, msg.mailbox, msg.path, msg.existingPath)
+		if err != nil {
+			m.status = fmt.Sprintf("Could not save draft: %v", err)
+			return m, nil
+		}
+		m.status = fmt.Sprintf("Draft saved: %s", draft.Meta.ID)
+		if msg.existingPath != "" && m.currentBox() == "drafts" {
+			loaded := m.load(m.mailboxIndex, m.currentBox())
+			m.allMessages = loaded.messages
+			m.applySearch()
+			m.clampSelection()
+		}
+		return m, nil
+	case draftSentMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not send draft: %v", msg.err)
+			return m, nil
+		}
+		m.removeMessageByPath(msg.path)
+		m.clampSelection()
+		m.status = "Draft sent"
+		return m, nil
+	case draftDeletedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not delete draft: %v", msg.err)
+			return m, nil
+		}
+		m.removeMessageByPath(msg.path)
+		m.clampSelection()
+		m.status = "Draft deleted"
+		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -186,13 +385,12 @@ func (m Mail) View(width, height int) string {
 func (m Mail) Title() string { return "Mail" }
 
 func (m Mail) KeyBindings() []key.Binding {
-	return []key.Binding{m.keys.Up, m.keys.Down, m.keys.Previous, m.keys.Next, m.keys.Open, m.keys.OpenHTML, m.keys.Links, m.keys.Extract, m.keys.Copy, m.keys.Back, m.keys.Refresh}
+	return []key.Binding{m.keys.Up, m.keys.Down, m.keys.Previous, m.keys.Next, m.keys.BoxPrev, m.keys.BoxNext, m.keys.Open, m.keys.OpenHTML, m.keys.Links, m.keys.Extract, m.keys.Compose, m.keys.Reply, m.keys.Send, m.keys.Delete, m.keys.ToggleRead, m.keys.ToggleStar, m.keys.Archive, m.keys.Trash, m.keys.Restore, m.keys.Copy, m.keys.Back, m.keys.Refresh}
 }
 
 func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
-	if key.Matches(msg, m.keys.Refresh) {
-		m.loading = true
-		return m, m.loadCmd()
+	if m.searching {
+		return m.handleSearchKey(msg)
 	}
 	if m.mode == mailModeArticle {
 		return m.handleArticleKey(msg)
@@ -219,6 +417,33 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if key.Matches(msg, m.keys.Reply) {
+			return m.editReplyDraft()
+		}
+		if key.Matches(msg, m.keys.Send) {
+			return m.sendSelectedDraft()
+		}
+		if key.Matches(msg, m.keys.Extract) {
+			return m.editSelectedDraft()
+		}
+		if key.Matches(msg, m.keys.Delete) {
+			return m.deleteSelectedDraft()
+		}
+		if key.Matches(msg, m.keys.ToggleRead) {
+			return m.toggleSelectedRead()
+		}
+		if key.Matches(msg, m.keys.ToggleStar) {
+			return m.toggleSelectedStar()
+		}
+		if key.Matches(msg, m.keys.Archive) {
+			return m.moveSelectedMessage("archive")
+		}
+		if key.Matches(msg, m.keys.Trash) {
+			return m.moveSelectedMessage("trash")
+		}
+		if key.Matches(msg, m.keys.Restore) {
+			return m.moveSelectedMessage("restore")
+		}
 		maxScroll := m.maxDetailScroll()
 		switch {
 		case key.Matches(msg, m.keys.Up):
@@ -236,6 +461,44 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return m, nil
 	}
 	switch {
+	case key.Matches(msg, m.keys.Refresh):
+		if m.sync == nil {
+			m.loading = true
+			return m, m.loadCmd()
+		}
+		if m.syncing {
+			return m, nil
+		}
+		m.syncing = true
+		m.status = "Syncing..."
+		return m, m.syncCmd()
+	case key.Matches(msg, m.keys.Compose):
+		return m.editComposeDraft()
+	case key.Matches(msg, m.keys.Send):
+		return m.sendSelectedDraft()
+	case key.Matches(msg, m.keys.Extract):
+		return m.editSelectedDraft()
+	case key.Matches(msg, m.keys.Delete):
+		return m.deleteSelectedDraft()
+	case msg.String() == "/":
+		m.searching = true
+		m.searchInput = m.searchQuery
+		m.status = "Search: " + m.searchInput
+		return m, nil
+	case key.Matches(msg, m.keys.BoxPrev):
+		if m.boxIndex > 0 {
+			m.boxIndex--
+			m.messageIndex = 0
+			m.loading = true
+			return m, m.loadCmd()
+		}
+	case key.Matches(msg, m.keys.BoxNext):
+		if m.boxIndex < len(mailBoxes)-1 {
+			m.boxIndex++
+			m.messageIndex = 0
+			m.loading = true
+			return m, m.loadCmd()
+		}
 	case key.Matches(msg, m.keys.Previous):
 		if m.mailboxIndex > 0 {
 			m.mailboxIndex--
@@ -264,6 +527,16 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			m.detailScroll = 0
 			m.status = ""
 		}
+	case key.Matches(msg, m.keys.ToggleRead):
+		return m.toggleSelectedRead()
+	case key.Matches(msg, m.keys.ToggleStar):
+		return m.toggleSelectedStar()
+	case key.Matches(msg, m.keys.Archive):
+		return m.moveSelectedMessage("archive")
+	case key.Matches(msg, m.keys.Trash):
+		return m.moveSelectedMessage("trash")
+	case key.Matches(msg, m.keys.Restore):
+		return m.moveSelectedMessage("restore")
 	case key.Matches(msg, m.keys.Back):
 		return m, nil
 	}
@@ -318,6 +591,262 @@ func (m Mail) handleArticleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return m.copyArticleURL()
 	}
 	return m, nil
+}
+
+func (m Mail) handleSearchKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.searching = false
+		m.searchInput = ""
+		m.status = ""
+		return m, nil
+	case "enter":
+		m.searching = false
+		m.searchQuery = strings.TrimSpace(m.searchInput)
+		m.messageIndex = 0
+		m.applySearch()
+		m.clampSelection()
+		if m.searchQuery == "" {
+			m.status = "Search cleared"
+		} else {
+			m.status = fmt.Sprintf("Search: %s", m.searchQuery)
+		}
+		return m, nil
+	case "backspace":
+		if len(m.searchInput) > 0 {
+			m.searchInput = m.searchInput[:len(m.searchInput)-1]
+		}
+		m.status = "Search: " + m.searchInput
+		return m, nil
+	}
+	if msg.Text != "" {
+		m.searchInput += msg.Text
+		m.status = "Search: " + m.searchInput
+	}
+	return m, nil
+}
+
+func (m Mail) toggleSelectedRead() (Screen, tea.Cmd) {
+	if len(m.messages) == 0 {
+		return m, nil
+	}
+	if !m.currentBoxSupportsMessageActions() {
+		m.status = "Read/unread is only available for message boxes"
+		return m, nil
+	}
+	if m.toggleRead == nil {
+		m.status = "Read/unread action is not configured"
+		return m, nil
+	}
+	index := m.messageIndex
+	message := m.messages[index]
+	desiredRead := !message.Meta.Read
+	m.status = "Updating read state..."
+	return m, func() tea.Msg {
+		if err := m.toggleRead(context.Background(), message.Meta.RemoteID, desiredRead); err != nil {
+			return messageReadToggledMsg{index: index, path: message.Path, read: desiredRead, err: err}
+		}
+		if _, err := mailstore.SetCachedMessageRead(message.Path, desiredRead, time.Now()); err != nil {
+			return messageReadToggledMsg{index: index, path: message.Path, read: desiredRead, err: err}
+		}
+		return messageReadToggledMsg{index: index, path: message.Path, read: desiredRead}
+	}
+}
+
+func (m Mail) toggleSelectedStar() (Screen, tea.Cmd) {
+	if len(m.messages) == 0 {
+		return m, nil
+	}
+	if !m.currentBoxSupportsMessageActions() {
+		m.status = "Star/unstar is only available for message boxes"
+		return m, nil
+	}
+	if m.toggleStar == nil {
+		m.status = "Star/unstar action is not configured"
+		return m, nil
+	}
+	index := m.messageIndex
+	message := m.messages[index]
+	desiredStarred := !message.Meta.Starred
+	m.status = "Updating star state..."
+	return m, func() tea.Msg {
+		if err := m.toggleStar(context.Background(), message.Meta.RemoteID, desiredStarred); err != nil {
+			return messageStarToggledMsg{index: index, path: message.Path, starred: desiredStarred, err: err}
+		}
+		if _, err := mailstore.SetCachedMessageStarred(message.Path, desiredStarred, time.Now()); err != nil {
+			return messageStarToggledMsg{index: index, path: message.Path, starred: desiredStarred, err: err}
+		}
+		return messageStarToggledMsg{index: index, path: message.Path, starred: desiredStarred}
+	}
+}
+
+func (m Mail) moveSelectedMessage(action string) (Screen, tea.Cmd) {
+	if len(m.messages) == 0 {
+		return m, nil
+	}
+	fromBox := m.currentBox()
+	moveRemote := m.archive
+	toBox := "archive"
+	status := "Archiving..."
+	switch action {
+	case "archive":
+		if fromBox != "inbox" {
+			m.status = "archive is only available from inbox"
+			return m, nil
+		}
+	case "trash":
+		if fromBox != "inbox" {
+			m.status = "trash is only available from inbox"
+			return m, nil
+		}
+		moveRemote = m.trash
+		toBox = "trash"
+		status = "Moving to trash..."
+	case "restore":
+		if fromBox != "archive" && fromBox != "trash" {
+			m.status = "restore is only available from archive or trash"
+			return m, nil
+		}
+		moveRemote = m.restore
+		toBox = "inbox"
+		status = "Restoring..."
+	default:
+		m.status = fmt.Sprintf("unknown message action %q", action)
+		return m, nil
+	}
+	if moveRemote == nil {
+		m.status = fmt.Sprintf("%s action is not configured", action)
+		return m, nil
+	}
+	index := m.messageIndex
+	message := m.messages[index]
+	mailbox := m.mailboxes[m.mailboxIndex]
+	m.status = status
+	return m, func() tea.Msg {
+		if err := moveRemote(context.Background(), message.Meta.RemoteID); err != nil {
+			return messageMovedMsg{index: index, path: message.Path, action: action, err: err}
+		}
+		mailboxPath, err := m.store.MailboxPath(mailbox.DomainName, mailbox.LocalPart)
+		if err != nil {
+			return messageMovedMsg{index: index, path: message.Path, action: action, err: err}
+		}
+		if _, err := mailstore.MoveCachedMessage(mailboxPath, fromBox, toBox, message.Path, time.Now()); err != nil {
+			return messageMovedMsg{index: index, path: message.Path, action: action, err: err}
+		}
+		return messageMovedMsg{index: index, path: message.Path, action: action}
+	}
+}
+
+func (m Mail) editComposeDraft() (Screen, tea.Cmd) {
+	if len(m.mailboxes) == 0 {
+		return m, nil
+	}
+	return m.editDraft(draftTemplate(draftFields{From: m.mailboxes[m.mailboxIndex].Address}), "")
+}
+
+func (m Mail) sendSelectedDraft() (Screen, tea.Cmd) {
+	if len(m.messages) == 0 {
+		return m, nil
+	}
+	if m.currentBox() != "drafts" {
+		m.status = "send is only available from drafts"
+		return m, nil
+	}
+	if m.sendDraft == nil {
+		m.status = "send draft action is not configured"
+		return m, nil
+	}
+	index := m.messageIndex
+	message := m.messages[index]
+	mailbox := m.mailboxes[m.mailboxIndex]
+	m.status = "Sending draft..."
+	return m, func() tea.Msg {
+		draft, err := mailstore.ReadDraft(message.Path)
+		if err != nil {
+			return draftSentMsg{index: index, path: message.Path, err: err}
+		}
+		if err := m.sendDraft(context.Background(), mailbox, *draft); err != nil {
+			return draftSentMsg{index: index, path: message.Path, err: err}
+		}
+		return draftSentMsg{index: index, path: message.Path}
+	}
+}
+
+func (m Mail) editReplyDraft() (Screen, tea.Cmd) {
+	if len(m.messages) == 0 || len(m.mailboxes) == 0 {
+		return m, nil
+	}
+	message := m.messages[m.messageIndex]
+	subject := message.Meta.Subject
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(subject)), "re:") {
+		subject = "Re: " + subject
+	}
+	body := quotedReplyBody(message)
+	return m.editDraft(draftTemplate(draftFields{From: m.mailboxes[m.mailboxIndex].Address, To: []string{message.Meta.FromAddress}, Subject: subject, Body: body, SourceMessageID: message.Meta.RemoteID, ConversationID: message.Meta.ConversationID}), "")
+}
+
+func (m Mail) editSelectedDraft() (Screen, tea.Cmd) {
+	if len(m.messages) == 0 {
+		return m, nil
+	}
+	if m.currentBox() != "drafts" {
+		m.status = "edit is only available from drafts"
+		return m, nil
+	}
+	draft, err := mailstore.ReadDraft(m.messages[m.messageIndex].Path)
+	if err != nil {
+		m.status = fmt.Sprintf("Could not read draft: %v", err)
+		return m, nil
+	}
+	return m.editDraft(draftTemplate(draftFields{From: draft.Meta.FromAddress, To: draft.Meta.To, CC: draft.Meta.CC, BCC: draft.Meta.BCC, Subject: draft.Meta.Subject, Body: draft.Body, SourceMessageID: draft.Meta.SourceMessageID, ConversationID: draft.Meta.ConversationID}), draft.Path)
+}
+
+func (m Mail) editDraft(content, existingPath string) (Screen, tea.Cmd) {
+	file, err := os.CreateTemp("", "telex-draft-*.md")
+	if err != nil {
+		m.status = fmt.Sprintf("Could not create draft file: %v", err)
+		return m, nil
+	}
+	path := file.Name()
+	if _, err := file.WriteString(content); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		m.status = fmt.Sprintf("Could not write draft file: %v", err)
+		return m, nil
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		m.status = fmt.Sprintf("Could not close draft file: %v", err)
+		return m, nil
+	}
+	cmd, err := editorCommand(path)
+	if err != nil {
+		_ = os.Remove(path)
+		m.status = err.Error()
+		return m, nil
+	}
+	mailbox := m.mailboxes[m.mailboxIndex]
+	m.loading = true
+	m.status = "Editing draft..."
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return draftEditedMsg{path: path, existingPath: existingPath, mailbox: mailbox, err: err}
+	})
+}
+
+func (m Mail) deleteSelectedDraft() (Screen, tea.Cmd) {
+	if len(m.messages) == 0 {
+		return m, nil
+	}
+	if m.currentBox() != "drafts" {
+		m.status = "delete is only available from drafts"
+		return m, nil
+	}
+	index := m.messageIndex
+	path := m.messages[index].Path
+	m.status = "Deleting draft..."
+	return m, func() tea.Msg {
+		return draftDeletedMsg{index: index, path: path, err: mailstore.DeleteDraft(path)}
+	}
 }
 
 func (m Mail) openHTML() (Screen, tea.Cmd) {
@@ -425,25 +954,303 @@ func clipboardCommand(value string) (*exec.Cmd, error) {
 	return nil, fmt.Errorf("no clipboard command found: install wl-copy, xclip, or xsel")
 }
 
+func editorCommand(path string) (*exec.Cmd, error) {
+	editor := strings.TrimSpace(os.Getenv("VISUAL"))
+	if editor == "" {
+		editor = strings.TrimSpace(os.Getenv("EDITOR"))
+	}
+	if editor == "" {
+		editor = "vi"
+	}
+	parts := strings.Fields(editor)
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("editor is not configured")
+	}
+	args := append(parts[1:], path)
+	return exec.Command(parts[0], args...), nil
+}
+
+type draftFields struct {
+	From            string
+	To              []string
+	CC              []string
+	BCC             []string
+	Subject         string
+	Body            string
+	SourceMessageID int64
+	ConversationID  int64
+}
+
+func draftTemplate(fields draftFields) string {
+	extra := ""
+	if fields.SourceMessageID > 0 {
+		extra += fmt.Sprintf("X-Telex-Source-Message-ID: %d\n", fields.SourceMessageID)
+	}
+	if fields.ConversationID > 0 {
+		extra += fmt.Sprintf("X-Telex-Conversation-ID: %d\n", fields.ConversationID)
+	}
+	return fmt.Sprintf("From: %s\nTo: %s\nCc: %s\nBcc: %s\nSubject: %s\n%s\n%s", fields.From, strings.Join(fields.To, ", "), strings.Join(fields.CC, ", "), strings.Join(fields.BCC, ", "), fields.Subject, extra, fields.Body)
+}
+
+func saveEditedDraft(store mailstore.Store, mailbox mailstore.MailboxMeta, path, existingPath string) (*mailstore.Draft, error) {
+	defer os.Remove(path)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	fields, err := parseDraftFile(string(content))
+	if err != nil {
+		return nil, err
+	}
+	input := mailstore.DraftInput{Mailbox: mailbox, Subject: fields.Subject, To: fields.To, CC: fields.CC, BCC: fields.BCC, Body: fields.Body, SourceMessageID: fields.SourceMessageID, ConversationID: fields.ConversationID, Now: time.Now()}
+	if existingPath != "" {
+		return store.UpdateDraft(existingPath, input)
+	}
+	return store.CreateDraft(input)
+}
+
+func parseDraftFile(content string) (draftFields, error) {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	parts := strings.SplitN(content, "\n\n", 2)
+	if len(parts) != 2 {
+		return draftFields{}, fmt.Errorf("draft must contain headers, a blank line, then body")
+	}
+	fields := draftFields{Body: parts[1]}
+	for _, line := range strings.Split(parts[0], "\n") {
+		name, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "from":
+			fields.From = strings.TrimSpace(value)
+		case "to":
+			fields.To = splitDraftAddresses(value)
+		case "cc":
+			fields.CC = splitDraftAddresses(value)
+		case "bcc":
+			fields.BCC = splitDraftAddresses(value)
+		case "subject":
+			fields.Subject = strings.TrimSpace(value)
+		case "x-telex-source-message-id":
+			fields.SourceMessageID = parseDraftInt(value)
+		case "x-telex-conversation-id":
+			fields.ConversationID = parseDraftInt(value)
+		}
+	}
+	if strings.TrimSpace(fields.Subject) == "" {
+		return draftFields{}, fmt.Errorf("subject is required")
+	}
+	return fields, nil
+}
+
+func parseDraftInt(value string) int64 {
+	var parsed int64
+	_, _ = fmt.Sscanf(strings.TrimSpace(value), "%d", &parsed)
+	return parsed
+}
+
+func splitDraftAddresses(value string) []string {
+	parts := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ';' })
+	addresses := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			addresses = append(addresses, part)
+		}
+	}
+	return addresses
+}
+
+func quotedReplyBody(message mailstore.CachedMessage) string {
+	body := strings.TrimSpace(message.BodyText)
+	if body == "" {
+		body = strings.TrimSpace(message.BodyHTML)
+	}
+	if body == "" {
+		return "\n\n"
+	}
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		lines[i] = "> " + line
+	}
+	return "\n\n" + strings.Join(lines, "\n") + "\n"
+}
+
 func (m Mail) loadCmd() tea.Cmd {
 	mailboxIndex := m.mailboxIndex
+	box := m.currentBox()
 	return func() tea.Msg {
-		mailboxes, err := m.store.ListMailboxes()
+		return m.load(mailboxIndex, box)
+	}
+}
+
+func (m Mail) syncCmd() tea.Cmd {
+	mailboxIndex := m.mailboxIndex
+	box := m.currentBox()
+	return func() tea.Msg {
+		result, err := m.sync(context.Background())
+		loaded := m.load(mailboxIndex, box)
+		return mailSyncedMsg{result: result, loaded: loaded, err: err}
+	}
+}
+
+func (m Mail) load(mailboxIndex int, box string) mailLoadedMsg {
+	mailboxes, err := m.store.ListMailboxes()
+	if err != nil {
+		return mailLoadedMsg{err: err}
+	}
+	if len(mailboxes) == 0 {
+		return mailLoadedMsg{mailboxes: mailboxes}
+	}
+	if mailboxIndex >= len(mailboxes) {
+		mailboxIndex = len(mailboxes) - 1
+	}
+	mailboxPath, err := m.store.MailboxPath(mailboxes[mailboxIndex].DomainName, mailboxes[mailboxIndex].LocalPart)
+	if err != nil {
+		return mailLoadedMsg{mailboxes: mailboxes, err: err}
+	}
+	messages, err := listCachedBox(mailboxPath, box)
+	return mailLoadedMsg{mailboxes: mailboxes, messages: messages, err: err}
+}
+
+func syncStatus(result MailSyncResult) string {
+	status := fmt.Sprintf("Synced %d inbox message(s)", result.InboxMessages)
+	if result.OutboxItems > 0 {
+		status = fmt.Sprintf("%s, %d outbox item(s)", status, result.OutboxItems)
+	}
+	if result.BodyErrors > 0 || result.InboxErrors > 0 {
+		status = fmt.Sprintf("%s with warnings", status)
+	}
+	return status
+}
+
+func listCachedBox(mailboxPath, box string) ([]mailstore.CachedMessage, error) {
+	switch box {
+	case "inbox", "archive", "trash":
+		return mailstore.ListMessages(mailboxPath, box)
+	case "sent":
+		drafts, err := mailstore.ListSent(mailboxPath)
 		if err != nil {
-			return mailLoadedMsg{err: err}
+			return nil, err
 		}
-		if len(mailboxes) == 0 {
-			return mailLoadedMsg{mailboxes: mailboxes}
-		}
-		if mailboxIndex >= len(mailboxes) {
-			mailboxIndex = len(mailboxes) - 1
-		}
-		mailboxPath, err := m.store.MailboxPath(mailboxes[mailboxIndex].DomainName, mailboxes[mailboxIndex].LocalPart)
+		return draftsToCachedMessages(drafts), nil
+	case "outbox":
+		drafts, err := mailstore.ListOutbox(mailboxPath)
 		if err != nil {
-			return mailLoadedMsg{mailboxes: mailboxes, err: err}
+			return nil, err
 		}
-		messages, err := mailstore.ListInbox(mailboxPath)
-		return mailLoadedMsg{mailboxes: mailboxes, messages: messages, err: err}
+		return draftsToCachedMessages(drafts), nil
+	case "drafts":
+		drafts, err := mailstore.ListDrafts(mailboxPath)
+		if err != nil {
+			return nil, err
+		}
+		return draftsToCachedMessages(drafts), nil
+	default:
+		return nil, fmt.Errorf("unknown mail box %q", box)
+	}
+}
+
+func draftsToCachedMessages(drafts []mailstore.Draft) []mailstore.CachedMessage {
+	messages := make([]mailstore.CachedMessage, 0, len(drafts))
+	for _, draft := range drafts {
+		messages = append(messages, mailstore.CachedMessage{
+			Meta: mailstore.MessageMeta{
+				SchemaVersion: draft.Meta.SchemaVersion,
+				Kind:          draft.Meta.Kind,
+				RemoteID:      draft.Meta.RemoteID,
+				DomainID:      draft.Meta.DomainID,
+				DomainName:    draft.Meta.DomainName,
+				InboxID:       draft.Meta.InboxID,
+				Mailbox:       draft.Meta.Kind,
+				Status:        draft.Meta.RemoteStatus,
+				RemoteError:   draft.Meta.RemoteError,
+				Subject:       draft.Meta.Subject,
+				FromAddress:   draft.Meta.FromAddress,
+				To:            draft.Meta.To,
+				CC:            draft.Meta.CC,
+				Read:          true,
+				ReceivedAt:    draft.Meta.UpdatedAt,
+				SyncedAt:      draft.Meta.UpdatedAt,
+			},
+			Path:     draft.Path,
+			BodyText: draft.Body,
+		})
+	}
+	return messages
+}
+
+func (m *Mail) applySearch() {
+	query := strings.ToLower(strings.TrimSpace(m.searchQuery))
+	if query == "" {
+		m.messages = append([]mailstore.CachedMessage(nil), m.allMessages...)
+		return
+	}
+	m.messages = m.messages[:0]
+	for _, message := range m.allMessages {
+		if cachedMessageMatches(message, query) {
+			m.messages = append(m.messages, message)
+		}
+	}
+}
+
+func cachedMessageMatches(message mailstore.CachedMessage, query string) bool {
+	values := []string{
+		message.Meta.Subject,
+		message.Meta.FromAddress,
+		message.Meta.FromName,
+		strings.Join(message.Meta.To, " "),
+		strings.Join(message.Meta.CC, " "),
+		message.Meta.Status,
+		message.Meta.RemoteError,
+		message.BodyText,
+		message.BodyHTML,
+	}
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), query) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Mail) updateMessageByPath(path string, update func(*mailstore.CachedMessage)) {
+	for i := range m.allMessages {
+		if m.allMessages[i].Path == path {
+			update(&m.allMessages[i])
+		}
+	}
+	m.applySearch()
+}
+
+func (m *Mail) removeMessageByPath(path string) {
+	m.allMessages = removeCachedMessageByPath(m.allMessages, path)
+	m.applySearch()
+}
+
+func removeCachedMessageByPath(messages []mailstore.CachedMessage, path string) []mailstore.CachedMessage {
+	for i := range messages {
+		if messages[i].Path == path {
+			return append(messages[:i], messages[i+1:]...)
+		}
+	}
+	return messages
+}
+
+func (m Mail) currentBox() string {
+	if m.boxIndex < 0 || m.boxIndex >= len(mailBoxes) {
+		return "inbox"
+	}
+	return mailBoxes[m.boxIndex]
+}
+
+func (m Mail) currentBoxSupportsMessageActions() bool {
+	switch m.currentBox() {
+	case "inbox", "archive", "trash":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -463,10 +1270,26 @@ func (m *Mail) clampSelection() {
 func (m Mail) listView(width, height int) string {
 	var b strings.Builder
 	mailbox := m.mailboxes[m.mailboxIndex]
-	b.WriteString(fmt.Sprintf("Mailbox %d/%d: %s\n", m.mailboxIndex+1, len(m.mailboxes), mailbox.Address))
-	b.WriteString("Use h/l to switch mailboxes, enter to read, r to reload.\n\n")
+	box := m.currentBox()
+	b.WriteString(fmt.Sprintf("Mailbox %d/%d: %s | Box %d/%d: %s\n", m.mailboxIndex+1, len(m.mailboxes), mailbox.Address, m.boxIndex+1, len(mailBoxes), box))
+	b.WriteString("Use h/l to switch mailboxes, [/] to switch boxes, / search, c compose, enter to read, r reload.")
+	if box == "inbox" {
+		b.WriteString(" a archive, d trash.")
+	} else if box == "archive" || box == "trash" {
+		b.WriteString(" R restore.")
+	} else if box == "drafts" {
+		b.WriteString(" e edit, S send, x delete.")
+	}
+	b.WriteByte('\n')
+	if m.status != "" {
+		b.WriteString(fmt.Sprintf("Status: %s\n", m.status))
+	}
+	if m.searchQuery != "" {
+		b.WriteString(fmt.Sprintf("Filter: %s (%d/%d)\n", m.searchQuery, len(m.messages), len(m.allMessages)))
+	}
+	b.WriteString("\n")
 	if len(m.messages) == 0 {
-		b.WriteString("No cached inbox messages for this mailbox. Run `telex sync`.\n")
+		b.WriteString(fmt.Sprintf("No cached %s messages for this mailbox. Run `telex sync`.\n", box))
 		return b.String()
 	}
 	limit := max(1, height-4)
@@ -485,7 +1308,11 @@ func (m Mail) listView(width, height int) string {
 		if !message.Meta.Read {
 			read = "*"
 		}
-		line := fmt.Sprintf("%s%s %-16s %-48s %s", cursor, read, truncate(message.Meta.FromAddress, 16), truncate(message.Meta.Subject, 48), message.Meta.ReceivedAt.Format("Jan 02 15:04"))
+		star := " "
+		if message.Meta.Starred {
+			star = "!"
+		}
+		line := fmt.Sprintf("%s%s%s %-16s %-48s %s", cursor, read, star, truncate(message.Meta.FromAddress, 16), truncate(message.Meta.Subject, 48), message.Meta.ReceivedAt.Format("Jan 02 15:04"))
 		b.WriteString(truncate(line, width))
 		b.WriteByte('\n')
 	}
@@ -498,6 +1325,23 @@ func (m Mail) detailView(width, height int) string {
 	b.WriteString(fmt.Sprintf("Subject: %s\n", message.Meta.Subject))
 	b.WriteString(fmt.Sprintf("From: %s\n", message.Meta.FromAddress))
 	b.WriteString(fmt.Sprintf("To: %s\n", strings.Join(message.Meta.To, ", ")))
+	if len(message.Meta.CC) > 0 {
+		b.WriteString(fmt.Sprintf("CC: %s\n", strings.Join(message.Meta.CC, ", ")))
+	}
+	b.WriteString(fmt.Sprintf("Box: %s\n", message.Meta.Mailbox))
+	if message.Meta.RemoteID > 0 {
+		b.WriteString(fmt.Sprintf("Remote ID: %d\n", message.Meta.RemoteID))
+	}
+	if message.Meta.Status != "" {
+		b.WriteString(fmt.Sprintf("Delivery status: %s\n", message.Meta.Status))
+	}
+	if message.Meta.RemoteError != "" {
+		b.WriteString(fmt.Sprintf("Delivery error: %s\n", message.Meta.RemoteError))
+	}
+	if m.currentBoxSupportsMessageActions() {
+		b.WriteString(fmt.Sprintf("Read: %t\n", message.Meta.Read))
+		b.WriteString(fmt.Sprintf("Starred: %t\n", message.Meta.Starred))
+	}
 	b.WriteString(fmt.Sprintf("Received: %s\n", message.Meta.ReceivedAt.Format("2006-01-02 15:04")))
 	if m.status != "" {
 		b.WriteString(fmt.Sprintf("Status: %s\n", m.status))

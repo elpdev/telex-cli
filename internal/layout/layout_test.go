@@ -4,14 +4,21 @@ import "testing"
 
 func TestCalculateNormalSize(t *testing.T) {
 	dims := Calculate(100, 40, true)
-	if dims.Header.Height != 2 || dims.Footer.Height != 2 {
+	if dims.Header.Height != bannerHeaderHeight || dims.Footer.Height != footerHeight {
 		t.Fatalf("unexpected chrome heights: header=%d footer=%d", dims.Header.Height, dims.Footer.Height)
 	}
 	if dims.Sidebar.Width != sidebarWidth {
 		t.Fatalf("unexpected sidebar width: %d", dims.Sidebar.Width)
 	}
-	if dims.Main.Width != 82 || dims.Main.Height != 36 {
+	if dims.Main.Width != 82 || dims.Main.Height != 34 {
 		t.Fatalf("unexpected main size: %dx%d", dims.Main.Width, dims.Main.Height)
+	}
+}
+
+func TestCalculateCompactHeaderOnSmallHeight(t *testing.T) {
+	dims := Calculate(100, 10, true)
+	if dims.Header.Height != compactHeaderHeight {
+		t.Fatalf("expected compact header on short terminal, got %d", dims.Header.Height)
 	}
 }
 

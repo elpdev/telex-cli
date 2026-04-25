@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/elpdev/telex-cli/internal/mail"
+	"github.com/elpdev/telex-cli/internal/mailsend"
 	"github.com/elpdev/telex-cli/internal/mailstore"
+	"github.com/elpdev/telex-cli/internal/mailsync"
 	"github.com/spf13/cobra"
 )
 
@@ -39,58 +41,31 @@ func newMailSyncCommand(rt *runtime) *cobra.Command {
 }
 
 func runMailSync(cmd *cobra.Command, rt *runtime, mailboxAddress string) error {
-	store, result, err := syncMailboxes(rt)
+	service, err := mailService(rt)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Synced %d active mailbox(es).\n", len(result.Created))
-	if len(result.Skipped) > 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "Skipped %d inactive mailbox(es).\n", len(result.Skipped))
+	store := mailstore.New(rt.dataPath)
+	result, err := mailsync.Run(rt.context(), store, service, mailboxAddress)
+	if err != nil {
+		return err
 	}
-
-	mailboxes := result.Created
-	if mailboxAddress != "" {
-		mailbox, _, err := store.FindMailboxByAddress(mailboxAddress)
-		if err != nil {
-			return err
-		}
-		mailboxes = []mailstore.MailboxMeta{*mailbox}
+	fmt.Fprintf(cmd.OutOrStdout(), "Synced %d active mailbox(es).\n", result.ActiveMailboxes)
+	if result.SkippedMailboxes > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "Skipped %d inactive mailbox(es).\n", result.SkippedMailboxes)
 	}
-
-	rows := [][]string{}
-	inboxCount := 0
-	bodyErrorCount := 0
-	inboxErrorCount := 0
-	for _, mailbox := range mailboxes {
-		synced, err := syncOutboxForMailbox(rt, store, mailbox)
-		if err != nil {
-			return fmt.Errorf("sync outbox for %s: %w", mailbox.Address, err)
-		}
-		for _, row := range synced {
-			rows = append(rows, append([]string{mailbox.Address}, row...))
-		}
-		count, bodyErrors, err := syncInboxForMailbox(rt, store, mailbox)
-		if err != nil {
-			inboxCount += count
-			bodyErrorCount += bodyErrors
-			inboxErrorCount++
-			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: sync inbox for %s: %v\n", mailbox.Address, err)
-			continue
-		}
-		inboxCount += count
-		bodyErrorCount += bodyErrors
-	}
+	rows := outboxUpdateRows(result.OutboxUpdates, true)
 	if len(rows) > 0 {
 		writeRows(cmd.OutOrStdout(), []string{"mailbox", "remote_id", "status", "subject", "path"}, rows)
 	} else {
 		fmt.Fprintln(cmd.OutOrStdout(), "Outbox already synced.")
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Synced %d inbox message(s).\n", inboxCount)
-	if bodyErrorCount > 0 {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Skipped %d inbox message body fetch(es) due to remote API errors; metadata was still cached.\n", bodyErrorCount)
+	fmt.Fprintf(cmd.OutOrStdout(), "Synced %d inbox message(s).\n", result.InboxMessages)
+	if result.BodyErrors > 0 {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Skipped %d inbox message body fetch(es) due to remote API errors; metadata was still cached.\n", result.BodyErrors)
 	}
-	if inboxErrorCount > 0 {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Skipped partial inbox sync for %d mailbox(es) due to remote API errors.\n", inboxErrorCount)
+	if result.InboxErrors > 0 {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Skipped partial inbox sync for %d mailbox(es) due to remote API errors.\n", result.InboxErrors)
 	}
 	return nil
 }
@@ -286,33 +261,15 @@ func newDraftSendCommand(rt *runtime) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			domainID := draft.Meta.DomainID
-			inboxID := draft.Meta.InboxID
-			outbound, err := service.CreateOutboundMessage(rt.context(), &mail.OutboundMessageInput{
-				DomainID:     &domainID,
-				InboxID:      &inboxID,
-				ToAddresses:  draft.Meta.To,
-				CCAddresses:  draft.Meta.CC,
-				BCCAddresses: draft.Meta.BCC,
-				Subject:      draft.Meta.Subject,
-				Body:         draft.Body,
-			}, false)
-			if err != nil {
-				return err
-			}
-			sent, err := service.SendOutboundMessage(rt.context(), outbound.ID)
-			if err != nil {
-				return err
-			}
-			moved, err := store.MoveDraftToOutbox(*mailbox, draft.Meta.ID, sent.ID, sent.Status, time.Now())
+			sent, err := mailsend.SendDraft(rt.context(), store, service, *mailbox, *draft)
 			if err != nil {
 				return err
 			}
 			writeRows(cmd.OutOrStdout(), []string{"key", "value"}, [][]string{
-				{"draft_id", moved.Meta.ID},
-				{"remote_id", strconv.FormatInt(sent.ID, 10)},
+				{"draft_id", sent.DraftID},
+				{"remote_id", strconv.FormatInt(sent.RemoteID, 10)},
 				{"status", sent.Status},
-				{"path", moved.Path},
+				{"path", sent.Path},
 			})
 			return nil
 		},
@@ -365,101 +322,21 @@ func newOutboxSyncCommand(rt *runtime) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rows, err := syncOutboxForMailbox(rt, store, *mailbox)
+			service, err := mailService(rt)
 			if err != nil {
 				return err
 			}
-			writeRows(cmd.OutOrStdout(), []string{"remote_id", "status", "subject", "path"}, rows)
+			updates, err := mailsync.SyncOutboxForMailbox(rt.context(), service, store, *mailbox)
+			if err != nil {
+				return err
+			}
+			writeRows(cmd.OutOrStdout(), []string{"remote_id", "status", "subject", "path"}, outboxUpdateRows(updates, false))
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
 	_ = cmd.MarkFlagRequired("mailbox")
 	return cmd
-}
-
-func syncMailboxes(rt *runtime) (mailstore.Store, *mailstore.SyncResult, error) {
-	service, err := mailService(rt)
-	if err != nil {
-		return mailstore.Store{}, nil, err
-	}
-	bootstrap, err := service.Mailboxes(rt.context())
-	if err != nil {
-		return mailstore.Store{}, nil, err
-	}
-	store := mailstore.New(rt.dataPath)
-	result, err := store.SyncMailboxes(bootstrap, time.Now())
-	if err != nil {
-		return mailstore.Store{}, nil, err
-	}
-	return store, result, nil
-}
-
-func syncOutboxForMailbox(rt *runtime, store mailstore.Store, mailbox mailstore.MailboxMeta) ([][]string, error) {
-	_, mailboxPath, err := store.FindMailboxByAddress(mailbox.Address)
-	if err != nil {
-		return nil, err
-	}
-	items, err := mailstore.ListOutbox(mailboxPath)
-	if err != nil {
-		return nil, err
-	}
-	service, err := mailService(rt)
-	if err != nil {
-		return nil, err
-	}
-	rows := make([][]string, 0, len(items))
-	for _, item := range items {
-		remote, err := service.ShowOutboundMessage(rt.context(), item.Meta.RemoteID)
-		if err != nil {
-			return nil, fmt.Errorf("fetch outbound %d: %w", item.Meta.RemoteID, err)
-		}
-		moved, err := store.SyncOutboxItem(mailbox, remote.ID, remote.Status, remote.LastError, outboundOccurredAt(remote))
-		if err != nil {
-			return nil, fmt.Errorf("store outbound %d status: %w", remote.ID, err)
-		}
-		rows = append(rows, []string{strconv.FormatInt(remote.ID, 10), remote.Status, remote.Subject, moved.Path})
-	}
-	return rows, nil
-}
-
-func syncInboxForMailbox(rt *runtime, store mailstore.Store, mailbox mailstore.MailboxMeta) (int, int, error) {
-	service, err := mailService(rt)
-	if err != nil {
-		return 0, 0, err
-	}
-	count := 0
-	bodyErrors := 0
-	page := 1
-	const perPage = 100
-	for {
-		messages, pagination, err := service.ListMessages(rt.context(), mail.MessageListParams{
-			ListParams: mail.ListParams{Page: page, PerPage: perPage},
-			InboxID:    mailbox.InboxID,
-			Mailbox:    "inbox",
-			Sort:       "-received_at",
-		})
-		if err != nil {
-			return count, bodyErrors, fmt.Errorf("list page %d: %w", page, err)
-		}
-		if len(messages) == 0 {
-			return count, bodyErrors, nil
-		}
-		for _, message := range messages {
-			body, err := service.MessageBody(rt.context(), message.ID)
-			if err != nil {
-				bodyErrors++
-			}
-			if _, err := store.StoreInboxMessage(mailbox, message, body, time.Now()); err != nil {
-				return count, bodyErrors, fmt.Errorf("store message %d: %w", message.ID, err)
-			}
-			count++
-		}
-		if pagination == nil || page*pagination.PerPage >= pagination.TotalCount {
-			return count, bodyErrors, nil
-		}
-		page++
-	}
 }
 
 func resolveDraftID(mailboxAddress, mailboxPath string, args []string, latest bool) (string, error) {
@@ -522,20 +399,16 @@ func draftRows(drafts []mailstore.Draft) [][]string {
 	return rows
 }
 
-func outboundOccurredAt(message *mail.OutboundMessage) time.Time {
-	if message == nil {
-		return time.Now()
+func outboxUpdateRows(updates []mailsync.OutboxUpdate, includeMailbox bool) [][]string {
+	rows := make([][]string, 0, len(updates))
+	for _, update := range updates {
+		row := []string{strconv.FormatInt(update.RemoteID, 10), update.Status, update.Subject, update.Path}
+		if includeMailbox {
+			row = append([]string{update.Mailbox}, row...)
+		}
+		rows = append(rows, row)
 	}
-	if message.SentAt != nil {
-		return *message.SentAt
-	}
-	if message.FailedAt != nil {
-		return *message.FailedAt
-	}
-	if message.QueuedAt != nil {
-		return *message.QueuedAt
-	}
-	return message.UpdatedAt
+	return rows
 }
 
 func newMailboxesCommand(rt *runtime) *cobra.Command {
@@ -574,7 +447,12 @@ func newMailboxesSyncCommand(rt *runtime) *cobra.Command {
 		Use:   "sync",
 		Short: "Sync active mailbox folders to the local filesystem",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			store, result, err := syncMailboxes(rt)
+			service, err := mailService(rt)
+			if err != nil {
+				return err
+			}
+			store := mailstore.New(rt.dataPath)
+			result, err := mailsync.SyncMailboxes(rt.context(), store, service)
 			if err != nil {
 				return err
 			}

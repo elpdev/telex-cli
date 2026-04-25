@@ -6,7 +6,28 @@ import (
 
 	"github.com/elpdev/telex-cli/internal/theme"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
+
+const paletteWidth = 62
+
+func renderPaletteHeader(t theme.Theme, title, subtitle string, width int) string {
+	rendered := t.Title.Render(title)
+	slashCount := max(3, width-lipgloss.Width(rendered)-1)
+	slashes := t.PaletteAccent.Render(strings.Repeat("/", slashCount))
+	out := rendered + " " + slashes
+	if subtitle != "" {
+		out += "\n" + t.Muted.Width(width).Render(subtitle)
+	}
+	return out
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
 
 type PaletteModel struct {
 	registry *Registry
@@ -144,8 +165,9 @@ func (m PaletteModel) View(t theme.Theme) string {
 	}
 
 	matches := m.matches()
+	innerWidth := paletteWidth - t.Modal.GetHorizontalFrameSize()
 	var b strings.Builder
-	b.WriteString(t.Title.Render("Command Palette"))
+	b.WriteString(renderPaletteHeader(t, "Telex", "", innerWidth))
 	b.WriteString("\n")
 	query := m.query
 	if query == "" {
@@ -168,14 +190,13 @@ func (m PaletteModel) View(t theme.Theme) string {
 		}
 	}
 
-	return t.Modal.Width(62).Render(b.String())
+	return t.Modal.Width(paletteWidth).Render(b.String())
 }
 
 func (m PaletteModel) themeView(t theme.Theme) string {
+	innerWidth := paletteWidth - t.Modal.GetHorizontalFrameSize()
 	var b strings.Builder
-	b.WriteString(t.Title.Render("Command Palette / Themes"))
-	b.WriteString("\n")
-	b.WriteString(t.Muted.Render("Move to preview, enter to select, esc to go back."))
+	b.WriteString(renderPaletteHeader(t, "Telex / Themes", "Move to preview, enter to select, esc to go back.", innerWidth))
 	b.WriteString("\n\n")
 
 	for i, candidate := range m.themes {
@@ -191,7 +212,7 @@ func (m PaletteModel) themeView(t theme.Theme) string {
 		b.WriteString(line + "\n")
 	}
 
-	return t.Modal.Width(62).Render(b.String())
+	return t.Modal.Width(paletteWidth).Render(b.String())
 }
 
 func (m *PaletteModel) Reset(currentTheme string) {

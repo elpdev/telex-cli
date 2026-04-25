@@ -41,7 +41,7 @@ func newRootCommand(meta buildInfo) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTUI(meta, rt.dataPath)
+			return runTUI(meta, rt.configPath, rt.dataPath)
 		},
 	}
 	cmd.PersistentFlags().StringVar(&rt.configPath, "config", "", "config file path")
@@ -72,13 +72,13 @@ func newTUICommand(rt *runtime) *cobra.Command {
 		Use:   "tui",
 		Short: "Launch the full-screen TUI",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTUI(rt.meta, rt.dataPath)
+			return runTUI(rt.meta, rt.configPath, rt.dataPath)
 		},
 	}
 }
 
-func runTUI(meta buildInfo, dataPath string) error {
-	program := tea.NewProgram(app.NewWithDataPath(meta, dataPath))
+func runTUI(meta buildInfo, configPath, dataPath string) error {
+	program := tea.NewProgram(app.NewWithPaths(meta, configPath, dataPath))
 	_, err := program.Run()
 	return err
 }

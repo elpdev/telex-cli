@@ -12,32 +12,36 @@ import (
 )
 
 type DraftInput struct {
-	Mailbox MailboxMeta
-	Subject string
-	To      []string
-	CC      []string
-	BCC     []string
-	Body    string
-	Now     time.Time
+	Mailbox         MailboxMeta
+	Subject         string
+	To              []string
+	CC              []string
+	BCC             []string
+	Body            string
+	SourceMessageID int64
+	ConversationID  int64
+	Now             time.Time
 }
 
 type DraftMeta struct {
-	SchemaVersion int       `toml:"schema_version"`
-	Kind          string    `toml:"kind"`
-	ID            string    `toml:"id"`
-	DomainID      int64     `toml:"domain_id"`
-	DomainName    string    `toml:"domain_name"`
-	InboxID       int64     `toml:"inbox_id"`
-	FromAddress   string    `toml:"from_address"`
-	RemoteID      int64     `toml:"remote_id"`
-	RemoteStatus  string    `toml:"remote_status"`
-	RemoteError   string    `toml:"remote_error"`
-	Subject       string    `toml:"subject"`
-	To            []string  `toml:"to"`
-	CC            []string  `toml:"cc"`
-	BCC           []string  `toml:"bcc"`
-	CreatedAt     time.Time `toml:"created_at"`
-	UpdatedAt     time.Time `toml:"updated_at"`
+	SchemaVersion   int       `toml:"schema_version"`
+	Kind            string    `toml:"kind"`
+	ID              string    `toml:"id"`
+	DomainID        int64     `toml:"domain_id"`
+	DomainName      string    `toml:"domain_name"`
+	InboxID         int64     `toml:"inbox_id"`
+	FromAddress     string    `toml:"from_address"`
+	RemoteID        int64     `toml:"remote_id"`
+	SourceMessageID int64     `toml:"source_message_id"`
+	ConversationID  int64     `toml:"conversation_id"`
+	RemoteStatus    string    `toml:"remote_status"`
+	RemoteError     string    `toml:"remote_error"`
+	Subject         string    `toml:"subject"`
+	To              []string  `toml:"to"`
+	CC              []string  `toml:"cc"`
+	BCC             []string  `toml:"bcc"`
+	CreatedAt       time.Time `toml:"created_at"`
+	UpdatedAt       time.Time `toml:"updated_at"`
 }
 
 type Draft struct {
@@ -83,19 +87,21 @@ func (s Store) CreateDraft(input DraftInput) (*Draft, error) {
 		return nil, err
 	}
 	meta := DraftMeta{
-		SchemaVersion: SchemaVersion,
-		Kind:          "draft",
-		ID:            id,
-		DomainID:      input.Mailbox.DomainID,
-		DomainName:    input.Mailbox.DomainName,
-		InboxID:       input.Mailbox.InboxID,
-		FromAddress:   input.Mailbox.Address,
-		Subject:       input.Subject,
-		To:            cleanStrings(input.To),
-		CC:            cleanStrings(input.CC),
-		BCC:           cleanStrings(input.BCC),
-		CreatedAt:     input.Now,
-		UpdatedAt:     input.Now,
+		SchemaVersion:   SchemaVersion,
+		Kind:            "draft",
+		ID:              id,
+		DomainID:        input.Mailbox.DomainID,
+		DomainName:      input.Mailbox.DomainName,
+		InboxID:         input.Mailbox.InboxID,
+		FromAddress:     input.Mailbox.Address,
+		Subject:         input.Subject,
+		SourceMessageID: input.SourceMessageID,
+		ConversationID:  input.ConversationID,
+		To:              cleanStrings(input.To),
+		CC:              cleanStrings(input.CC),
+		BCC:             cleanStrings(input.BCC),
+		CreatedAt:       input.Now,
+		UpdatedAt:       input.Now,
 	}
 	if err := writeTOML(filepath.Join(draftPath, "meta.toml"), meta); err != nil {
 		return nil, err
@@ -108,6 +114,45 @@ func (s Store) CreateDraft(input DraftInput) (*Draft, error) {
 		return nil, err
 	}
 	return &Draft{Meta: meta, Path: draftPath, Body: body}, nil
+}
+
+func (s Store) UpdateDraft(path string, input DraftInput) (*Draft, error) {
+	draft, err := ReadDraft(path)
+	if err != nil {
+		return nil, err
+	}
+	if input.Now.IsZero() {
+		input.Now = time.Now()
+	}
+	draft.Meta.Subject = input.Subject
+	draft.Meta.To = cleanStrings(input.To)
+	draft.Meta.CC = cleanStrings(input.CC)
+	draft.Meta.BCC = cleanStrings(input.BCC)
+	draft.Meta.SourceMessageID = input.SourceMessageID
+	draft.Meta.ConversationID = input.ConversationID
+	draft.Meta.UpdatedAt = input.Now
+	if err := writeTOML(filepath.Join(path, "meta.toml"), draft.Meta); err != nil {
+		return nil, err
+	}
+	body := input.Body
+	if body == "" {
+		body = "\n"
+	}
+	if err := writeFile(filepath.Join(path, "body.md"), []byte(body)); err != nil {
+		return nil, err
+	}
+	return ReadDraft(path)
+}
+
+func DeleteDraft(path string) error {
+	draft, err := ReadDraft(path)
+	if err != nil {
+		return err
+	}
+	if draft.Meta.Kind != "draft" {
+		return fmt.Errorf("can only delete drafts, got %s", draft.Meta.Kind)
+	}
+	return os.RemoveAll(path)
 }
 
 func ListDrafts(mailboxPath string) ([]Draft, error) {
@@ -164,6 +209,10 @@ func (s Store) MoveDraftToOutbox(mailbox MailboxMeta, draftID string, remoteID i
 
 func ListOutbox(mailboxPath string) ([]Draft, error) {
 	return listItems(mailboxPath, "outbox")
+}
+
+func ListSent(mailboxPath string) ([]Draft, error) {
+	return listItems(mailboxPath, "sent")
 }
 
 func (s Store) SyncOutboxItem(mailbox MailboxMeta, remoteID int64, remoteStatus, remoteError string, occurredAt time.Time) (*Draft, error) {

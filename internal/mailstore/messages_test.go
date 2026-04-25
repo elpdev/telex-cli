@@ -72,6 +72,36 @@ func TestListInboxReturnsNewestFirstAndReadsBodies(t *testing.T) {
 	}
 }
 
+func TestListInboxReturnsUnreadBeforeRead(t *testing.T) {
+	store := New(t.TempDir())
+	mailbox := testMailboxMeta()
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	olderUnread := time.Date(2026, 4, 23, 13, 0, 0, 0, time.UTC)
+	newerRead := time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)
+	if _, err := store.StoreInboxMessage(mailbox, mail.Message{ID: 1, Subject: "New Read", FromAddress: "read@example.net", SystemState: "inbox", Read: true, ReceivedAt: newerRead}, nil, newerRead); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StoreInboxMessage(mailbox, mail.Message{ID: 2, Subject: "Old Unread", FromAddress: "unread@example.net", SystemState: "inbox", Read: false, ReceivedAt: olderUnread}, nil, newerRead); err != nil {
+		t.Fatal(err)
+	}
+	mailboxPath, err := store.MailboxPath(mailbox.DomainName, mailbox.LocalPart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := ListInbox(mailboxPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("len(messages) = %d, want 2", len(messages))
+	}
+	if messages[0].Meta.RemoteID != 2 || messages[1].Meta.RemoteID != 1 {
+		t.Fatalf("message order = %d, %d; want unread before read", messages[0].Meta.RemoteID, messages[1].Meta.RemoteID)
+	}
+}
+
 func TestFindInboxMessageAllowsMissingBody(t *testing.T) {
 	store := New(t.TempDir())
 	mailbox := testMailboxMeta()
@@ -92,6 +122,91 @@ func TestFindInboxMessageAllowsMissingBody(t *testing.T) {
 	if message.BodyText != "" || message.BodyHTML != "" {
 		t.Fatalf("body = %q/%q, want empty", message.BodyText, message.BodyHTML)
 	}
+}
+
+func TestSetCachedMessageReadUpdatesMetadata(t *testing.T) {
+	store := New(t.TempDir())
+	mailbox := testMailboxMeta()
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.StoreInboxMessage(mailbox, mail.Message{ID: 9, Subject: "Unread", FromAddress: "sender@example.net", SystemState: "inbox", ReceivedAt: time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)}, nil, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := SetCachedMessageRead(path, true, time.Date(2026, 4, 24, 15, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !message.Meta.Read {
+		t.Fatal("expected message to be read")
+	}
+	readBack, err := ReadCachedMessage(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !readBack.Meta.Read {
+		t.Fatal("expected persisted metadata to be read")
+	}
+}
+
+func TestSetCachedMessageStarredUpdatesMetadata(t *testing.T) {
+	store := New(t.TempDir())
+	mailbox := testMailboxMeta()
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.StoreInboxMessage(mailbox, mail.Message{ID: 10, Subject: "Star", FromAddress: "sender@example.net", SystemState: "inbox", ReceivedAt: time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)}, nil, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := SetCachedMessageStarred(path, true, time.Date(2026, 4, 24, 15, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !message.Meta.Starred {
+		t.Fatal("expected message to be starred")
+	}
+	readBack, err := ReadCachedMessage(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !readBack.Meta.Starred {
+		t.Fatal("expected persisted metadata to be starred")
+	}
+}
+
+func TestMoveCachedMessageMovesFolderAndUpdatesMetadata(t *testing.T) {
+	store := New(t.TempDir())
+	mailbox := testMailboxMeta()
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	receivedAt := time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)
+	path, err := store.StoreInboxMessage(mailbox, mail.Message{ID: 11, Subject: "Archive Me", FromAddress: "sender@example.net", SystemState: "inbox", ReceivedAt: receivedAt}, &mail.MessageBody{Text: "body", HTML: "<p>body</p>"}, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mailboxPath, err := store.MailboxPath(mailbox.DomainName, mailbox.LocalPart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := MoveCachedMessage(mailboxPath, "inbox", "archive", path, time.Date(2026, 4, 24, 15, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := filepath.Join(mailboxPath, "archive", "2026", "04", "24", "archive-me-11")
+	if moved.Path != wantPath {
+		t.Fatalf("path = %q, want %q", moved.Path, wantPath)
+	}
+	if moved.Meta.Mailbox != "archive" {
+		t.Fatalf("mailbox = %q, want archive", moved.Meta.Mailbox)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("original path should not exist: %v", err)
+	}
+	assertFile(t, filepath.Join(wantPath, "body.txt"))
+	assertFile(t, filepath.Join(wantPath, "body.html"))
 }
 
 func assertFile(t *testing.T, path string) {

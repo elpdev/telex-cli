@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -20,6 +21,8 @@ type MessageMeta struct {
 	DomainName     string    `toml:"domain_name"`
 	InboxID        int64     `toml:"inbox_id"`
 	Mailbox        string    `toml:"mailbox"`
+	Status         string    `toml:"status"`
+	RemoteError    string    `toml:"remote_error"`
 	Subject        string    `toml:"subject"`
 	FromAddress    string    `toml:"from_address"`
 	FromName       string    `toml:"from_name"`
@@ -60,6 +63,7 @@ func (s Store) StoreInboxMessage(mailbox MailboxMeta, message mail.Message, body
 		DomainName:     mailbox.DomainName,
 		InboxID:        mailbox.InboxID,
 		Mailbox:        message.SystemState,
+		Status:         message.Status,
 		Subject:        message.Subject,
 		FromAddress:    message.FromAddress,
 		FromName:       message.FromName,
@@ -93,11 +97,20 @@ func messageItemPath(mailboxPath, box string, at time.Time, remoteID int64, subj
 }
 
 func ListInbox(mailboxPath string) ([]CachedMessage, error) {
-	messages, err := listMessages(mailboxPath, "inbox")
+	return ListMessages(mailboxPath, "inbox")
+}
+
+func ListMessages(mailboxPath, box string) ([]CachedMessage, error) {
+	messages, err := listMessages(mailboxPath, box)
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(messages, func(i, j int) bool { return messages[i].Meta.ReceivedAt.After(messages[j].Meta.ReceivedAt) })
+	sort.Slice(messages, func(i, j int) bool {
+		if box == "inbox" && messages[i].Meta.Read != messages[j].Meta.Read {
+			return !messages[i].Meta.Read
+		}
+		return messages[i].Meta.ReceivedAt.After(messages[j].Meta.ReceivedAt)
+	})
 	return messages, nil
 }
 
@@ -112,6 +125,61 @@ func FindInboxMessage(mailboxPath string, remoteID int64) (*CachedMessage, error
 		}
 	}
 	return nil, fmt.Errorf("inbox message %d not found", remoteID)
+}
+
+func SetCachedMessageRead(path string, read bool, syncedAt time.Time) (*CachedMessage, error) {
+	message, err := ReadCachedMessage(path)
+	if err != nil {
+		return nil, err
+	}
+	message.Meta.Read = read
+	message.Meta.SyncedAt = syncedAt
+	if err := writeTOML(filepath.Join(path, "meta.toml"), message.Meta); err != nil {
+		return nil, err
+	}
+	return ReadCachedMessage(path)
+}
+
+func SetCachedMessageStarred(path string, starred bool, syncedAt time.Time) (*CachedMessage, error) {
+	message, err := ReadCachedMessage(path)
+	if err != nil {
+		return nil, err
+	}
+	message.Meta.Starred = starred
+	message.Meta.SyncedAt = syncedAt
+	if err := writeTOML(filepath.Join(path, "meta.toml"), message.Meta); err != nil {
+		return nil, err
+	}
+	return ReadCachedMessage(path)
+}
+
+func MoveCachedMessage(mailboxPath, fromBox, toBox, messagePath string, syncedAt time.Time) (*CachedMessage, error) {
+	message, err := ReadCachedMessage(messagePath)
+	if err != nil {
+		return nil, err
+	}
+	fromRoot := filepath.Join(mailboxPath, fromBox)
+	if rel, err := filepath.Rel(fromRoot, messagePath); err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return nil, fmt.Errorf("message path %q is not in %s", messagePath, fromBox)
+	}
+	destPath := messageItemPath(mailboxPath, toBox, message.Meta.ReceivedAt, message.Meta.RemoteID, message.Meta.Subject)
+	if _, err := os.Stat(destPath); err == nil {
+		return nil, fmt.Errorf("cached message already exists in %s", toBox)
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(messagePath, destPath); err != nil {
+		return nil, err
+	}
+	message.Meta.Mailbox = toBox
+	message.Meta.SyncedAt = syncedAt
+	if err := writeTOML(filepath.Join(destPath, "meta.toml"), message.Meta); err != nil {
+		return nil, err
+	}
+	return ReadCachedMessage(destPath)
 }
 
 func ReadCachedMessage(path string) (*CachedMessage, error) {
