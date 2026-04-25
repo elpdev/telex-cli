@@ -247,7 +247,7 @@ func newInboxForwardCommand(rt *runtime) *cobra.Command {
 }
 
 func newDraftsCommand(rt *runtime) *cobra.Command {
-	cmd := &cobra.Command{Use: "drafts", Short: "Manage local drafts"}
+	cmd := &cobra.Command{Use: "drafts", Short: "Manage drafts"}
 	cmd.AddCommand(newDraftCreateCommand(rt))
 	cmd.AddCommand(newDraftListCommand(rt))
 	cmd.AddCommand(newDraftShowCommand(rt))
@@ -268,7 +268,7 @@ func newDraftCreateCommand(rt *runtime) *cobra.Command {
 	var body string
 	cmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create a local draft",
+		Short: "Create a draft",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store := mailstore.New(rt.dataPath)
 			mailbox, _, err := store.FindMailboxByAddress(mailboxAddress)
@@ -310,7 +310,7 @@ func newDraftListCommand(rt *runtime) *cobra.Command {
 	var mailboxAddress string
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List local drafts for a synced mailbox",
+		Short: "List drafts for a synced mailbox",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store := mailstore.New(rt.dataPath)
 			_, mailboxPath, err := store.FindMailboxByAddress(mailboxAddress)
@@ -345,7 +345,7 @@ func newDraftShowCommand(rt *runtime) *cobra.Command {
 	var latest bool
 	cmd := &cobra.Command{
 		Use:   "show [draft-id]",
-		Short: "Show a local draft",
+		Short: "Show a draft",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store := mailstore.New(rt.dataPath)
@@ -367,7 +367,7 @@ func newDraftShowCommand(rt *runtime) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
-	cmd.Flags().BoolVar(&latest, "latest", false, "show the newest local draft")
+	cmd.Flags().BoolVar(&latest, "latest", false, "show the newest draft")
 	_ = cmd.MarkFlagRequired("mailbox")
 	return cmd
 }
@@ -382,7 +382,7 @@ func newDraftEditCommand(rt *runtime) *cobra.Command {
 	var body string
 	cmd := &cobra.Command{
 		Use:   "edit [draft-id]",
-		Short: "Edit local draft fields",
+		Short: "Edit draft fields",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store := mailstore.New(rt.dataPath)
@@ -433,7 +433,7 @@ func newDraftEditCommand(rt *runtime) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
-	cmd.Flags().BoolVar(&latest, "latest", false, "edit the newest local draft")
+	cmd.Flags().BoolVar(&latest, "latest", false, "edit the newest draft")
 	cmd.Flags().StringVar(&subject, "subject", "", "draft subject")
 	cmd.Flags().StringSliceVar(&to, "to", nil, "recipient address, repeatable or comma-separated")
 	cmd.Flags().StringSliceVar(&cc, "cc", nil, "cc address, repeatable or comma-separated")
@@ -448,7 +448,7 @@ func newDraftAttachCommand(rt *runtime) *cobra.Command {
 	var latest bool
 	cmd := &cobra.Command{
 		Use:   "attach [draft-id] <file>",
-		Short: "Attach a local file to a local draft",
+		Short: "Attach a local file to a draft",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store := mailstore.New(rt.dataPath)
@@ -471,7 +471,7 @@ func newDraftAttachCommand(rt *runtime) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
-	cmd.Flags().BoolVar(&latest, "latest", false, "attach to the newest local draft")
+	cmd.Flags().BoolVar(&latest, "latest", false, "attach to the newest draft")
 	_ = cmd.MarkFlagRequired("mailbox")
 	return cmd
 }
@@ -481,7 +481,7 @@ func newDraftDetachCommand(rt *runtime) *cobra.Command {
 	var latest bool
 	cmd := &cobra.Command{
 		Use:   "detach [draft-id] <attachment>",
-		Short: "Detach a local file from a local draft",
+		Short: "Detach a local file from a draft",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store := mailstore.New(rt.dataPath)
@@ -504,7 +504,7 @@ func newDraftDetachCommand(rt *runtime) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
-	cmd.Flags().BoolVar(&latest, "latest", false, "detach from the newest local draft")
+	cmd.Flags().BoolVar(&latest, "latest", false, "detach from the newest draft")
 	_ = cmd.MarkFlagRequired("mailbox")
 	return cmd
 }
@@ -514,7 +514,7 @@ func newDraftDeleteCommand(rt *runtime) *cobra.Command {
 	var latest bool
 	cmd := &cobra.Command{
 		Use:   "delete [draft-id]",
-		Short: "Delete a local or synced remote draft",
+		Short: "Delete a draft",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store := mailstore.New(rt.dataPath)
@@ -548,7 +548,7 @@ func newDraftDeleteCommand(rt *runtime) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
-	cmd.Flags().BoolVar(&latest, "latest", false, "delete the newest local draft")
+	cmd.Flags().BoolVar(&latest, "latest", false, "delete the newest draft")
 	_ = cmd.MarkFlagRequired("mailbox")
 	return cmd
 }
@@ -558,7 +558,7 @@ func newDraftSendCommand(rt *runtime) *cobra.Command {
 	var latest bool
 	cmd := &cobra.Command{
 		Use:   "send [draft-id]",
-		Short: "Send a local draft and move it to outbox",
+		Short: "Send a draft and move it to outbox",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store := mailstore.New(rt.dataPath)
@@ -596,7 +596,7 @@ func newDraftSendCommand(rt *runtime) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "synced mailbox address, e.g. hello@example.com")
-	cmd.Flags().BoolVar(&latest, "latest", false, "send the newest local draft")
+	cmd.Flags().BoolVar(&latest, "latest", false, "send the newest draft")
 	_ = cmd.MarkFlagRequired("mailbox")
 	return cmd
 }
@@ -670,12 +670,12 @@ func resolveDraftID(mailboxAddress, mailboxPath string, args []string, latest bo
 	drafts, err := mailstore.ListDrafts(mailboxPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("no local drafts exist for %s", mailboxAddress)
+			return "", fmt.Errorf("no drafts exist for %s", mailboxAddress)
 		}
 		return "", err
 	}
 	if len(drafts) == 0 {
-		return "", fmt.Errorf("no local drafts exist for %s", mailboxAddress)
+		return "", fmt.Errorf("no drafts exist for %s", mailboxAddress)
 	}
 	if latest || len(drafts) == 1 {
 		return drafts[0].Meta.ID, nil
@@ -691,12 +691,12 @@ func draftNotFoundError(mailboxAddress, draftID, mailboxPath string) error {
 	drafts, err := mailstore.ListDrafts(mailboxPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("draft %q was not found for %s; no local drafts exist yet", draftID, mailboxAddress)
+			return fmt.Errorf("draft %q was not found for %s; no drafts exist yet", draftID, mailboxAddress)
 		}
 		return fmt.Errorf("draft %q was not found for %s; listing drafts failed: %w", draftID, mailboxAddress, err)
 	}
 	if len(drafts) == 0 {
-		return fmt.Errorf("draft %q was not found for %s; no local drafts exist yet", draftID, mailboxAddress)
+		return fmt.Errorf("draft %q was not found for %s; no drafts exist yet", draftID, mailboxAddress)
 	}
 	ids := make([]string, 0, len(drafts))
 	for _, draft := range drafts {

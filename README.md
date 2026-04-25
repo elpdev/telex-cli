@@ -91,7 +91,7 @@ telex mail messages star <id>
 # Create a draft
 telex mail drafts create --mailbox hello@example.com --subject "Hello" --to someone@example.com --body "Message here"
 
-# List drafts
+# List local and synced remote drafts
 telex mail drafts list --mailbox hello@example.com
 
 # Show or edit a draft
@@ -101,7 +101,7 @@ telex mail drafts edit <id> --mailbox hello@example.com --body "Updated message"
 # Attach a file
 telex mail drafts attach <id> <file> --mailbox hello@example.com
 
-# Send
+# Send local or synced remote draft
 telex mail drafts send <id> --mailbox hello@example.com
 ```
 

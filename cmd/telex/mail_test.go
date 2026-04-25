@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/elpdev/telex-cli/internal/config"
 	"github.com/elpdev/telex-cli/internal/mail"
 	"github.com/elpdev/telex-cli/internal/mailstore"
 )
@@ -194,6 +198,52 @@ func TestInboxShowCommandHandlesMetadataOnlyCache(t *testing.T) {
 	got := out.String()
 	if !strings.Contains(got, "Metadata Only") || !strings.Contains(got, "body not cached") {
 		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestDraftDeleteCommandDeletesSyncedRemoteDraft(t *testing.T) {
+	var deleted bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/outbound_messages/900" || r.Method != http.MethodDelete {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		deleted = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := (&config.Config{BaseURL: server.URL, ClientID: "id", SecretKey: "secret"}).SaveTo(configPath); err != nil {
+		t.Fatal(err)
+	}
+	_, tokenPath := config.Paths(configPath)
+	if err := config.SaveTokenTo(tokenPath, &config.TokenCache{Token: "token", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	dataDir := t.TempDir()
+	store := mailstore.New(dataDir)
+	mailbox := testCommandMailboxMeta()
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := store.StoreRemoteDraft(mailbox, mail.OutboundMessage{ID: 900, DomainID: mailbox.DomainID, InboxID: mailbox.InboxID, Status: "draft", Subject: "Remote", ToAddresses: []string{"to@example.net"}, BodyText: "Body", CreatedAt: time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC)}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCommand(buildInfo{})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--config", configPath, "--data-dir", dataDir, "mail", "drafts", "delete", draft.Meta.ID, "--mailbox", mailbox.Address})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !deleted {
+		t.Fatal("expected remote draft delete request")
+	}
+	if _, err := mailstore.ReadDraft(draft.Path); err == nil {
+		t.Fatal("expected local synced draft cache to be deleted")
 	}
 }
 
