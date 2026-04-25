@@ -205,7 +205,7 @@ func (m PaletteModel) themeView(t theme.Theme) string {
 			line += "  current"
 		}
 		if i == m.selected {
-			line = t.Selected.Render(line)
+			line = t.Selected.Render("▸ " + line)
 		} else {
 			line = t.Text.Render("  " + line)
 		}

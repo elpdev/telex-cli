@@ -29,13 +29,12 @@ func View(m Model, width, height int, t theme.Theme) string {
 	}
 	b.WriteString("\n\n")
 	for _, item := range m.Items {
-		line := item.Title
 		if item.ID == m.ActiveID {
-			line = t.Selected.Render(line)
+			b.WriteString(t.Selected.Render("▸ " + item.Title))
 		} else {
-			line = t.Text.Render("  " + line)
+			b.WriteString(t.Text.Render("  " + item.Title))
 		}
-		b.WriteString(line + "\n")
+		b.WriteString("\n")
 	}
 	return t.Sidebar.Width(innerWidth).Height(innerHeight).Render(b.String())
 }
