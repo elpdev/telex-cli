@@ -99,6 +99,9 @@ type Message struct {
 	ReadAt         *time.Time     `json:"read_at"`
 	Starred        bool           `json:"starred"`
 	SystemState    string         `json:"system_state"`
+	SenderBlocked  bool           `json:"sender_blocked"`
+	SenderTrusted  bool           `json:"sender_trusted"`
+	DomainBlocked  bool           `json:"domain_blocked"`
 	Labels         []Label        `json:"labels"`
 	ReceivedAt     time.Time      `json:"received_at"`
 	CreatedAt      time.Time      `json:"created_at"`

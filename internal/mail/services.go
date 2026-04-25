@@ -119,6 +119,14 @@ func (s *Service) TrashMessage(ctx context.Context, id int64) (*Message, error) 
 	return s.messageAction(ctx, id, http.MethodPost, "trash", nil)
 }
 
+func (s *Service) JunkMessage(ctx context.Context, id int64) (*Message, error) {
+	return s.messageAction(ctx, id, http.MethodPost, "junk", nil)
+}
+
+func (s *Service) NotJunkMessage(ctx context.Context, id int64) (*Message, error) {
+	return s.messageAction(ctx, id, http.MethodPost, "not_junk", nil)
+}
+
 func (s *Service) MarkMessageRead(ctx context.Context, id int64) (*Message, error) {
 	return s.messageAction(ctx, id, http.MethodPost, "mark_read", nil)
 }
@@ -133,6 +141,30 @@ func (s *Service) StarMessage(ctx context.Context, id int64) (*Message, error) {
 
 func (s *Service) UnstarMessage(ctx context.Context, id int64) (*Message, error) {
 	return s.messageAction(ctx, id, http.MethodPost, "unstar", nil)
+}
+
+func (s *Service) BlockSender(ctx context.Context, id int64) (*Message, error) {
+	return s.messageAction(ctx, id, http.MethodPost, "block_sender", nil)
+}
+
+func (s *Service) UnblockSender(ctx context.Context, id int64) (*Message, error) {
+	return s.messageAction(ctx, id, http.MethodPost, "unblock_sender", nil)
+}
+
+func (s *Service) BlockDomain(ctx context.Context, id int64) (*Message, error) {
+	return s.messageAction(ctx, id, http.MethodPost, "block_domain", nil)
+}
+
+func (s *Service) UnblockDomain(ctx context.Context, id int64) (*Message, error) {
+	return s.messageAction(ctx, id, http.MethodPost, "unblock_domain", nil)
+}
+
+func (s *Service) TrustSender(ctx context.Context, id int64) (*Message, error) {
+	return s.messageAction(ctx, id, http.MethodPost, "trust_sender", nil)
+}
+
+func (s *Service) UntrustSender(ctx context.Context, id int64) (*Message, error) {
+	return s.messageAction(ctx, id, http.MethodPost, "untrust_sender", nil)
 }
 
 func (s *Service) Reply(ctx context.Context, id int64) (*OutboundMessage, error) {

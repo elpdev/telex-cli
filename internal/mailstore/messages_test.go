@@ -217,6 +217,24 @@ func TestMoveCachedMessageMovesFolderAndUpdatesMetadata(t *testing.T) {
 	assertFile(t, filepath.Join(wantPath, "body.html"))
 }
 
+func TestUpdateCachedMessageByRemoteIDUpdatesLabelsAndSenderPolicy(t *testing.T) {
+	store := New(t.TempDir())
+	mailbox := testMailboxMeta()
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StoreInboxMessage(mailbox, mail.Message{ID: 12, Subject: "Policy", FromAddress: "sender@example.net", SystemState: "inbox", ReceivedAt: time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)}, nil, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.UpdateCachedMessageByRemoteID(12, mail.Message{ID: 12, Subject: "Policy", FromAddress: "sender@example.net", SystemState: "inbox", SenderTrusted: true, Labels: []mail.Label{{ID: 3, Name: "Billing", Color: "#ff0"}}, ReceivedAt: time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)}, time.Date(2026, 4, 24, 15, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Meta.SenderTrusted || len(updated.Meta.Labels) != 1 || updated.Meta.Labels[0].Name != "Billing" {
+		t.Fatalf("updated = %#v", updated.Meta)
+	}
+}
+
 func assertFile(t *testing.T, path string) {
 	t.Helper()
 	info, err := os.Stat(path)

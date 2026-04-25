@@ -95,6 +95,35 @@ func TestArchiveMessageUsesActionEndpoint(t *testing.T) {
 	}
 }
 
+func TestJunkAndSenderPolicyActionsUseConfirmedEndpoints(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Service, context.Context, int64) (*Message, error)
+		path string
+	}{
+		{"junk", (*Service).JunkMessage, "/api/v1/messages/99/junk"},
+		{"not junk", (*Service).NotJunkMessage, "/api/v1/messages/99/not_junk"},
+		{"block sender", (*Service).BlockSender, "/api/v1/messages/99/block_sender"},
+		{"unblock sender", (*Service).UnblockSender, "/api/v1/messages/99/unblock_sender"},
+		{"block domain", (*Service).BlockDomain, "/api/v1/messages/99/block_domain"},
+		{"unblock domain", (*Service).UnblockDomain, "/api/v1/messages/99/unblock_domain"},
+		{"trust sender", (*Service).TrustSender, "/api/v1/messages/99/trust_sender"},
+		{"untrust sender", (*Service).UntrustSender, "/api/v1/messages/99/untrust_sender"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeClient{body: []byte(`{"data":{"id":99}}`)}
+			service := NewService(fake)
+			if _, err := tt.run(service, context.Background(), 99); err != nil {
+				t.Fatal(err)
+			}
+			if fake.postPath != tt.path {
+				t.Fatalf("post path = %q, want %q", fake.postPath, tt.path)
+			}
+		})
+	}
+}
+
 func TestConversationTimelineUsesTimelineEndpoint(t *testing.T) {
 	fake := &fakeClient{body: []byte(`{"data":[{"kind":"inbound","record_id":123,"subject":"Thread","conversation_id":99}]}`)}
 	service := NewService(fake)

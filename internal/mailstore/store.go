@@ -14,7 +14,7 @@ import (
 
 const SchemaVersion = 1
 
-var mailboxDirs = []string{"inbox", "drafts", "outbox", "sent", "failed", "archive", "trash"}
+var mailboxDirs = []string{"inbox", "junk", "drafts", "outbox", "sent", "failed", "archive", "trash"}
 
 type Store struct {
 	Root string

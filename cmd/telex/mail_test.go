@@ -126,6 +126,27 @@ func TestLabelsCommandsExist(t *testing.T) {
 	}
 }
 
+func TestSenderReputationCommandsExist(t *testing.T) {
+	for _, args := range [][]string{
+		{"mail", "messages", "junk", "123", "--help"},
+		{"mail", "messages", "not-junk", "123", "--help"},
+		{"mail", "messages", "block-sender", "123", "--help"},
+		{"mail", "messages", "unblock-sender", "123", "--help"},
+		{"mail", "messages", "block-domain", "123", "--help"},
+		{"mail", "messages", "unblock-domain", "123", "--help"},
+		{"mail", "messages", "trust-sender", "123", "--help"},
+		{"mail", "messages", "untrust-sender", "123", "--help"},
+	} {
+		cmd := newRootCommand(buildInfo{})
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		cmd.SetArgs(args)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+}
+
 func TestUpdatedLabelIDsAddsAndRemoves(t *testing.T) {
 	got := updatedLabelIDs([]mail.Label{{ID: 3}, {ID: 1}}, []int64{2, 3}, []int64{1})
 	want := []int64{2, 3}

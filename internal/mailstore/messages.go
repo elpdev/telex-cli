@@ -30,6 +30,9 @@ type MessageMeta struct {
 	CC             []string         `toml:"cc"`
 	Read           bool             `toml:"read"`
 	Starred        bool             `toml:"starred"`
+	SenderBlocked  bool             `toml:"sender_blocked"`
+	SenderTrusted  bool             `toml:"sender_trusted"`
+	DomainBlocked  bool             `toml:"domain_blocked"`
 	Labels         []LabelMeta      `toml:"labels"`
 	Attachments    []AttachmentMeta `toml:"attachments"`
 	ReceivedAt     time.Time        `toml:"received_at"`
@@ -91,6 +94,9 @@ func (s Store) StoreInboxMessage(mailbox MailboxMeta, message mail.Message, body
 		CC:             message.CCAddresses,
 		Read:           message.Read,
 		Starred:        message.Starred,
+		SenderBlocked:  message.SenderBlocked,
+		SenderTrusted:  message.SenderTrusted,
+		DomainBlocked:  message.DomainBlocked,
 		Labels:         labelMetas(message.Labels),
 		Attachments:    attachmentMetas(message.Attachments),
 		ReceivedAt:     receivedAt,
@@ -216,6 +222,52 @@ func FindInboxMessage(mailboxPath string, remoteID int64) (*CachedMessage, error
 	return nil, fmt.Errorf("inbox message %d not found", remoteID)
 }
 
+func (s Store) UpdateCachedMessageByRemoteID(remoteID int64, message mail.Message, syncedAt time.Time) (*CachedMessage, error) {
+	mailboxes, err := s.ListMailboxes()
+	if err != nil {
+		return nil, err
+	}
+	for _, mailbox := range mailboxes {
+		mailboxPath, err := s.MailboxPath(mailbox.DomainName, mailbox.LocalPart)
+		if err != nil {
+			return nil, err
+		}
+		for _, box := range []string{"inbox", "junk", "archive", "trash"} {
+			messages, err := ListMessages(mailboxPath, box)
+			if err != nil {
+				return nil, err
+			}
+			for _, cached := range messages {
+				if cached.Meta.RemoteID == remoteID {
+					path := cached.Path
+					if toBox := localMessageBox(message.SystemState); toBox != "" && toBox != box {
+						moved, err := MoveCachedMessage(mailboxPath, box, toBox, cached.Path, syncedAt)
+						if err != nil {
+							return nil, err
+						}
+						path = moved.Path
+					}
+					return UpdateCachedMessageFromRemote(path, message, syncedAt)
+				}
+			}
+		}
+	}
+	return nil, os.ErrNotExist
+}
+
+func localMessageBox(systemState string) string {
+	switch systemState {
+	case "inbox", "junk", "trash":
+		return systemState
+	case "archived":
+		return "archive"
+	case "archive":
+		return "archive"
+	default:
+		return ""
+	}
+}
+
 func SetCachedMessageRead(path string, read bool, syncedAt time.Time) (*CachedMessage, error) {
 	message, err := ReadCachedMessage(path)
 	if err != nil {
@@ -237,6 +289,26 @@ func SetCachedMessageStarred(path string, starred bool, syncedAt time.Time) (*Ca
 	message.Meta.Starred = starred
 	message.Meta.SyncedAt = syncedAt
 	if err := writeTOML(filepath.Join(path, "meta.toml"), message.Meta); err != nil {
+		return nil, err
+	}
+	return ReadCachedMessage(path)
+}
+
+func UpdateCachedMessageFromRemote(path string, message mail.Message, syncedAt time.Time) (*CachedMessage, error) {
+	cached, err := ReadCachedMessage(path)
+	if err != nil {
+		return nil, err
+	}
+	cached.Meta.Status = message.Status
+	cached.Meta.Read = message.Read
+	cached.Meta.Starred = message.Starred
+	cached.Meta.Mailbox = message.SystemState
+	cached.Meta.SenderBlocked = message.SenderBlocked
+	cached.Meta.SenderTrusted = message.SenderTrusted
+	cached.Meta.DomainBlocked = message.DomainBlocked
+	cached.Meta.Labels = labelMetas(message.Labels)
+	cached.Meta.SyncedAt = syncedAt
+	if err := writeTOML(filepath.Join(path, "meta.toml"), cached.Meta); err != nil {
 		return nil, err
 	}
 	return ReadCachedMessage(path)

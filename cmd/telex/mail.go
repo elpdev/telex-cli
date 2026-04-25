@@ -850,10 +850,18 @@ func newMessagesCommand(rt *runtime) *cobra.Command {
 	cmd.AddCommand(newMessageActionCommand(rt, "archive", "Archive a message", func(s *mail.Service, id int64) (*mail.Message, error) { return s.ArchiveMessage(rt.context(), id) }))
 	cmd.AddCommand(newMessageActionCommand(rt, "restore", "Restore a message", func(s *mail.Service, id int64) (*mail.Message, error) { return s.RestoreMessage(rt.context(), id) }))
 	cmd.AddCommand(newMessageActionCommand(rt, "trash", "Move a message to trash", func(s *mail.Service, id int64) (*mail.Message, error) { return s.TrashMessage(rt.context(), id) }))
+	cmd.AddCommand(newMessageActionCommand(rt, "junk", "Move a message to junk", func(s *mail.Service, id int64) (*mail.Message, error) { return s.JunkMessage(rt.context(), id) }))
+	cmd.AddCommand(newMessageActionCommand(rt, "not-junk", "Move a message out of junk", func(s *mail.Service, id int64) (*mail.Message, error) { return s.NotJunkMessage(rt.context(), id) }))
 	cmd.AddCommand(newMessageActionCommand(rt, "mark-read", "Mark a message read", func(s *mail.Service, id int64) (*mail.Message, error) { return s.MarkMessageRead(rt.context(), id) }))
 	cmd.AddCommand(newMessageActionCommand(rt, "mark-unread", "Mark a message unread", func(s *mail.Service, id int64) (*mail.Message, error) { return s.MarkMessageUnread(rt.context(), id) }))
 	cmd.AddCommand(newMessageActionCommand(rt, "star", "Star a message", func(s *mail.Service, id int64) (*mail.Message, error) { return s.StarMessage(rt.context(), id) }))
 	cmd.AddCommand(newMessageActionCommand(rt, "unstar", "Unstar a message", func(s *mail.Service, id int64) (*mail.Message, error) { return s.UnstarMessage(rt.context(), id) }))
+	cmd.AddCommand(newMessageActionCommand(rt, "block-sender", "Block the message sender", func(s *mail.Service, id int64) (*mail.Message, error) { return s.BlockSender(rt.context(), id) }))
+	cmd.AddCommand(newMessageActionCommand(rt, "unblock-sender", "Unblock the message sender", func(s *mail.Service, id int64) (*mail.Message, error) { return s.UnblockSender(rt.context(), id) }))
+	cmd.AddCommand(newMessageActionCommand(rt, "block-domain", "Block the sender domain", func(s *mail.Service, id int64) (*mail.Message, error) { return s.BlockDomain(rt.context(), id) }))
+	cmd.AddCommand(newMessageActionCommand(rt, "unblock-domain", "Unblock the sender domain", func(s *mail.Service, id int64) (*mail.Message, error) { return s.UnblockDomain(rt.context(), id) }))
+	cmd.AddCommand(newMessageActionCommand(rt, "trust-sender", "Trust the message sender", func(s *mail.Service, id int64) (*mail.Message, error) { return s.TrustSender(rt.context(), id) }))
+	cmd.AddCommand(newMessageActionCommand(rt, "untrust-sender", "Untrust the message sender", func(s *mail.Service, id int64) (*mail.Message, error) { return s.UntrustSender(rt.context(), id) }))
 	return cmd
 }
 
@@ -887,6 +895,7 @@ func newMessageLabelsCommand(rt *runtime) *cobra.Command {
 				if err != nil {
 					return err
 				}
+				_, _ = mailstore.New(rt.dataPath).UpdateCachedMessageByRemoteID(id, *message, time.Now())
 			}
 			rows := make([][]string, 0, len(message.Labels))
 			for _, label := range message.Labels {
@@ -978,7 +987,7 @@ func runMessageList(cmd *cobra.Command, rt *runtime, params mail.MessageListPara
 	for _, message := range messages {
 		rows = append(rows, messageRow(message))
 	}
-	writeRows(cmd.OutOrStdout(), []string{"id", "subject", "from", "status", "mailbox", "read", "starred", "received_at"}, rows)
+	writeRows(cmd.OutOrStdout(), []string{"id", "subject", "from", "status", "mailbox", "read", "starred", "labels", "received_at"}, rows)
 	return nil
 }
 
@@ -1052,6 +1061,7 @@ func newMessageActionCommand(rt *runtime, use, short string, run func(*mail.Serv
 			if err != nil {
 				return err
 			}
+			_, _ = mailstore.New(rt.dataPath).UpdateCachedMessageByRemoteID(id, *message, time.Now())
 			writeRows(cmd.OutOrStdout(), []string{"key", "value"}, messageFields(*message))
 			return nil
 		},
@@ -1083,6 +1093,7 @@ func messageRow(message mail.Message) []string {
 		message.SystemState,
 		strconv.FormatBool(message.Read),
 		strconv.FormatBool(message.Starred),
+		strings.Join(labelNames(message.Labels), ", "),
 		message.ReceivedAt.Format("2006-01-02 15:04"),
 	}
 }
@@ -1098,6 +1109,10 @@ func messageFields(message mail.Message) [][]string {
 		{"mailbox", message.SystemState},
 		{"read", strconv.FormatBool(message.Read)},
 		{"starred", strconv.FormatBool(message.Starred)},
+		{"sender_blocked", strconv.FormatBool(message.SenderBlocked)},
+		{"sender_trusted", strconv.FormatBool(message.SenderTrusted)},
+		{"domain_blocked", strconv.FormatBool(message.DomainBlocked)},
+		{"labels", strings.Join(labelNames(message.Labels), ", ")},
 		{"received_at", message.ReceivedAt.Format("2006-01-02 15:04")},
 		{"preview", message.PreviewText},
 	}
@@ -1117,6 +1132,16 @@ func conversationTimelineRow(entry mail.ConversationTimelineEntry) []string {
 
 func labelRow(label mail.Label) []string {
 	return []string{strconv.FormatInt(label.ID, 10), label.Name, label.Color}
+}
+
+func labelNames(labels []mail.Label) []string {
+	names := make([]string, 0, len(labels))
+	for _, label := range labels {
+		if strings.TrimSpace(label.Name) != "" {
+			names = append(names, label.Name)
+		}
+	}
+	return names
 }
 
 func updatedLabelIDs(current []mail.Label, add, remove []int64) []int64 {

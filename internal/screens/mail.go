@@ -15,6 +15,7 @@ import (
 	"github.com/elpdev/telex-cli/internal/articletext"
 	"github.com/elpdev/telex-cli/internal/components/filepicker"
 	"github.com/elpdev/telex-cli/internal/emailtext"
+	"github.com/elpdev/telex-cli/internal/mail"
 	"github.com/elpdev/telex-cli/internal/mailstore"
 )
 
@@ -30,7 +31,7 @@ const (
 	mailReadWidth = 100
 )
 
-var mailBoxes = []string{"inbox", "archive", "trash", "sent", "outbox", "drafts"}
+var mailBoxes = []string{"inbox", "archive", "trash", "sent", "outbox", "drafts", "junk"}
 
 var extractArticleURL = articletext.NewExtractor().ExtractURL
 
@@ -40,7 +41,15 @@ type Mail struct {
 	toggleStar            ToggleStarFunc
 	archive               MessageActionFunc
 	trash                 MessageActionFunc
+	junk                  MessageActionFunc
+	notJunk               MessageActionFunc
 	restore               MessageActionFunc
+	blockSender           MessageActionFunc
+	unblockSender         MessageActionFunc
+	blockDomain           MessageActionFunc
+	unblockDomain         MessageActionFunc
+	trustSender           MessageActionFunc
+	untrustSender         MessageActionFunc
 	sync                  SyncFunc
 	sendDraft             SendDraftFunc
 	updateDraft           UpdateDraftFunc
@@ -111,6 +120,8 @@ type MailKeyMap struct {
 	ToggleRead   key.Binding
 	ToggleStar   key.Binding
 	Archive      key.Binding
+	Junk         key.Binding
+	NotJunk      key.Binding
 	Trash        key.Binding
 	Restore      key.Binding
 	Copy         key.Binding
@@ -187,6 +198,12 @@ type messageStarToggledMsg struct {
 
 type messageMovedMsg struct {
 	index  int
+	path   string
+	action string
+	err    error
+}
+
+type messagePolicyUpdatedMsg struct {
 	path   string
 	action string
 	err    error
@@ -300,6 +317,22 @@ func (m Mail) WithConversationActions(conversation ConversationFunc, body Conver
 	return m
 }
 
+func (m Mail) WithJunkActions(junk MessageActionFunc, notJunk MessageActionFunc) Mail {
+	m.junk = junk
+	m.notJunk = notJunk
+	return m
+}
+
+func (m Mail) WithSenderPolicyActions(blockSender, unblockSender, blockDomain, unblockDomain, trustSender, untrustSender MessageActionFunc) Mail {
+	m.blockSender = blockSender
+	m.unblockSender = unblockSender
+	m.blockDomain = blockDomain
+	m.unblockDomain = unblockDomain
+	m.trustSender = trustSender
+	m.untrustSender = untrustSender
+	return m
+}
+
 func DefaultMailKeyMap() MailKeyMap {
 	return MailKeyMap{
 		Up:           key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "message up")),
@@ -321,6 +354,8 @@ func DefaultMailKeyMap() MailKeyMap {
 		ToggleRead:   key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "read/unread")),
 		ToggleStar:   key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "star/unstar")),
 		Archive:      key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "archive")),
+		Junk:         key.NewBinding(key.WithKeys("J"), key.WithHelp("J", "junk")),
+		NotJunk:      key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "not junk")),
 		Trash:        key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "trash")),
 		Restore:      key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "restore")),
 		Copy:         key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy link")),
@@ -473,11 +508,40 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		switch msg.action {
 		case "archive":
 			m.status = "Archived"
+		case "junk":
+			m.status = "Moved to junk"
+		case "not-junk":
+			m.status = "Moved to inbox"
 		case "trash":
 			m.status = "Moved to trash"
 		case "restore":
 			m.status = "Restored"
 		}
+		return m, nil
+	case messagePolicyUpdatedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not update sender policy: %v", msg.err)
+			return m, nil
+		}
+		m.updateMessageByPath(msg.path, func(message *mailstore.CachedMessage) {
+			switch msg.action {
+			case "block-sender":
+				message.Meta.SenderBlocked = true
+				message.Meta.SenderTrusted = false
+			case "unblock-sender":
+				message.Meta.SenderBlocked = false
+			case "trust-sender":
+				message.Meta.SenderTrusted = true
+				message.Meta.SenderBlocked = false
+			case "untrust-sender":
+				message.Meta.SenderTrusted = false
+			case "block-domain":
+				message.Meta.DomainBlocked = true
+			case "unblock-domain":
+				message.Meta.DomainBlocked = false
+			}
+		})
+		m.status = policyStatus(msg.action)
 		return m, nil
 	case draftEditedMsg:
 		m.loading = false
@@ -638,7 +702,7 @@ func (m Mail) View(width, height int) string {
 func (m Mail) Title() string { return "Mail" }
 
 func (m Mail) KeyBindings() []key.Binding {
-	return []key.Binding{m.keys.Up, m.keys.Down, m.keys.Previous, m.keys.Next, m.keys.BoxPrev, m.keys.BoxNext, m.keys.Open, m.keys.OpenHTML, m.keys.Links, m.keys.Attachments, m.keys.Extract, m.keys.Compose, m.keys.Reply, m.keys.Forward, m.keys.Send, m.keys.Delete, m.keys.ToggleRead, m.keys.ToggleStar, m.keys.Archive, m.keys.Trash, m.keys.Restore, m.keys.Copy, m.keys.Back, m.keys.Refresh, m.keys.RemoteSearch, m.keys.Thread}
+	return []key.Binding{m.keys.Up, m.keys.Down, m.keys.Previous, m.keys.Next, m.keys.BoxPrev, m.keys.BoxNext, m.keys.Open, m.keys.OpenHTML, m.keys.Links, m.keys.Attachments, m.keys.Extract, m.keys.Compose, m.keys.Reply, m.keys.Forward, m.keys.Send, m.keys.Delete, m.keys.ToggleRead, m.keys.ToggleStar, m.keys.Archive, m.keys.Junk, m.keys.NotJunk, m.keys.Trash, m.keys.Restore, m.keys.Copy, m.keys.Back, m.keys.Refresh, m.keys.RemoteSearch, m.keys.Thread}
 }
 
 func (m Mail) CapturesFocusKey(msg tea.KeyPressMsg) bool {
@@ -731,6 +795,12 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		}
 		if key.Matches(msg, m.keys.Archive) {
 			return m.moveSelectedMessage("archive")
+		}
+		if key.Matches(msg, m.keys.Junk) {
+			return m.moveSelectedMessage("junk")
+		}
+		if key.Matches(msg, m.keys.NotJunk) {
+			return m.moveSelectedMessage("not-junk")
 		}
 		if key.Matches(msg, m.keys.Trash) {
 			return m.requestConfirm("trash", "Move this message to trash?")
@@ -845,6 +915,10 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			return m.startAttachFile()
 		}
 		return m.moveSelectedMessage("archive")
+	case key.Matches(msg, m.keys.Junk):
+		return m.moveSelectedMessage("junk")
+	case key.Matches(msg, m.keys.NotJunk):
+		return m.moveSelectedMessage("not-junk")
 	case key.Matches(msg, m.keys.Trash):
 		return m.requestConfirm("trash", "Move this message to trash?")
 	case key.Matches(msg, m.keys.Restore):
@@ -1358,6 +1432,22 @@ func (m Mail) moveSelectedMessage(action string) (Screen, tea.Cmd) {
 			m.status = "archive is only available from inbox"
 			return m, nil
 		}
+	case "junk":
+		if fromBox != "inbox" {
+			m.status = "junk is only available from inbox"
+			return m, nil
+		}
+		moveRemote = m.junk
+		toBox = "junk"
+		status = "Moving to junk..."
+	case "not-junk":
+		if fromBox != "junk" {
+			m.status = "not junk is only available from junk"
+			return m, nil
+		}
+		moveRemote = m.notJunk
+		toBox = "inbox"
+		status = "Moving to inbox..."
 	case "trash":
 		if fromBox != "inbox" {
 			m.status = "trash is only available from inbox"
@@ -2012,7 +2102,7 @@ func syncStatus(result MailSyncResult) string {
 
 func listCachedBox(mailboxPath, box string) ([]mailstore.CachedMessage, error) {
 	switch box {
-	case "inbox", "archive", "trash":
+	case "inbox", "junk", "archive", "trash":
 		return mailstore.ListMessages(mailboxPath, box)
 	case "sent":
 		drafts, err := mailstore.ListSent(mailboxPath)
@@ -2147,7 +2237,7 @@ func (m Mail) currentBoxSupportsMessageActions() bool {
 		return false
 	}
 	switch m.currentBox() {
-	case "inbox", "archive", "trash":
+	case "inbox", "junk", "archive", "trash":
 		return true
 	default:
 		return false
@@ -2156,7 +2246,7 @@ func (m Mail) currentBoxSupportsMessageActions() bool {
 
 func (m Mail) currentBoxSupportsRemoteSearch() bool {
 	switch m.currentBox() {
-	case "inbox", "archive", "trash":
+	case "inbox", "junk", "archive", "trash":
 		return true
 	default:
 		return false
@@ -2190,7 +2280,9 @@ func (m Mail) listView(width, height int) string {
 	b.WriteString(fmt.Sprintf("Mailbox %d/%d: %s | Box %d/%d: %s\n", m.mailboxIndex+1, len(m.mailboxes), mailbox.Address, m.boxIndex+1, len(mailBoxes), box))
 	b.WriteString("Use h/l to switch mailboxes, [/] to switch boxes, / filter, ctrl+f remote search, c compose, enter to read, r reload.")
 	if box == "inbox" {
-		b.WriteString(" a archive, d trash.")
+		b.WriteString(" a archive, J junk, d trash.")
+	} else if box == "junk" {
+		b.WriteString(" U not junk.")
 	} else if box == "archive" || box == "trash" {
 		b.WriteString(" R restore.")
 	} else if box == "drafts" {
@@ -2270,6 +2362,9 @@ func (m Mail) detailView(width, height int) string {
 	if m.currentBoxSupportsMessageActions() {
 		b.WriteString(fmt.Sprintf("Read: %t\n", message.Meta.Read))
 		b.WriteString(fmt.Sprintf("Starred: %t\n", message.Meta.Starred))
+		b.WriteString(fmt.Sprintf("Sender blocked: %t\n", message.Meta.SenderBlocked))
+		b.WriteString(fmt.Sprintf("Sender trusted: %t\n", message.Meta.SenderTrusted))
+		b.WriteString(fmt.Sprintf("Domain blocked: %t\n", message.Meta.DomainBlocked))
 	}
 	b.WriteString(fmt.Sprintf("Received: %s\n", message.Meta.ReceivedAt.Format("2006-01-02 15:04")))
 	if m.status != "" {
@@ -2559,7 +2654,7 @@ type MailSelection struct {
 func (m Mail) Selection() MailSelection {
 	box := m.currentBox()
 	sel := MailSelection{Box: box, IsDraft: box == "drafts"}
-	if box == "inbox" || box == "archive" || box == "trash" {
+	if box == "inbox" || box == "junk" || box == "archive" || box == "trash" {
 		sel.BoxLikes = "message"
 	} else if box == "drafts" {
 		sel.BoxLikes = "draft"
@@ -2616,6 +2711,16 @@ func (m Mail) handleAction(action string) (Screen, tea.Cmd) {
 			return m, nil
 		}
 		return m.moveSelectedMessage("archive")
+	case "junk":
+		if m.currentBox() != "inbox" || len(m.messages) == 0 {
+			return m, nil
+		}
+		return m.moveSelectedMessage("junk")
+	case "not-junk":
+		if m.currentBox() != "junk" || len(m.messages) == 0 {
+			return m, nil
+		}
+		return m.moveSelectedMessage("not-junk")
 	case "trash":
 		if m.currentBox() != "inbox" || len(m.messages) == 0 {
 			return m, nil
@@ -2630,6 +2735,103 @@ func (m Mail) handleAction(action string) (Screen, tea.Cmd) {
 		return m.toggleSelectedStar()
 	case "toggle-read":
 		return m.toggleSelectedRead()
+	case "block-sender", "unblock-sender", "block-domain", "unblock-domain", "trust-sender", "untrust-sender":
+		return m.updateSelectedSenderPolicy(action)
 	}
 	return m, nil
+}
+
+func (m Mail) updateSelectedSenderPolicy(action string) (Screen, tea.Cmd) {
+	if len(m.messages) == 0 || m.remoteResults || !m.currentBoxSupportsMessageActions() {
+		return m, nil
+	}
+	remote := m.senderPolicyAction(action)
+	if remote == nil {
+		m.status = fmt.Sprintf("%s action is not configured", action)
+		return m, nil
+	}
+	message := m.messages[m.messageIndex]
+	m.status = "Updating sender policy..."
+	return m, func() tea.Msg {
+		if err := remote(context.Background(), message.Meta.RemoteID); err != nil {
+			return messagePolicyUpdatedMsg{path: message.Path, action: action, err: err}
+		}
+		cached, err := mailstore.ReadCachedMessage(message.Path)
+		if err != nil {
+			return messagePolicyUpdatedMsg{path: message.Path, action: action, err: err}
+		}
+		switch action {
+		case "block-sender":
+			cached.Meta.SenderBlocked = true
+			cached.Meta.SenderTrusted = false
+		case "unblock-sender":
+			cached.Meta.SenderBlocked = false
+		case "trust-sender":
+			cached.Meta.SenderTrusted = true
+			cached.Meta.SenderBlocked = false
+		case "untrust-sender":
+			cached.Meta.SenderTrusted = false
+		case "block-domain":
+			cached.Meta.DomainBlocked = true
+		case "unblock-domain":
+			cached.Meta.DomainBlocked = false
+		}
+		remoteMessage := mailstoreToRemoteMessage(*cached)
+		_, err = mailstore.UpdateCachedMessageFromRemote(message.Path, remoteMessage, time.Now())
+		return messagePolicyUpdatedMsg{path: message.Path, action: action, err: err}
+	}
+}
+
+func (m Mail) senderPolicyAction(action string) MessageActionFunc {
+	switch action {
+	case "block-sender":
+		return m.blockSender
+	case "unblock-sender":
+		return m.unblockSender
+	case "block-domain":
+		return m.blockDomain
+	case "unblock-domain":
+		return m.unblockDomain
+	case "trust-sender":
+		return m.trustSender
+	case "untrust-sender":
+		return m.untrustSender
+	default:
+		return nil
+	}
+}
+
+func policyStatus(action string) string {
+	switch action {
+	case "block-sender":
+		return "Sender blocked"
+	case "unblock-sender":
+		return "Sender unblocked"
+	case "block-domain":
+		return "Domain blocked"
+	case "unblock-domain":
+		return "Domain unblocked"
+	case "trust-sender":
+		return "Sender trusted"
+	case "untrust-sender":
+		return "Sender untrusted"
+	default:
+		return "Sender policy updated"
+	}
+}
+
+func mailstoreToRemoteMessage(message mailstore.CachedMessage) mail.Message {
+	labels := make([]mail.Label, 0, len(message.Meta.Labels))
+	for _, label := range message.Meta.Labels {
+		labels = append(labels, mail.Label{ID: label.ID, Name: label.Name, Color: label.Color})
+	}
+	return mail.Message{ID: message.Meta.RemoteID, ConversationID: message.Meta.ConversationID, InboxID: message.Meta.InboxID, FromAddress: message.Meta.FromAddress, FromName: message.Meta.FromName, ToAddresses: message.Meta.To, CCAddresses: message.Meta.CC, Subject: message.Meta.Subject, Status: message.Meta.Status, SystemState: message.Meta.Mailbox, Read: message.Meta.Read, Starred: message.Meta.Starred, SenderBlocked: message.Meta.SenderBlocked, SenderTrusted: message.Meta.SenderTrusted, DomainBlocked: message.Meta.DomainBlocked, Labels: labels, ReceivedAt: message.Meta.ReceivedAt, Attachments: remoteAttachments(message.Meta.Attachments)}
+}
+
+func remoteAttachments(attachments []mailstore.AttachmentMeta) []mail.Attachment {
+	out := make([]mail.Attachment, 0, len(attachments))
+	for _, attachment := range attachments {
+		out = append(out, mail.Attachment{ID: attachment.ID, Filename: attachment.Filename, ContentType: attachment.ContentType, ByteSize: attachment.ByteSize, Previewable: attachment.Previewable, PreviewKind: attachment.PreviewKind, PreviewURL: attachment.PreviewURL, DownloadURL: attachment.DownloadURL})
+	}
+	return out
 }

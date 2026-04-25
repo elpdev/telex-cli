@@ -107,7 +107,7 @@ func (m Model) devBuild() bool { return m.meta.Version == "dev" }
 
 func (m *Model) registerScreens() {
 	m.screens["home"] = screens.NewHome()
-	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody)
+	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody).WithJunkActions(m.junkMessage, m.notJunkMessage).WithSenderPolicyActions(m.blockSender, m.unblockSender, m.blockDomain, m.unblockDomain, m.trustSender, m.untrustSender)
 	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive).WithActions(m.downloadDriveFile, m.openDriveFile, m.uploadDriveFile, m.createDriveFolder, m.renameDriveFile, m.renameDriveFolder, m.deleteDriveFile, m.deleteDriveFolder)
 	m.screens["settings"] = screens.NewSettings(screens.SettingsState{
 		ThemeName:      m.theme.Name,
@@ -166,12 +166,84 @@ func (m *Model) trashMessage(ctx context.Context, id int64) error {
 	return err
 }
 
+func (m *Model) junkMessage(ctx context.Context, id int64) error {
+	service, err := m.mailService()
+	if err != nil {
+		return err
+	}
+	_, err = service.JunkMessage(ctx, id)
+	return err
+}
+
+func (m *Model) notJunkMessage(ctx context.Context, id int64) error {
+	service, err := m.mailService()
+	if err != nil {
+		return err
+	}
+	_, err = service.NotJunkMessage(ctx, id)
+	return err
+}
+
 func (m *Model) restoreMessage(ctx context.Context, id int64) error {
 	service, err := m.mailService()
 	if err != nil {
 		return err
 	}
 	_, err = service.RestoreMessage(ctx, id)
+	return err
+}
+
+func (m *Model) blockSender(ctx context.Context, id int64) error {
+	service, err := m.mailService()
+	if err != nil {
+		return err
+	}
+	_, err = service.BlockSender(ctx, id)
+	return err
+}
+
+func (m *Model) unblockSender(ctx context.Context, id int64) error {
+	service, err := m.mailService()
+	if err != nil {
+		return err
+	}
+	_, err = service.UnblockSender(ctx, id)
+	return err
+}
+
+func (m *Model) blockDomain(ctx context.Context, id int64) error {
+	service, err := m.mailService()
+	if err != nil {
+		return err
+	}
+	_, err = service.BlockDomain(ctx, id)
+	return err
+}
+
+func (m *Model) unblockDomain(ctx context.Context, id int64) error {
+	service, err := m.mailService()
+	if err != nil {
+		return err
+	}
+	_, err = service.UnblockDomain(ctx, id)
+	return err
+}
+
+func (m *Model) trustSender(ctx context.Context, id int64) error {
+	service, err := m.mailService()
+	if err != nil {
+		return err
+	}
+	_, err = service.TrustSender(ctx, id)
+	return err
+}
+
+func (m *Model) untrustSender(ctx context.Context, id int64) error {
+	service, err := m.mailService()
+	if err != nil {
+		return err
+	}
+	_, err = service.UntrustSender(ctx, id)
 	return err
 }
 
@@ -381,7 +453,11 @@ func (m *Model) openDriveFile(path string) error {
 	if opener == "" {
 		opener = "xdg-open"
 	}
-	return exec.Command(opener, path).Run()
+	cmd := exec.Command(opener, path)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
 }
 
 func (m *Model) uploadDriveFile(ctx context.Context, path string, folderID *int64) error {
@@ -473,6 +549,9 @@ func cachedRemoteMessage(message mail.Message) mailstore.CachedMessage {
 			CC:             message.CCAddresses,
 			Read:           message.Read,
 			Starred:        message.Starred,
+			SenderBlocked:  message.SenderBlocked,
+			SenderTrusted:  message.SenderTrusted,
+			DomainBlocked:  message.DomainBlocked,
 			Labels:         remoteLabelMetas(message.Labels),
 			Attachments:    remoteAttachmentMetas(message.Attachments),
 			ReceivedAt:     message.ReceivedAt,
@@ -633,12 +712,20 @@ func (m *Model) registerCommands() {
 	m.commands.Register(commands.Command{ID: "messages-reply", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Reply", Description: "Reply to the highlighted message", Shortcut: "r", Keywords: []string{"reply", "respond"}, Available: onMailMessages, Describe: subjectDescribe("Reply"), Run: mailAction("reply", false)})
 	m.commands.Register(commands.Command{ID: "messages-forward", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Forward", Description: "Forward the highlighted message", Shortcut: "f", Keywords: []string{"forward"}, Available: onMailMessages, Describe: subjectDescribe("Forward"), Run: mailAction("forward", false)})
 	m.commands.Register(commands.Command{ID: "messages-archive", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Archive", Description: "Archive the highlighted message", Shortcut: "a", Keywords: []string{"archive"}, Available: onMailMessages, Describe: subjectDescribe("Archive"), Run: mailAction("archive", false)})
+	m.commands.Register(commands.Command{ID: "messages-junk", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Mark as junk", Description: "Move the highlighted message to junk", Shortcut: "J", Keywords: []string{"junk", "spam"}, Available: func(ctx commands.Context) bool { return onMailMessages(ctx) && ctx.Selection.Mailbox == "inbox" }, Describe: subjectDescribe("Mark as junk"), Run: mailAction("junk", false)})
+	m.commands.Register(commands.Command{ID: "messages-not-junk", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Mark as not junk", Description: "Move the highlighted junk message to inbox", Shortcut: "U", Keywords: []string{"not junk", "spam", "inbox"}, Available: func(ctx commands.Context) bool { return onMailMessages(ctx) && ctx.Selection.Mailbox == "junk" }, Describe: subjectDescribe("Mark as not junk"), Run: mailAction("not-junk", false)})
 	m.commands.Register(commands.Command{ID: "messages-trash", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Move to trash", Description: "Trash the highlighted message", Shortcut: "d", Keywords: []string{"trash", "delete"}, Available: onMailMessages, Describe: subjectDescribe("Trash"), Run: mailAction("trash", false)})
 	m.commands.Register(commands.Command{ID: "messages-star", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Toggle star", Description: "Star/unstar the highlighted message", Shortcut: "s", Keywords: []string{"star", "favorite"}, Available: onMailMessages, Run: mailAction("toggle-star", false)})
 	m.commands.Register(commands.Command{ID: "messages-read", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Toggle read", Description: "Mark read/unread", Shortcut: "u", Keywords: []string{"read", "unread"}, Available: onMailMessages, Run: mailAction("toggle-read", false)})
 	m.commands.Register(commands.Command{ID: "messages-restore", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Restore", Description: "Move back to inbox from archive/trash", Shortcut: "R", Keywords: []string{"restore"}, Available: func(ctx commands.Context) bool {
 		return onMail(ctx) && ctx.Selection != nil && (ctx.Selection.Mailbox == "archive" || ctx.Selection.Mailbox == "trash")
 	}, Run: mailAction("restore", false)})
+	m.commands.Register(commands.Command{ID: "messages-block-sender", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Block sender", Description: "Block future mail from this sender", Keywords: []string{"block", "sender", "spam"}, Available: onMailMessages, Run: mailAction("block-sender", false)})
+	m.commands.Register(commands.Command{ID: "messages-unblock-sender", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Unblock sender", Description: "Remove sender block", Keywords: []string{"unblock", "sender"}, Available: onMailMessages, Run: mailAction("unblock-sender", false)})
+	m.commands.Register(commands.Command{ID: "messages-trust-sender", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Trust sender", Description: "Trust future mail from this sender", Keywords: []string{"trust", "sender"}, Available: onMailMessages, Run: mailAction("trust-sender", false)})
+	m.commands.Register(commands.Command{ID: "messages-untrust-sender", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Untrust sender", Description: "Remove trusted sender policy", Keywords: []string{"untrust", "sender"}, Available: onMailMessages, Run: mailAction("untrust-sender", false)})
+	m.commands.Register(commands.Command{ID: "messages-block-domain", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Block sender domain", Description: "Block future mail from this domain", Keywords: []string{"block", "domain", "spam"}, Available: onMailMessages, Run: mailAction("block-domain", false)})
+	m.commands.Register(commands.Command{ID: "messages-unblock-domain", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Unblock sender domain", Description: "Remove domain block", Keywords: []string{"unblock", "domain"}, Available: onMailMessages, Run: mailAction("unblock-domain", false)})
 
 	// Global
 	m.commands.Register(commands.Command{ID: "toggle-sidebar", Module: commands.ModuleGlobal, Title: "Toggle sidebar", Description: "Show or hide sidebar navigation", Keywords: []string{"sidebar", "layout"}, Run: func() tea.Cmd { return func() tea.Msg { return toggleSidebarMsg{} } }})

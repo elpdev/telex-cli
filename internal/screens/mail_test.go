@@ -461,7 +461,7 @@ func TestMailScreenSwitchesMessageBoxes(t *testing.T) {
 	updated, _ = screen.Update(cmd())
 	screen = updated.(Mail)
 	view := stripScreenANSI(screen.View(100, 20))
-	if !strings.Contains(view, "Box 2/6: archive") || !strings.Contains(view, "Archived Subject") {
+	if !strings.Contains(view, "Box 2/7: archive") || !strings.Contains(view, "Archived Subject") {
 		t.Fatalf("view = %q", view)
 	}
 }
@@ -512,7 +512,7 @@ func TestMailScreenShowsSentAndOutbox(t *testing.T) {
 		screen = updated.(Mail)
 	}
 	sentView := stripScreenANSI(screen.View(100, 20))
-	if !strings.Contains(sentView, "Box 4/6: sent") || !strings.Contains(sentView, "Sent Subject") {
+	if !strings.Contains(sentView, "Box 4/7: sent") || !strings.Contains(sentView, "Sent Subject") {
 		t.Fatalf("sent view = %q", sentView)
 	}
 	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
@@ -523,7 +523,7 @@ func TestMailScreenShowsSentAndOutbox(t *testing.T) {
 	updated, _ = screen.Update(cmd())
 	screen = updated.(Mail)
 	outboxView := stripScreenANSI(screen.View(100, 20))
-	if !strings.Contains(outboxView, "Box 5/6: outbox") || !strings.Contains(outboxView, "Queued Subject") {
+	if !strings.Contains(outboxView, "Box 5/7: outbox") || !strings.Contains(outboxView, "Queued Subject") {
 		t.Fatalf("outbox view = %q", outboxView)
 	}
 }
@@ -1516,6 +1516,88 @@ func TestMailScreenTrashFailureLeavesCacheUnchanged(t *testing.T) {
 	view := stripScreenANSI(screen.View(100, 20))
 	if !strings.Contains(view, "Could not trash message") {
 		t.Fatalf("view = %q", view)
+	}
+}
+
+func TestMailScreenMarksSelectedMessageAsJunk(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	mailbox := mailstore.MailboxMeta{SchemaVersion: mailstore.SchemaVersion, DomainID: 12, DomainName: "example.com", InboxID: 34, Address: "hello@example.com", LocalPart: "hello", Active: true, SyncedAt: time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC)}
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.StoreInboxMessage(mailbox, mail.Message{ID: 123, Subject: "Spam", FromAddress: "sender@example.net", SystemState: "inbox", ReceivedAt: time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)}, nil, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotID int64
+	screen := NewMail(store).WithJunkActions(func(ctx context.Context, id int64) error {
+		gotID = id
+		return nil
+	}, nil)
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "J", Code: 'J'}))
+	screen = updated.(Mail)
+	if cmd == nil {
+		t.Fatal("expected junk command")
+	}
+	updated, _ = screen.Update(cmd())
+	screen = updated.(Mail)
+	if gotID != 123 {
+		t.Fatalf("junk got id=%d", gotID)
+	}
+	if len(screen.messages) != 0 {
+		t.Fatalf("len(messages) = %d, want 0", len(screen.messages))
+	}
+	if _, err := mailstore.ReadCachedMessage(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("inbox cache should be moved: %v", err)
+	}
+	mailboxPath, err := store.MailboxPath(mailbox.DomainName, mailbox.LocalPart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := mailstore.ReadCachedMessage(filepath.Join(mailboxPath, "junk", "2026", "04", "24", "spam-123"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.Meta.Mailbox != "junk" {
+		t.Fatalf("mailbox = %q, want junk", moved.Meta.Mailbox)
+	}
+}
+
+func TestMailScreenUpdatesSenderPolicy(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	mailbox := mailstore.MailboxMeta{SchemaVersion: mailstore.SchemaVersion, DomainID: 12, DomainName: "example.com", InboxID: 34, Address: "hello@example.com", LocalPart: "hello", Active: true, SyncedAt: time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC)}
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.StoreInboxMessage(mailbox, mail.Message{ID: 123, Subject: "Policy", FromAddress: "sender@example.net", SystemState: "inbox", ReceivedAt: time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)}, nil, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotID int64
+	screen := NewMail(store).WithSenderPolicyActions(func(ctx context.Context, id int64) error {
+		gotID = id
+		return nil
+	}, nil, nil, nil, nil, nil)
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	updated, cmd := screen.Update(MailActionMsg{Action: "block-sender"})
+	screen = updated.(Mail)
+	if cmd == nil {
+		t.Fatal("expected policy command")
+	}
+	updated, _ = screen.Update(cmd())
+	screen = updated.(Mail)
+	if gotID != 123 || !screen.messages[0].Meta.SenderBlocked {
+		t.Fatalf("got id=%d state=%#v", gotID, screen.messages[0].Meta)
+	}
+	readBack, err := mailstore.ReadCachedMessage(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !readBack.Meta.SenderBlocked {
+		t.Fatal("expected cached sender block")
 	}
 }
 
