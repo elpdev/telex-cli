@@ -22,6 +22,8 @@ import (
 	"github.com/elpdev/telex-cli/internal/mailsend"
 	"github.com/elpdev/telex-cli/internal/mailstore"
 	"github.com/elpdev/telex-cli/internal/mailsync"
+	"github.com/elpdev/telex-cli/internal/notes"
+	"github.com/elpdev/telex-cli/internal/notestore"
 	"github.com/elpdev/telex-cli/internal/screens"
 	"github.com/elpdev/telex-cli/internal/theme"
 )
@@ -109,6 +111,7 @@ func (m *Model) registerScreens() {
 	m.screens["home"] = screens.NewHome()
 	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody).WithJunkActions(m.junkMessage, m.notJunkMessage).WithSenderPolicyActions(m.blockSender, m.unblockSender, m.blockDomain, m.unblockDomain, m.trustSender, m.untrustSender)
 	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive).WithActions(m.downloadDriveFile, m.openDriveFile, m.uploadDriveFile, m.createDriveFolder, m.renameDriveFile, m.renameDriveFolder, m.deleteDriveFile, m.deleteDriveFolder)
+	m.screens["notes"] = screens.NewNotes(notestore.New(m.dataPath), m.syncNotes).WithActions(m.createNote, m.updateNote, m.deleteNote)
 	m.screens["settings"] = screens.NewSettings(screens.SettingsState{
 		ThemeName:      m.theme.Name,
 		SidebarVisible: m.showSidebar,
@@ -596,6 +599,104 @@ func (m *Model) deleteDriveFolder(ctx context.Context, id int64) error {
 	return err
 }
 
+func (m *Model) syncNotes(ctx context.Context) (screens.NotesSyncResult, error) {
+	service, err := m.notesService()
+	if err != nil {
+		return screens.NotesSyncResult{}, err
+	}
+	result, err := runNotesSync(ctx, notestore.New(m.dataPath), service)
+	return screens.NotesSyncResult{Folders: result.Folders, Notes: result.Notes}, err
+}
+
+func (m *Model) createNote(ctx context.Context, input notes.NoteInput) (*notes.Note, error) {
+	service, err := m.notesService()
+	if err != nil {
+		return nil, err
+	}
+	note, err := service.CreateNote(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := notestore.New(m.dataPath).StoreNote(*note, time.Now()); err != nil {
+		return nil, err
+	}
+	return note, nil
+}
+
+func (m *Model) updateNote(ctx context.Context, id int64, input notes.NoteInput) (*notes.Note, error) {
+	service, err := m.notesService()
+	if err != nil {
+		return nil, err
+	}
+	note, err := service.UpdateNote(ctx, id, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := notestore.New(m.dataPath).StoreNote(*note, time.Now()); err != nil {
+		return nil, err
+	}
+	return note, nil
+}
+
+func (m *Model) deleteNote(ctx context.Context, id int64) error {
+	service, err := m.notesService()
+	if err != nil {
+		return err
+	}
+	if err := service.DeleteNote(ctx, id); err != nil {
+		return err
+	}
+	return notestore.New(m.dataPath).DeleteNote(id)
+}
+
+type notesSyncResult struct {
+	Folders int
+	Notes   int
+}
+
+func runNotesSync(ctx context.Context, store notestore.Store, service *notes.Service) (notesSyncResult, error) {
+	tree, err := service.NotesTree(ctx)
+	if err != nil {
+		return notesSyncResult{}, err
+	}
+	syncedAt := time.Now()
+	if err := store.StoreTree(tree, syncedAt); err != nil {
+		return notesSyncResult{}, err
+	}
+	var result notesSyncResult
+	if err := syncNotesFolder(ctx, store, service, *tree, syncedAt, &result); err != nil {
+		return notesSyncResult{}, err
+	}
+	return result, nil
+}
+
+func syncNotesFolder(ctx context.Context, store notestore.Store, service *notes.Service, folder notes.FolderTree, syncedAt time.Time, result *notesSyncResult) error {
+	result.Folders++
+	page := 1
+	for {
+		cached, pagination, err := service.ListNotes(ctx, notes.ListNotesParams{ListParams: notes.ListParams{Page: page, PerPage: 100}, FolderID: &folder.ID, Sort: "filename"})
+		if err != nil {
+			return err
+		}
+		for _, note := range cached {
+			if err := store.StoreNote(note, syncedAt); err != nil {
+				return err
+			}
+			result.Notes++
+		}
+		if pagination == nil || page*pagination.PerPage >= pagination.TotalCount {
+			break
+		}
+		page++
+	}
+	for _, child := range folder.Children {
+		if err := syncNotesFolder(ctx, store, service, child, syncedAt, result); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func cachedRemoteMessage(message mail.Message) mailstore.CachedMessage {
 	return mailstore.CachedMessage{
 		Meta: mailstore.MessageMeta{
@@ -681,13 +782,28 @@ func (m *Model) driveService() (*drive.Service, *config.Config, error) {
 	return drive.NewService(m.client), cfg, nil
 }
 
+func (m *Model) notesService() (*notes.Service, error) {
+	configFile, tokenFile := config.Paths(m.configPath)
+	cfg, err := config.LoadFrom(configFile)
+	if err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if m.client == nil {
+		m.client = api.NewClient(cfg, tokenFile)
+	}
+	return notes.NewService(m.client), nil
+}
+
 func (m *Model) refreshScreenOrder() {
 	m.screenOrder = m.screenOrder[:0]
 	for id := range m.screens {
 		m.screenOrder = append(m.screenOrder, id)
 	}
 	sort.Strings(m.screenOrder)
-	preferred := []string{"home", "mail", "drive", "settings", "logs"}
+	preferred := []string{"home", "mail", "notes", "drive", "settings", "logs"}
 	ordered := make([]string, 0, len(m.screenOrder))
 	seen := make(map[string]bool)
 	for _, id := range preferred {
@@ -726,8 +842,21 @@ func (m *Model) registerCommands() {
 			return tea.Sequence(func() tea.Msg { return routeMsg{"drive"} }, actionMsg)
 		}
 	}
+	notesAction := func(action string, alsoRoute bool) func() tea.Cmd {
+		return func() tea.Cmd {
+			actionMsg := func() tea.Msg { return screens.NotesActionMsg{Action: action} }
+			if !alsoRoute {
+				return actionMsg
+			}
+			return tea.Sequence(func() tea.Msg { return routeMsg{"notes"} }, actionMsg)
+		}
+	}
 	onMail := func(ctx commands.Context) bool { return ctx.ActiveScreen == "mail" }
 	onDrive := func(ctx commands.Context) bool { return ctx.ActiveScreen == "drive" }
+	onNotes := func(ctx commands.Context) bool { return ctx.ActiveScreen == "notes" }
+	onNotesItem := func(ctx commands.Context) bool {
+		return ctx.ActiveScreen == "notes" && ctx.Selection != nil && ctx.Selection.Kind == "note" && ctx.Selection.HasItems
+	}
 	onMailDrafts := func(ctx commands.Context) bool {
 		return ctx.ActiveScreen == "mail" && ctx.Selection != nil && ctx.Selection.IsDraft && ctx.Selection.HasItems
 	}
@@ -746,6 +875,7 @@ func (m *Model) registerCommands() {
 	// Navigation
 	m.commands.Register(commands.Command{ID: "go-home", Module: commands.ModuleGlobal, Title: "Go to Home", Description: "Open the home screen", Keywords: []string{"home", "start"}, Run: route("home")})
 	m.commands.Register(commands.Command{ID: "go-mail", Module: commands.ModuleMail, Title: "Open Mail", Description: "Switch to cached mail", Keywords: []string{"mail", "email", "inbox"}, Run: route("mail")})
+	m.commands.Register(commands.Command{ID: "go-notes", Module: commands.ModuleNotes, Title: "Open Notes", Description: "Switch to cached Notes", Keywords: []string{"notes", "markdown", "memo"}, Run: route("notes")})
 	m.commands.Register(commands.Command{ID: "go-drive", Module: commands.ModuleDrive, Title: "Open Drive", Description: "Switch to local Drive mirror", Keywords: []string{"drive", "files", "documents"}, Run: route("drive")})
 	m.commands.Register(commands.Command{ID: "go-settings", Module: commands.ModuleSettings, Title: "Open Settings", Description: "Open application settings", Keywords: []string{"settings", "config"}, Run: route("settings")})
 	if m.devBuild() {
@@ -762,6 +892,13 @@ func (m *Model) registerCommands() {
 	m.commands.Register(commands.Command{ID: "drive-rename", Module: commands.ModuleDrive, Title: "Rename selected", Description: "Rename the highlighted Drive item", Shortcut: "R", Keywords: []string{"rename"}, Available: onDrive, Run: driveAction("rename", false)})
 	m.commands.Register(commands.Command{ID: "drive-delete", Module: commands.ModuleDrive, Title: "Delete selected", Description: "Delete the highlighted Drive item after confirmation", Shortcut: "x", Keywords: []string{"delete", "remove"}, Available: onDrive, Run: driveAction("delete", false)})
 	m.commands.Register(commands.Command{ID: "drive-details", Module: commands.ModuleDrive, Title: "Show details", Description: "Toggle details for the highlighted Drive item", Shortcut: "i", Keywords: []string{"details", "info"}, Available: onDrive, Run: driveAction("details", false)})
+
+	// Notes — module-level
+	m.commands.Register(commands.Command{ID: "notes-sync", Module: commands.ModuleNotes, Title: "Sync Notes", Description: "Pull latest Notes folders and note bodies", Shortcut: "S", Keywords: []string{"sync", "refresh"}, Run: notesAction("sync", true)})
+	m.commands.Register(commands.Command{ID: "notes-new", Module: commands.ModuleNotes, Title: "New note", Description: "Create a note in the current Notes folder", Shortcut: "n", Keywords: []string{"new", "create", "write"}, Available: onNotes, Run: notesAction("new", false)})
+	m.commands.Register(commands.Command{ID: "notes-edit", Module: commands.ModuleNotes, Title: "Edit selected note", Description: "Open the highlighted note in TELEX_NOTES_EDITOR, VISUAL, or EDITOR", Shortcut: "e", Keywords: []string{"edit", "write"}, Available: onNotesItem, Run: notesAction("edit", false)})
+	m.commands.Register(commands.Command{ID: "notes-delete", Module: commands.ModuleNotes, Title: "Delete selected note", Description: "Delete the highlighted note after confirmation", Shortcut: "x", Keywords: []string{"delete", "remove"}, Available: onNotesItem, Run: notesAction("delete", false)})
+	m.commands.Register(commands.Command{ID: "notes-search", Module: commands.ModuleNotes, Title: "Search current Notes folder", Description: "Filter notes and folders in the current Notes folder", Shortcut: "/", Keywords: []string{"search", "filter"}, Available: onNotes, Run: notesAction("search", false)})
 
 	// Mail / Drafts
 	m.commands.Register(commands.Command{ID: "drafts-compose", Module: commands.ModuleMail, Group: commands.GroupDrafts, Title: "Compose new", Description: "Start a new draft", Shortcut: "c", Keywords: []string{"compose", "new", "write"}, Run: mailAction("compose", true)})
@@ -809,6 +946,12 @@ func (m Model) paletteContext() commands.Context {
 				IsDraft:  sel.IsDraft,
 				HasItems: sel.HasItem,
 			}
+		}
+	}
+	if m.activeScreen == "notes" {
+		if notesScreen, ok := m.screens["notes"].(screens.Notes); ok {
+			sel := notesScreen.Selection()
+			ctx.Selection = &commands.Selection{Kind: sel.Kind, Subject: sel.Subject, HasItems: sel.HasItem}
 		}
 	}
 	return ctx

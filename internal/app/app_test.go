@@ -28,6 +28,21 @@ func TestRouteRunsScreenInitCommand(t *testing.T) {
 	}
 }
 
+func TestNotesScreenRegisteredInNavigationAndCommands(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+	if _, ok := model.screens["notes"]; !ok {
+		t.Fatal("expected notes screen to be registered")
+	}
+	if got := model.screenOrder; len(got) < 4 || got[2] != "notes" {
+		t.Fatalf("screenOrder = %#v", got)
+	}
+	for _, id := range []string{"go-notes", "notes-sync", "notes-new", "notes-edit", "notes-delete", "notes-search"} {
+		if _, ok := model.commands.Find(id); !ok {
+			t.Fatalf("expected command %q", id)
+		}
+	}
+}
+
 func TestTabCyclesFocusOutsideConversationView(t *testing.T) {
 	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
 	model = sendKey(t, model, tea.Key{Code: tea.KeyTab})
