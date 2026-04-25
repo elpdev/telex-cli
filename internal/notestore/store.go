@@ -171,6 +171,57 @@ func (s Store) DeleteNote(id int64) error {
 	return err
 }
 
+func (s Store) AllNotes() ([]CachedNote, error) {
+	entries, err := os.ReadDir(s.notesRoot())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := []CachedNote{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		cached, err := s.ReadNotePath(filepath.Join(s.notesRoot(), entry.Name()))
+		if err != nil {
+			continue
+		}
+		out = append(out, *cached)
+	}
+	return out, nil
+}
+
+func (s Store) Counts() (totalNotes, totalFolders int, err error) {
+	tree, err := s.FolderTree()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, 0, nil
+		}
+		return 0, 0, err
+	}
+	if tree == nil {
+		return 0, 0, nil
+	}
+	totalNotes, totalFolders = countTree(tree)
+	return totalNotes, totalFolders, nil
+}
+
+func countTree(t *notes.FolderTree) (n, f int) {
+	if t == nil {
+		return 0, 0
+	}
+	n = t.NoteCount
+	f = 1
+	for i := range t.Children {
+		cn, cf := countTree(&t.Children[i])
+		n += cn
+		f += cf
+	}
+	return
+}
+
 func (s Store) FolderTree() (*notes.FolderTree, error) {
 	meta, err := s.readStoreMeta()
 	if err != nil {

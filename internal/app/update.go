@@ -215,6 +215,7 @@ func (m Model) handleSidebarKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) updateDerivedScreens() {
+	m.screens["home"] = m.buildHome()
 	m.screens["settings"] = m.buildSettings()
 	if m.devBuild() {
 		m.screens["logs"] = screens.NewLogs(m.logs)

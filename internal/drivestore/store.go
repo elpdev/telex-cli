@@ -147,6 +147,41 @@ func (s Store) WriteFileContent(path string, meta FileMeta, content []byte, sync
 	return writeTOML(fileMetaPath(path), meta)
 }
 
+func (s Store) AllFiles() ([]FileMeta, error) {
+	root := s.DriveRoot()
+	out := []FileMeta{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(entry.Name(), ".meta.toml") {
+			return nil
+		}
+		var meta FileMeta
+		if _, err := toml.DecodeFile(path, &meta); err != nil {
+			return nil
+		}
+		if meta.Kind != "file" {
+			return nil
+		}
+		out = append(out, meta)
+		return nil
+	})
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
 func (s Store) List(path string) ([]Entry, error) {
 	if path == "" {
 		path = s.DriveRoot()

@@ -142,7 +142,7 @@ func (m Model) Init() tea.Cmd {
 func (m Model) devBuild() bool { return m.meta.Version == "dev" }
 
 func (m *Model) registerScreens() {
-	m.screens["home"] = screens.NewHome()
+	m.screens["home"] = m.buildHome()
 	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody).WithJunkActions(m.junkMessage, m.notJunkMessage).WithSenderPolicyActions(m.blockSender, m.unblockSender, m.blockDomain, m.unblockDomain, m.trustSender, m.untrustSender)
 	m.screens["mail-admin"] = screens.NewMailAdmin(m.loadMailAdmin).WithActions(m.saveDomain, m.deleteDomain, m.validateDomainOutbound, m.saveInbox, m.deleteInbox, m.inboxPipeline)
 	m.screens["calendar"] = screens.NewCalendar(calendarstore.New(m.dataPath), m.syncCalendar).WithActions(m.createCalendarEvent, m.updateCalendarEvent, m.deleteCalendarEvent).WithCalendarActions(m.createCalendar, m.updateCalendar, m.deleteCalendar)
@@ -153,6 +153,23 @@ func (m *Model) registerScreens() {
 		m.screens["logs"] = screens.NewLogs(m.logs)
 	}
 	m.refreshScreenOrder()
+}
+
+func (m *Model) buildHome() screens.Home {
+	if existing, ok := m.screens["home"].(screens.Home); ok {
+		return existing.Reconfigure(m.theme)
+	}
+	navigate := func(id string) tea.Cmd {
+		return func() tea.Msg { return routeMsg{ScreenID: id} }
+	}
+	return screens.NewHome(
+		mailstore.New(m.dataPath),
+		calendarstore.New(m.dataPath),
+		notestore.New(m.dataPath),
+		drivestore.New(m.dataPath),
+		m.theme,
+		navigate,
+	)
 }
 
 func (m *Model) buildSettings() screens.Settings {
