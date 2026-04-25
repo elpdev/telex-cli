@@ -92,6 +92,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.screens[m.activeScreen] = updated
 		return m, cmd
 	case key.Matches(msg, m.keys.Focus):
+		active := m.screens[m.activeScreen]
+		if capture, ok := active.(interface{ CapturesFocusKey(tea.KeyPressMsg) bool }); ok && capture.CapturesFocusKey(msg) {
+			updated, cmd := active.Update(msg)
+			m.screens[m.activeScreen] = updated
+			return m, cmd
+		}
 		if m.focus == FocusMain && m.showSidebar {
 			m.focus = FocusSidebar
 		} else {

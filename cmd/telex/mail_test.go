@@ -96,6 +96,17 @@ func TestMailSearchCommandExists(t *testing.T) {
 	}
 }
 
+func TestConversationsTimelineCommandExists(t *testing.T) {
+	cmd := newRootCommand(buildInfo{})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"mail", "conversations", "timeline", "--help"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInboxListCommandReadsLocalCache(t *testing.T) {
 	dataDir := t.TempDir()
 	store := mailstore.New(dataDir)

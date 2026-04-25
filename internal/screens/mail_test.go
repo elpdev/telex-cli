@@ -728,6 +728,96 @@ func TestMailScreenRemoteSearchShowsTransientResults(t *testing.T) {
 	}
 }
 
+func TestMailScreenConversationOpensFromListAndNavigates(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	mailbox := mailstore.MailboxMeta{SchemaVersion: mailstore.SchemaVersion, DomainID: 12, DomainName: "example.com", InboxID: 34, Address: "hello@example.com", LocalPart: "hello", Active: true, SyncedAt: time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC)}
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StoreInboxMessage(mailbox, mail.Message{ID: 1, ConversationID: 77, Subject: "Thread", FromAddress: "a@example.net", SystemState: "inbox", ReceivedAt: time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)}, nil, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	screen := NewMail(store).WithConversationActions(func(ctx context.Context, id int64) ([]ConversationEntry, error) {
+		if id != 77 {
+			t.Fatalf("conversation id = %d", id)
+		}
+		return []ConversationEntry{
+			{Kind: "inbound", RecordID: 1, ConversationID: 77, Subject: "First", Sender: "a@example.net", Summary: "first summary", OccurredAt: time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)},
+			{Kind: "outbound", RecordID: 2, ConversationID: 77, Subject: "Second", Sender: "hello@example.com", Recipients: []string{"a@example.net"}, Summary: "second summary", Status: "sent", OccurredAt: time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)},
+		}, nil
+	}, func(ctx context.Context, entry ConversationEntry) (string, error) {
+		return entry.Subject + " body", nil
+	})
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "T", Code: 'T'}))
+	screen = updated.(Mail)
+	if cmd == nil {
+		t.Fatal("expected conversation load command")
+	}
+	updated, cmd = screen.Update(cmd())
+	screen = updated.(Mail)
+	if cmd != nil {
+		updated, _ = screen.Update(cmd())
+		screen = updated.(Mail)
+	}
+	view := stripScreenANSI(screen.View(100, 20))
+	if !strings.Contains(view, "Conversation 77") || !strings.Contains(view, "First body") {
+		t.Fatalf("view = %q", view)
+	}
+	updated, cmd = screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	screen = updated.(Mail)
+	if cmd != nil {
+		updated, _ = screen.Update(cmd())
+		screen = updated.(Mail)
+	}
+	view = stripScreenANSI(screen.View(100, 20))
+	if !strings.Contains(view, "Second body") {
+		t.Fatalf("view after tab = %q", view)
+	}
+	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
+	screen = updated.(Mail)
+	view = stripScreenANSI(screen.View(100, 20))
+	if !strings.Contains(view, "First body") {
+		t.Fatalf("view after shift-tab = %q", view)
+	}
+}
+
+func TestMailScreenConversationOpensFromDetail(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	mailbox := mailstore.MailboxMeta{SchemaVersion: mailstore.SchemaVersion, DomainID: 12, DomainName: "example.com", InboxID: 34, Address: "hello@example.com", LocalPart: "hello", Active: true, SyncedAt: time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC)}
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StoreInboxMessage(mailbox, mail.Message{ID: 1, ConversationID: 88, Subject: "Detail Thread", FromAddress: "a@example.net", SystemState: "inbox", ReceivedAt: time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)}, nil, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	screen := NewMail(store).WithConversationActions(func(ctx context.Context, id int64) ([]ConversationEntry, error) {
+		return []ConversationEntry{{Kind: "inbound", RecordID: 1, ConversationID: id, Subject: "Detail Thread", Sender: "a@example.net", Summary: "summary", OccurredAt: time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)}}, nil
+	}, func(ctx context.Context, entry ConversationEntry) (string, error) { return "detail thread body", nil })
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	screen = updated.(Mail)
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "T", Code: 'T'}))
+	screen = updated.(Mail)
+	updated, cmd = screen.Update(cmd())
+	screen = updated.(Mail)
+	if cmd != nil {
+		updated, _ = screen.Update(cmd())
+		screen = updated.(Mail)
+	}
+	view := stripScreenANSI(screen.View(100, 20))
+	if !strings.Contains(view, "detail thread body") {
+		t.Fatalf("view = %q", view)
+	}
+	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	screen = updated.(Mail)
+	if screen.mode != mailModeDetail {
+		t.Fatalf("mode = %v, want detail", screen.mode)
+	}
+}
+
 func TestMailScreenShowsAndCachesAttachment(t *testing.T) {
 	store := mailstore.New(t.TempDir())
 	mailbox := mailstore.MailboxMeta{SchemaVersion: mailstore.SchemaVersion, DomainID: 12, DomainName: "example.com", InboxID: 34, Address: "hello@example.com", LocalPart: "hello", Active: true, SyncedAt: time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC)}

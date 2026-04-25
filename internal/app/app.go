@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -101,7 +102,7 @@ func (m Model) devBuild() bool { return m.meta.Version == "dev" }
 
 func (m *Model) registerScreens() {
 	m.screens["home"] = screens.NewHome()
-	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail)
+	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody)
 	m.screens["settings"] = screens.NewSettings(screens.SettingsState{
 		ThemeName:      m.theme.Name,
 		SidebarVisible: m.showSidebar,
@@ -295,6 +296,57 @@ func (m *Model) searchMail(ctx context.Context, params screens.MailSearchParams)
 		results = append(results, cachedRemoteMessage(message))
 	}
 	return results, nil
+}
+
+func (m *Model) conversationTimeline(ctx context.Context, id int64) ([]screens.ConversationEntry, error) {
+	service, err := m.mailService()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := service.ConversationTimeline(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]screens.ConversationEntry, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, screens.ConversationEntry{
+			Kind:           entry.Kind,
+			RecordID:       entry.RecordID,
+			OccurredAt:     entry.OccurredAt,
+			Sender:         entry.Sender,
+			Recipients:     entry.Recipients,
+			Summary:        entry.Summary,
+			Status:         entry.Status,
+			Subject:        entry.Subject,
+			ConversationID: entry.ConversationID,
+		})
+	}
+	return out, nil
+}
+
+func (m *Model) conversationBody(ctx context.Context, entry screens.ConversationEntry) (string, error) {
+	service, err := m.mailService()
+	if err != nil {
+		return "", err
+	}
+	if entry.Kind == "outbound" {
+		message, err := service.ShowOutboundMessage(ctx, entry.RecordID)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(message.BodyText) != "" {
+			return message.BodyText, nil
+		}
+		return message.BodyHTML, nil
+	}
+	body, err := service.MessageBody(ctx, entry.RecordID)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(body.Text) != "" {
+		return body.Text, nil
+	}
+	return body.HTML, nil
 }
 
 func cachedRemoteMessage(message mail.Message) mailstore.CachedMessage {

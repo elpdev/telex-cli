@@ -115,6 +115,18 @@ type MessageBody struct {
 	InlineAssets []InlineAsset `json:"inline_assets"`
 }
 
+type ConversationTimelineEntry struct {
+	Kind           string    `json:"kind"`
+	RecordID       int64     `json:"record_id"`
+	OccurredAt     time.Time `json:"occurred_at"`
+	Sender         string    `json:"sender"`
+	Recipients     []string  `json:"recipients"`
+	Summary        string    `json:"summary"`
+	Status         string    `json:"status"`
+	Subject        string    `json:"subject"`
+	ConversationID int64     `json:"conversation_id"`
+}
+
 type InlineAsset struct {
 	Token       string `json:"token"`
 	ContentID   string `json:"content_id"`

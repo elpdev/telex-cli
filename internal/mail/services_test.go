@@ -57,6 +57,21 @@ func TestArchiveMessageUsesActionEndpoint(t *testing.T) {
 	}
 }
 
+func TestConversationTimelineUsesTimelineEndpoint(t *testing.T) {
+	fake := &fakeClient{body: []byte(`{"data":[{"kind":"inbound","record_id":123,"subject":"Thread","conversation_id":99}]}`)}
+	service := NewService(fake)
+	entries, err := service.ConversationTimeline(context.Background(), 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.getPath != "/api/v1/conversations/99/timeline" {
+		t.Fatalf("get path = %q", fake.getPath)
+	}
+	if len(entries) != 1 || entries[0].Kind != "inbound" || entries[0].RecordID != 123 {
+		t.Fatalf("entries = %#v", entries)
+	}
+}
+
 func TestCreateOutboundMessageSendsExpectedPayload(t *testing.T) {
 	fake := &fakeClient{body: []byte(`{"data":{"id":123,"status":"draft"}}`)}
 	service := NewService(fake)

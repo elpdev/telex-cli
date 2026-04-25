@@ -24,6 +24,7 @@ func newMailCommand(rt *runtime) *cobra.Command {
 	cmd.AddCommand(newDraftsCommand(rt))
 	cmd.AddCommand(newOutboxCommand(rt))
 	cmd.AddCommand(newMailSearchCommand(rt))
+	cmd.AddCommand(newConversationsCommand(rt))
 	cmd.AddCommand(newMessagesCommand(rt))
 	return cmd
 }
@@ -824,6 +825,40 @@ func newMessagesCommand(rt *runtime) *cobra.Command {
 	return cmd
 }
 
+func newConversationsCommand(rt *runtime) *cobra.Command {
+	cmd := &cobra.Command{Use: "conversations", Short: "Inspect conversation threads"}
+	cmd.AddCommand(newConversationTimelineCommand(rt))
+	return cmd
+}
+
+func newConversationTimelineCommand(rt *runtime) *cobra.Command {
+	return &cobra.Command{
+		Use:   "timeline <id>",
+		Short: "Show a remote conversation timeline",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID(args[0])
+			if err != nil {
+				return err
+			}
+			service, err := mailService(rt)
+			if err != nil {
+				return err
+			}
+			entries, err := service.ConversationTimeline(rt.context(), id)
+			if err != nil {
+				return err
+			}
+			rows := make([][]string, 0, len(entries))
+			for _, entry := range entries {
+				rows = append(rows, conversationTimelineRow(entry))
+			}
+			writeRows(cmd.OutOrStdout(), []string{"kind", "id", "subject", "sender", "recipients", "status", "occurred_at"}, rows)
+			return nil
+		},
+	}
+}
+
 func newMessagesListCommand(rt *runtime) *cobra.Command {
 	var params mail.MessageListParams
 	cmd := &cobra.Command{
@@ -988,6 +1023,18 @@ func messageFields(message mail.Message) [][]string {
 		{"starred", strconv.FormatBool(message.Starred)},
 		{"received_at", message.ReceivedAt.Format("2006-01-02 15:04")},
 		{"preview", message.PreviewText},
+	}
+}
+
+func conversationTimelineRow(entry mail.ConversationTimelineEntry) []string {
+	return []string{
+		entry.Kind,
+		strconv.FormatInt(entry.RecordID, 10),
+		entry.Subject,
+		entry.Sender,
+		strings.Join(entry.Recipients, ", "),
+		entry.Status,
+		entry.OccurredAt.Format("2006-01-02 15:04"),
 	}
 }
 

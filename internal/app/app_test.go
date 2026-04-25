@@ -28,6 +28,18 @@ func TestRouteRunsScreenInitCommand(t *testing.T) {
 	}
 }
 
+func TestTabCyclesFocusOutsideConversationView(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+	model = sendKey(t, model, tea.Key{Code: tea.KeyTab})
+	if model.focus != FocusSidebar {
+		t.Fatalf("focus = %v, want sidebar", model.focus)
+	}
+	model = sendKey(t, model, tea.Key{Code: tea.KeyTab})
+	if model.focus != FocusMain {
+		t.Fatalf("focus = %v, want main", model.focus)
+	}
+}
+
 func TestCommandPaletteThemePreviewCanReturnToRoot(t *testing.T) {
 	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
 	model = openThemePalette(t, model)

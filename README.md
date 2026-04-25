@@ -71,6 +71,9 @@ telex mail messages show <id>
 # Show message body
 telex mail messages body <id>
 
+# Show a remote conversation timeline
+telex mail conversations timeline <conversation-id>
+
 # Archive, trash, star, etc.
 telex mail messages archive <id>
 telex mail messages trash <id>

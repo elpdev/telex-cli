@@ -25,6 +25,7 @@ const (
 	mailModeLinks
 	mailModeArticle
 	mailModeAttachments
+	mailModeConversation
 	mailReadWidth = 100
 )
 
@@ -33,52 +34,60 @@ var mailBoxes = []string{"inbox", "archive", "trash", "sent", "outbox", "drafts"
 var extractArticleURL = articletext.NewExtractor().ExtractURL
 
 type Mail struct {
-	store             mailstore.Store
-	toggleRead        ToggleReadFunc
-	toggleStar        ToggleStarFunc
-	archive           MessageActionFunc
-	trash             MessageActionFunc
-	restore           MessageActionFunc
-	sync              SyncFunc
-	sendDraft         SendDraftFunc
-	updateDraft       UpdateDraftFunc
-	deleteDraft       DeleteDraftFunc
-	forward           ForwardFunc
-	download          DownloadAttachmentFunc
-	remoteSearch      RemoteSearchFunc
-	mailboxes         []mailstore.MailboxMeta
-	mailboxIndex      int
-	boxIndex          int
-	allMessages       []mailstore.CachedMessage
-	messages          []mailstore.CachedMessage
-	messageIndex      int
-	searching         bool
-	searchQuery       string
-	searchInput       string
-	remoteSearching   bool
-	remoteSearchQuery string
-	remoteSearchInput string
-	remoteResults     bool
-	detailScroll      int
-	links             []emailtext.Link
-	linkIndex         int
-	attachmentIndex   int
-	savingAttachment  bool
-	saveDirInput      string
-	attachingFile     bool
-	attachPathInput   string
-	forwarding        bool
-	forwardToInput    string
-	article           string
-	articleURL        string
-	articleScroll     int
-	mode              mailMode
-	loading           bool
-	syncing           bool
-	confirm           string
-	err               error
-	status            string
-	keys              MailKeyMap
+	store                 mailstore.Store
+	toggleRead            ToggleReadFunc
+	toggleStar            ToggleStarFunc
+	archive               MessageActionFunc
+	trash                 MessageActionFunc
+	restore               MessageActionFunc
+	sync                  SyncFunc
+	sendDraft             SendDraftFunc
+	updateDraft           UpdateDraftFunc
+	deleteDraft           DeleteDraftFunc
+	forward               ForwardFunc
+	download              DownloadAttachmentFunc
+	remoteSearch          RemoteSearchFunc
+	conversation          ConversationFunc
+	conversationBody      ConversationBodyFunc
+	mailboxes             []mailstore.MailboxMeta
+	mailboxIndex          int
+	boxIndex              int
+	allMessages           []mailstore.CachedMessage
+	messages              []mailstore.CachedMessage
+	messageIndex          int
+	searching             bool
+	searchQuery           string
+	searchInput           string
+	remoteSearching       bool
+	remoteSearchQuery     string
+	remoteSearchInput     string
+	remoteResults         bool
+	detailScroll          int
+	links                 []emailtext.Link
+	linkIndex             int
+	attachmentIndex       int
+	savingAttachment      bool
+	saveDirInput          string
+	attachingFile         bool
+	attachPathInput       string
+	forwarding            bool
+	forwardToInput        string
+	article               string
+	articleURL            string
+	articleScroll         int
+	conversationID        int64
+	conversationItems     []ConversationEntry
+	conversationIndex     int
+	conversationBodyCache map[string]string
+	conversationScroll    int
+	previousMode          mailMode
+	mode                  mailMode
+	loading               bool
+	syncing               bool
+	confirm               string
+	err                   error
+	status                string
+	keys                  MailKeyMap
 }
 
 type MailKeyMap struct {
@@ -107,6 +116,7 @@ type MailKeyMap struct {
 	Back         key.Binding
 	Refresh      key.Binding
 	RemoteSearch key.Binding
+	Thread       key.Binding
 }
 
 type mailLoadedMsg struct {
@@ -125,6 +135,18 @@ type remoteSearchLoadedMsg struct {
 	query    string
 	messages []mailstore.CachedMessage
 	err      error
+}
+
+type conversationLoadedMsg struct {
+	conversationID int64
+	entries        []ConversationEntry
+	err            error
+}
+
+type conversationBodyLoadedMsg struct {
+	key  string
+	body string
+	err  error
 }
 
 type htmlOpenFinishedMsg struct {
@@ -225,6 +247,8 @@ type DeleteDraftFunc func(context.Context, mailstore.Draft) error
 type ForwardFunc func(context.Context, int64, mailstore.Draft) (int64, string, error)
 type DownloadAttachmentFunc func(context.Context, mailstore.AttachmentMeta) ([]byte, error)
 type RemoteSearchFunc func(context.Context, MailSearchParams) ([]mailstore.CachedMessage, error)
+type ConversationFunc func(context.Context, int64) ([]ConversationEntry, error)
+type ConversationBodyFunc func(context.Context, ConversationEntry) (string, error)
 
 type MailSearchParams struct {
 	InboxID int64
@@ -233,6 +257,18 @@ type MailSearchParams struct {
 	Page    int
 	PerPage int
 	Sort    string
+}
+
+type ConversationEntry struct {
+	Kind           string
+	RecordID       int64
+	OccurredAt     time.Time
+	Sender         string
+	Recipients     []string
+	Summary        string
+	Status         string
+	Subject        string
+	ConversationID int64
 }
 
 type MailSyncResult struct {
@@ -255,6 +291,12 @@ func NewMailWithActions(store mailstore.Store, toggleRead ToggleReadFunc, toggle
 		search = remoteSearch[0]
 	}
 	return Mail{store: store, toggleRead: toggleRead, toggleStar: toggleStar, archive: archive, trash: trash, restore: restore, sync: sync, sendDraft: sendDraft, updateDraft: updateDraft, deleteDraft: deleteDraft, forward: forward, download: download, remoteSearch: search, keys: DefaultMailKeyMap(), loading: true}
+}
+
+func (m Mail) WithConversationActions(conversation ConversationFunc, body ConversationBodyFunc) Mail {
+	m.conversation = conversation
+	m.conversationBody = body
+	return m
 }
 
 func DefaultMailKeyMap() MailKeyMap {
@@ -284,6 +326,7 @@ func DefaultMailKeyMap() MailKeyMap {
 		Back:         key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload cache")),
 		RemoteSearch: key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "remote search")),
+		Thread:       key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "thread")),
 	}
 }
 
@@ -334,6 +377,32 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		m.messageIndex = 0
 		m.clampSelection()
 		m.status = fmt.Sprintf("Remote search: %s (%d result(s), transient)", msg.query, len(msg.messages))
+		return m, nil
+	case conversationLoadedMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not load conversation: %v", msg.err)
+			return m, nil
+		}
+		m.conversationID = msg.conversationID
+		m.conversationItems = msg.entries
+		m.conversationIndex = 0
+		m.conversationScroll = 0
+		m.conversationBodyCache = make(map[string]string)
+		m.mode = mailModeConversation
+		m.status = ""
+		m.clampConversationSelection()
+		return m, m.loadConversationBodyCmd()
+	case conversationBodyLoadedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Could not load conversation body: %v", msg.err)
+			return m, nil
+		}
+		if m.conversationBodyCache == nil {
+			m.conversationBodyCache = make(map[string]string)
+		}
+		m.conversationBodyCache[msg.key] = msg.body
+		m.status = ""
 		return m, nil
 	case htmlOpenFinishedMsg:
 		if msg.err != nil {
@@ -532,6 +601,9 @@ func (m Mail) View(width, height int) string {
 	if m.mode == mailModeAttachments && len(m.messages) > 0 {
 		return style.Render(m.attachmentsView(width, height))
 	}
+	if m.mode == mailModeConversation {
+		return style.Render(m.conversationView(width, height))
+	}
 	if m.mode == mailModeDetail && len(m.messages) > 0 {
 		return style.Render(m.detailView(width, height))
 	}
@@ -541,7 +613,11 @@ func (m Mail) View(width, height int) string {
 func (m Mail) Title() string { return "Mail" }
 
 func (m Mail) KeyBindings() []key.Binding {
-	return []key.Binding{m.keys.Up, m.keys.Down, m.keys.Previous, m.keys.Next, m.keys.BoxPrev, m.keys.BoxNext, m.keys.Open, m.keys.OpenHTML, m.keys.Links, m.keys.Attachments, m.keys.Extract, m.keys.Compose, m.keys.Reply, m.keys.Forward, m.keys.Send, m.keys.Delete, m.keys.ToggleRead, m.keys.ToggleStar, m.keys.Archive, m.keys.Trash, m.keys.Restore, m.keys.Copy, m.keys.Back, m.keys.Refresh, m.keys.RemoteSearch}
+	return []key.Binding{m.keys.Up, m.keys.Down, m.keys.Previous, m.keys.Next, m.keys.BoxPrev, m.keys.BoxNext, m.keys.Open, m.keys.OpenHTML, m.keys.Links, m.keys.Attachments, m.keys.Extract, m.keys.Compose, m.keys.Reply, m.keys.Forward, m.keys.Send, m.keys.Delete, m.keys.ToggleRead, m.keys.ToggleStar, m.keys.Archive, m.keys.Trash, m.keys.Restore, m.keys.Copy, m.keys.Back, m.keys.Refresh, m.keys.RemoteSearch, m.keys.Thread}
+}
+
+func (m Mail) CapturesFocusKey(msg tea.KeyPressMsg) bool {
+	return m.mode == mailModeConversation && msg.String() == "tab"
 }
 
 func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
@@ -568,6 +644,9 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	}
 	if m.mode == mailModeAttachments {
 		return m.handleAttachmentsKey(msg)
+	}
+	if m.mode == mailModeConversation {
+		return m.handleConversationKey(msg)
 	}
 	if m.mode == mailModeLinks {
 		return m.handleLinksKey(msg)
@@ -600,6 +679,9 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			m.mode = mailModeAttachments
 			m.status = ""
 			return m, nil
+		}
+		if key.Matches(msg, m.keys.Thread) {
+			return m.openConversation()
 		}
 		if key.Matches(msg, m.keys.Reply) {
 			return m.editReplyDraft()
@@ -727,6 +809,8 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			m.detailScroll = 0
 			m.status = ""
 		}
+	case key.Matches(msg, m.keys.Thread):
+		return m.openConversation()
 	case key.Matches(msg, m.keys.ToggleRead):
 		return m.toggleSelectedRead()
 	case key.Matches(msg, m.keys.ToggleStar):
@@ -1039,6 +1123,107 @@ func (m Mail) startRemoteSearch(query string) (Screen, tea.Cmd) {
 	}
 }
 
+func (m Mail) openConversation() (Screen, tea.Cmd) {
+	if len(m.messages) == 0 {
+		return m, nil
+	}
+	if m.conversation == nil {
+		m.status = "Conversation view is not configured"
+		return m, nil
+	}
+	conversationID := m.messages[m.messageIndex].Meta.ConversationID
+	if conversationID == 0 {
+		m.status = "No conversation for this message"
+		return m, nil
+	}
+	m.previousMode = m.mode
+	m.loading = true
+	m.status = "Loading conversation..."
+	return m, func() tea.Msg {
+		entries, err := m.conversation(context.Background(), conversationID)
+		return conversationLoadedMsg{conversationID: conversationID, entries: entries, err: err}
+	}
+}
+
+func (m Mail) handleConversationKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+	if key.Matches(msg, m.keys.Back) {
+		if m.previousMode == mailModeDetail {
+			m.mode = mailModeDetail
+		} else {
+			m.mode = mailModeList
+		}
+		m.conversationScroll = 0
+		m.status = ""
+		return m, nil
+	}
+	switch msg.String() {
+	case "tab":
+		if m.conversationIndex < len(m.conversationItems)-1 {
+			m.conversationIndex++
+			m.conversationScroll = 0
+			m.status = ""
+			return m, m.loadConversationBodyCmd()
+		}
+		return m, nil
+	case "shift+tab":
+		if m.conversationIndex > 0 {
+			m.conversationIndex--
+			m.conversationScroll = 0
+			m.status = ""
+			return m, m.loadConversationBodyCmd()
+		}
+		return m, nil
+	}
+	maxScroll := m.maxConversationScroll()
+	switch {
+	case key.Matches(msg, m.keys.Up):
+		if m.conversationScroll > 0 {
+			m.conversationScroll--
+		}
+	case key.Matches(msg, m.keys.Down):
+		if m.conversationScroll < maxScroll {
+			m.conversationScroll++
+		}
+	case key.Matches(msg, m.keys.Reply):
+		if id := m.currentConversationInboundID(); id > 0 {
+			return m.editReplyDraftForMessageID(id)
+		}
+		m.status = "Reply is only available for inbound messages"
+	case key.Matches(msg, m.keys.Forward):
+		if id := m.currentConversationInboundID(); id > 0 {
+			return m.editForwardDraftForMessageID(id, nil)
+		}
+		m.status = "Forward is only available for inbound messages"
+	}
+	return m, nil
+}
+
+func (m Mail) loadConversationBodyCmd() tea.Cmd {
+	if len(m.conversationItems) == 0 || m.conversationIndex >= len(m.conversationItems) || m.conversationBody == nil {
+		return nil
+	}
+	entry := m.conversationItems[m.conversationIndex]
+	key := conversationEntryKey(entry)
+	if _, ok := m.conversationBodyCache[key]; ok {
+		return nil
+	}
+	return func() tea.Msg {
+		body, err := m.conversationBody(context.Background(), entry)
+		return conversationBodyLoadedMsg{key: key, body: body, err: err}
+	}
+}
+
+func (m Mail) currentConversationInboundID() int64 {
+	if len(m.conversationItems) == 0 || m.conversationIndex >= len(m.conversationItems) {
+		return 0
+	}
+	entry := m.conversationItems[m.conversationIndex]
+	if entry.Kind != "inbound" {
+		return 0
+	}
+	return entry.RecordID
+}
+
 func (m Mail) handleConfirmKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	switch strings.ToLower(msg.String()) {
 	case "y":
@@ -1230,7 +1415,23 @@ func (m Mail) editReplyDraft() (Screen, tea.Cmd) {
 	if len(m.messages) == 0 || len(m.mailboxes) == 0 {
 		return m, nil
 	}
-	message := m.messages[m.messageIndex]
+	return m.editReplyDraftFromMessage(m.messages[m.messageIndex])
+}
+
+func (m Mail) editReplyDraftForMessageID(id int64) (Screen, tea.Cmd) {
+	if message, ok := m.findMessageByRemoteID(id); ok {
+		return m.editReplyDraftFromMessage(message)
+	}
+	entry := m.conversationItems[m.conversationIndex]
+	body := m.conversationBodyCache[conversationEntryKey(entry)]
+	message := mailstore.CachedMessage{Meta: mailstore.MessageMeta{RemoteID: entry.RecordID, ConversationID: entry.ConversationID, Subject: entry.Subject, FromAddress: entry.Sender, To: entry.Recipients, ReceivedAt: entry.OccurredAt}, BodyText: body}
+	return m.editReplyDraftFromMessage(message)
+}
+
+func (m Mail) editReplyDraftFromMessage(message mailstore.CachedMessage) (Screen, tea.Cmd) {
+	if len(m.mailboxes) == 0 {
+		return m, nil
+	}
 	subject := message.Meta.Subject
 	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(subject)), "re:") {
 		subject = "Re: " + subject
@@ -1243,12 +1444,42 @@ func (m Mail) editForwardDraft(to []string) (Screen, tea.Cmd) {
 	if len(m.messages) == 0 || len(m.mailboxes) == 0 {
 		return m, nil
 	}
-	message := m.messages[m.messageIndex]
+	return m.editForwardDraftFromMessage(m.messages[m.messageIndex], to)
+}
+
+func (m Mail) editForwardDraftForMessageID(id int64, to []string) (Screen, tea.Cmd) {
+	if message, ok := m.findMessageByRemoteID(id); ok {
+		return m.editForwardDraftFromMessage(message, to)
+	}
+	entry := m.conversationItems[m.conversationIndex]
+	body := m.conversationBodyCache[conversationEntryKey(entry)]
+	message := mailstore.CachedMessage{Meta: mailstore.MessageMeta{RemoteID: entry.RecordID, ConversationID: entry.ConversationID, Subject: entry.Subject, FromAddress: entry.Sender, To: entry.Recipients, ReceivedAt: entry.OccurredAt}, BodyText: body}
+	return m.editForwardDraftFromMessage(message, to)
+}
+
+func (m Mail) editForwardDraftFromMessage(message mailstore.CachedMessage, to []string) (Screen, tea.Cmd) {
+	if len(m.mailboxes) == 0 {
+		return m, nil
+	}
 	subject := message.Meta.Subject
 	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(subject)), "fwd:") {
 		subject = "Fwd: " + subject
 	}
 	return m.editDraft(draftTemplate(draftFields{From: m.mailboxes[m.mailboxIndex].Address, To: to, Subject: subject, Body: quotedForwardBody(message), SourceMessageID: message.Meta.RemoteID, ConversationID: message.Meta.ConversationID, DraftKind: "forward"}), "")
+}
+
+func (m Mail) findMessageByRemoteID(id int64) (mailstore.CachedMessage, bool) {
+	for _, message := range m.allMessages {
+		if message.Meta.RemoteID == id {
+			return message, true
+		}
+	}
+	for _, message := range m.messages {
+		if message.Meta.RemoteID == id {
+			return message, true
+		}
+	}
+	return mailstore.CachedMessage{}, false
 }
 
 func (m Mail) editSelectedDraft() (Screen, tea.Cmd) {
@@ -2022,6 +2253,104 @@ func (m Mail) detailView(width, height int) string {
 		b.WriteString(fmt.Sprintf("\n%d/%d lines", end, len(lines)))
 	}
 	return b.String()
+}
+
+func (m Mail) conversationView(width, height int) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Conversation %d", m.conversationID))
+	if len(m.conversationItems) > 0 {
+		entry := m.conversationItems[m.conversationIndex]
+		b.WriteString(fmt.Sprintf(" | %d/%d | %s", m.conversationIndex+1, len(m.conversationItems), entry.Subject))
+	}
+	b.WriteByte('\n')
+	b.WriteString("tab next, shift+tab previous, j/k scroll, r reply, f forward, esc back.\n")
+	if m.status != "" {
+		b.WriteString(fmt.Sprintf("Status: %s\n", m.status))
+	}
+	b.WriteByte('\n')
+	if len(m.conversationItems) == 0 {
+		b.WriteString("No timeline entries in this conversation.\n")
+		return b.String()
+	}
+	stripLimit := min(len(m.conversationItems), 5)
+	start := max(0, min(m.conversationIndex-2, len(m.conversationItems)-stripLimit))
+	for i := start; i < start+stripLimit; i++ {
+		entry := m.conversationItems[i]
+		cursor := "  "
+		if i == m.conversationIndex {
+			cursor = "> "
+		}
+		line := fmt.Sprintf("%s%s %-18s %-36s %s", cursor, conversationKindLabel(entry.Kind), truncate(entry.Sender, 18), truncate(entry.Subject, 36), entry.OccurredAt.Format("Jan 02 15:04"))
+		b.WriteString(truncate(line, width))
+		b.WriteByte('\n')
+	}
+	b.WriteByte('\n')
+	entry := m.conversationItems[m.conversationIndex]
+	b.WriteString(fmt.Sprintf("%s from %s to %s\n", strings.ToUpper(entry.Kind), entry.Sender, strings.Join(entry.Recipients, ", ")))
+	if entry.Status != "" {
+		b.WriteString(fmt.Sprintf("Status: %s\n", entry.Status))
+	}
+	b.WriteString(fmt.Sprintf("At: %s\n\n", entry.OccurredAt.Format("2006-01-02 15:04")))
+	body := m.conversationBodyCache[conversationEntryKey(entry)]
+	if strings.TrimSpace(body) == "" {
+		body = entry.Summary
+		if strings.TrimSpace(body) == "" {
+			body = "(loading body...)"
+		}
+	}
+	bodyWidth := min(width, mailReadWidth)
+	rendered, err := emailtext.Render(body, "", bodyWidth)
+	if err != nil {
+		rendered = fmt.Sprintf("(could not render body: %v)", err)
+	}
+	lines := strings.Split(rendered, "\n")
+	used := 10 + stripLimit
+	limit := max(1, height-used)
+	maxScroll := max(0, len(lines)-limit)
+	scroll := min(m.conversationScroll, maxScroll)
+	end := min(len(lines), scroll+limit)
+	for i := scroll; i < end; i++ {
+		b.WriteString(lines[i])
+		b.WriteByte('\n')
+	}
+	if len(lines) > limit {
+		b.WriteString(fmt.Sprintf("\n%d/%d lines", end, len(lines)))
+	}
+	return b.String()
+}
+
+func conversationKindLabel(kind string) string {
+	if kind == "outbound" {
+		return "OUT"
+	}
+	return "IN "
+}
+
+func conversationEntryKey(entry ConversationEntry) string {
+	return fmt.Sprintf("%s:%d", entry.Kind, entry.RecordID)
+}
+
+func (m Mail) maxConversationScroll() int {
+	if len(m.conversationItems) == 0 || m.conversationIndex >= len(m.conversationItems) {
+		return 0
+	}
+	entry := m.conversationItems[m.conversationIndex]
+	body := m.conversationBodyCache[conversationEntryKey(entry)]
+	if body == "" {
+		body = entry.Summary
+	}
+	lines := strings.Split(body, "\n")
+	return max(0, len(lines)-1)
+}
+
+func (m *Mail) clampConversationSelection() {
+	if m.conversationIndex >= len(m.conversationItems) {
+		m.conversationIndex = max(0, len(m.conversationItems)-1)
+	}
+	if len(m.conversationItems) == 0 {
+		m.conversationIndex = 0
+		m.conversationScroll = 0
+	}
 }
 
 func (m Mail) attachmentsView(width, height int) string {

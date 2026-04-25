@@ -71,6 +71,18 @@ func (s *Service) MessageBody(ctx context.Context, id int64) (*MessageBody, erro
 	return &envelope.Data, nil
 }
 
+func (s *Service) ConversationTimeline(ctx context.Context, id int64) ([]ConversationTimelineEntry, error) {
+	body, _, err := s.client.Get(ctx, fmt.Sprintf("/api/v1/conversations/%d/timeline", id), nil)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[[]ConversationTimelineEntry](body)
+	if err != nil {
+		return nil, err
+	}
+	return envelope.Data, nil
+}
+
 func (s *Service) ArchiveMessage(ctx context.Context, id int64) (*Message, error) {
 	return s.messageAction(ctx, id, http.MethodPost, "archive", nil)
 }
