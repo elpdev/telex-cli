@@ -251,6 +251,13 @@ func (m PaletteModel) matches() []Command {
 	if m.page == paletteSub {
 		return m.subPageCommands()
 	}
+	if m.query == "" && m.page == paletteRoot {
+		var out []Command
+		for _, group := range m.registry.GroupByModule(m.ctx) {
+			out = append(out, group.Commands...)
+		}
+		return out
+	}
 	return m.registry.Filter(m.query, m.ctx)
 }
 
