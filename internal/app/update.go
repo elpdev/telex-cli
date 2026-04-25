@@ -160,7 +160,9 @@ func (m Model) handleSidebarKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		idx--
 	} else if key.Matches(msg, m.keys.Down) && idx < len(m.screenOrder)-1 {
 		idx++
-	} else if !key.Matches(msg, m.keys.Enter) {
+	} else if key.Matches(msg, m.keys.Enter) {
+		m.focus = FocusMain
+	} else {
 		return m, nil
 	}
 	m.switchScreen(m.screenOrder[idx])
