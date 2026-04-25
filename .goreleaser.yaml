@@ -61,14 +61,14 @@ brews:
       bin.install "telex"
 
 aurs:
-  - name: telex-cli-bin
+  - name: telex-bin
     ids: [default]
     homepage: https://github.com/elpdev/telex-cli
     description: "Terminal UI and CLI for telex.sh email workflows"
     maintainers: ["elpdev <noreply@github.com>"]
     license: MIT
     private_key: "{{ .Env.AUR_KEY }}"
-    git_url: "ssh://aur@aur.archlinux.org/telex-cli-bin.git"
+    git_url: "ssh://aur@aur.archlinux.org/telex-bin.git"
     skip_upload: auto
     package: |-
       install -Dm755 telex "${pkgdir}/usr/bin/telex"
