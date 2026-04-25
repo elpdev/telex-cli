@@ -2,9 +2,12 @@ package emailtext
 
 import (
 	"fmt"
+	"io"
+	"mime/quotedprintable"
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	md "github.com/JohannesKaufmann/html-to-markdown"
 	"github.com/PuerkitoBio/goquery"
@@ -23,10 +26,46 @@ type Link struct {
 	URL  string
 }
 
+func DecodeQuotedPrintable(s string) string {
+	if s == "" {
+		return ""
+	}
+	// Soft line breaks are a strong signal of Quoted-Printable.
+	if !strings.Contains(s, "=\n") && !strings.Contains(s, "=\r\n") {
+		count := 0
+		for i := 0; i < len(s)-2; i++ {
+			if s[i] == '=' && isHex(s[i+1]) && isHex(s[i+2]) {
+				count++
+				if count >= 2 {
+					break
+				}
+			}
+		}
+		if count < 2 {
+			return s
+		}
+	}
+	r := quotedprintable.NewReader(strings.NewReader(s))
+	dec, err := io.ReadAll(r)
+	if err != nil {
+		return s
+	}
+	if !utf8.Valid(dec) {
+		return s
+	}
+	return string(dec)
+}
+
+func isHex(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'A' && b <= 'F') || (b >= 'a' && b <= 'f')
+}
+
 func Render(textBody, htmlBody string, width int) (string, error) {
 	if width < 20 {
 		width = 20
 	}
+	textBody = DecodeQuotedPrintable(textBody)
+	htmlBody = DecodeQuotedPrintable(htmlBody)
 	if MeaningfulPlainText(textBody) {
 		return RenderMarkdown(normalizePlainText(textBody), width)
 	}
@@ -110,6 +149,8 @@ func HTMLToMarkdown(htmlBody string) (string, error) {
 func Links(textBody, htmlBody string) []Link {
 	links := []Link{}
 	seen := map[string]bool{}
+	textBody = DecodeQuotedPrintable(textBody)
+	htmlBody = DecodeQuotedPrintable(htmlBody)
 	for _, link := range htmlLinks(htmlBody) {
 		if link.URL == "" || seen[link.URL] {
 			continue

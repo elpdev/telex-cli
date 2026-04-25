@@ -110,3 +110,25 @@ func TestRenderEmptyBody(t *testing.T) {
 		t.Fatalf("rendered = %q, want %q", rendered, emptyBody)
 	}
 }
+
+func TestDecodeQuotedPrintable(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"", ""},
+		{"hello", "hello"},
+		{"=C2=A0", "\u00a0"},
+		{"=E2=80=8C", "\u200c"},
+		{"foo=\nbar", "foobar"},
+		{"foo=\r\nbar", "foobar"},
+		{"Price = $10", "Price = $10"},
+		{"her=C2=A0tech.", "her\u00a0tech."},
+	}
+	for _, c := range cases {
+		got := DecodeQuotedPrintable(c.input)
+		if got != c.want {
+			t.Errorf("DecodeQuotedPrintable(%q) = %q, want %q", c.input, got, c.want)
+		}
+	}
+}
