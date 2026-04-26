@@ -12,9 +12,7 @@ import (
 const paletteWidth = 62
 
 const (
-	pageDraftActions   = "draft-actions"
-	pageMessageActions = "message-actions"
-	pageThemes         = "themes"
+	pageThemes = "themes"
 )
 
 func renderPaletteHeader(t theme.Theme, title, subtitle string, width int) string {
@@ -43,7 +41,6 @@ type PaletteModel struct {
 	executed *Command
 	action   PaletteAction
 	page     palettePage
-	subPage  string
 	original string
 	ctx      Context
 }
@@ -53,7 +50,6 @@ type palettePage int
 const (
 	paletteRoot palettePage = iota
 	paletteThemes
-	paletteSub
 )
 
 type PaletteAction struct {
@@ -87,13 +83,6 @@ func (m PaletteModel) Update(msg tea.Msg) (PaletteModel, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "esc":
-			if m.page == paletteSub {
-				m.page = paletteRoot
-				m.subPage = ""
-				m.query = ""
-				m.selected = 0
-				return m, nil
-			}
 			m.action = PaletteAction{Type: PaletteActionClose}
 			return m, nil
 		case "up", "ctrl+p":
@@ -123,9 +112,6 @@ func (m PaletteModel) Update(msg tea.Msg) (PaletteModel, tea.Cmd) {
 			if len(m.query) > 0 {
 				m.query = m.query[:len(m.query)-1]
 				m.selected = 0
-			} else if m.page == paletteSub {
-				m.page = paletteRoot
-				m.subPage = ""
 			}
 			return m, nil
 		case "space":
@@ -236,7 +222,6 @@ func (m *PaletteModel) Reset(currentTheme string, ctx Context) {
 	m.executed = nil
 	m.action = PaletteAction{}
 	m.page = paletteRoot
-	m.subPage = ""
 	m.original = currentTheme
 	m.ctx = ctx
 }
@@ -248,9 +233,6 @@ func (m PaletteModel) Action() PaletteAction { return m.action }
 func (m *PaletteModel) ClearAction() { m.action = PaletteAction{} }
 
 func (m PaletteModel) matches() []Command {
-	if m.page == paletteSub {
-		return m.subPageCommands()
-	}
 	if m.query == "" && m.page == paletteRoot {
 		var out []Command
 		for _, group := range m.registry.GroupByModule(m.ctx) {
@@ -261,46 +243,11 @@ func (m PaletteModel) matches() []Command {
 	return m.registry.Filter(m.query, m.ctx)
 }
 
-func (m PaletteModel) subPageCommands() []Command {
-	var module, group string
-	switch m.subPage {
-	case pageDraftActions:
-		module, group = ModuleMail, GroupDrafts
-	case pageMessageActions:
-		module, group = ModuleMail, GroupMessages
-	default:
-		return nil
-	}
-	out := make([]Command, 0)
-	for _, cmd := range m.registry.List() {
-		if cmd.Module != module || cmd.Group != group {
-			continue
-		}
-		if cmd.OpensPage != "" {
-			continue
-		}
-		if !cmd.IsAvailable(m.ctx) {
-			continue
-		}
-		if m.query != "" && !textMatch(cmd, m.query) {
-			continue
-		}
-		out = append(out, cmd)
-	}
-	return out
-}
-
 func (m *PaletteModel) openPage(name string) {
-	switch name {
-	case pageThemes:
+	if name == pageThemes {
 		m.page = paletteThemes
 		m.query = ""
 		m.selected = m.themeIndex(m.original)
-	case pageDraftActions, pageMessageActions:
-		m.page = paletteSub
-		m.subPage = name
-		m.query = ""
-		m.selected = 0
 	}
 }
 
@@ -331,29 +278,15 @@ func (m PaletteModel) themeByName(name string) (theme.Theme, bool) {
 }
 
 func (m PaletteModel) headerTitle() string {
-	if m.page == paletteSub {
-		switch m.subPage {
-		case pageDraftActions:
-			return "Telex / Drafts"
-		case pageMessageActions:
-			return "Telex / Messages"
-		}
-	}
 	return "Telex"
 }
 
 func (m PaletteModel) headerSubtitle() string {
-	if m.page == paletteSub && m.ctx.Selection != nil && m.ctx.Selection.Subject != "" {
-		return m.ctx.Selection.Subject
-	}
 	return ""
 }
 
 func (m PaletteModel) placeholder() string {
-	if m.page == paletteSub {
-		return "filter actions..."
-	}
-	return "type a command, or 'mail '/'drafts ' to scope..."
+	return "type a command, or 'mail ' to scope..."
 }
 
 func (m PaletteModel) renderList(t theme.Theme, cmds []Command, width int) string {

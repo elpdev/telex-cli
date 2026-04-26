@@ -11,11 +11,18 @@ require (
 	github.com/PuerkitoBio/goquery v1.12.0
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/glamour v1.0.0
+	github.com/elpdev/hackernews v0.5.0
 	github.com/spf13/cobra v1.10.1
 )
 
 require (
-	charm.land/bubbles/v2 v2.0.0 // indirect
+	charm.land/glamour/v2 v2.0.0 // indirect
+	github.com/bits-and-blooms/bitset v1.24.4 // indirect
+	golang.org/x/image v0.39.0 // indirect
+)
+
+require (
+	charm.land/bubbles/v2 v2.0.0
 	github.com/alecthomas/chroma/v2 v2.20.0 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
@@ -37,6 +44,7 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/elpdev/tuimod v0.1.0
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
@@ -56,5 +64,5 @@ require (
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/term v0.41.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 )

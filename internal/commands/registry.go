@@ -39,7 +39,7 @@ func (r *Registry) List() []Command {
 	return commands
 }
 
-// Scope is the parsed prefix the user typed (e.g. "drafts " → {Group: "drafts"}).
+// Scope is the parsed prefix the user typed (e.g. "drafts " -> {Group: "drafts"}).
 type Scope struct {
 	Module string
 	Group  string
@@ -47,8 +47,8 @@ type Scope struct {
 
 func (s Scope) IsEmpty() bool { return s.Module == "" && s.Group == "" }
 
-// ParseScope strips a recognised module/group token (followed by a space) from
-// the front of the query and returns the remainder. The returned query has the
+// ParseScope strips a recognised module/group token (followed by a space) from the
+// front of the query and returns the remainder. The returned query has the
 // matched prefix removed and is left-trimmed.
 func ParseScope(query string) (Scope, string) {
 	q := strings.ToLower(strings.TrimLeft(query, " "))
@@ -75,7 +75,7 @@ func ParseScope(query string) (Scope, string) {
 
 func matchModule(token string) (string, bool) {
 	switch token {
-	case ModuleMail, ModuleCalendar, ModuleDrive, ModuleNotes, ModuleSettings, ModuleGlobal:
+	case ModuleMail, ModuleCalendar, ModuleDrive, ModuleNotes, ModuleHackerNews, ModuleSettings, ModuleGlobal:
 		return token, true
 	}
 	return "", false
@@ -102,8 +102,8 @@ func splitFirstToken(s string) (string, string, bool) {
 }
 
 // Filter returns commands matching query in the given context. Recognised
-// scope prefixes ("drafts ", "mail ") narrow the result; remaining tokens
-// fuzzy-match Title/Description/Keywords. Results are ranked with
+// scope prefixes ("drafts ", "mail ") narrow the result; remaining
+// tokens fuzzy-match Title/Description/Keywords. Results are ranked with
 // context-module commands first.
 func (r *Registry) Filter(query string, ctx Context) []Command {
 	scope, rest := ParseScope(query)
@@ -165,7 +165,7 @@ func textMatch(cmd Command, query string) bool {
 // GroupByModule returns commands grouped by module in display order. The
 // active-screen module appears first, followed by the rest in canonical order.
 func (r *Registry) GroupByModule(ctx Context) []ModuleGroup {
-	canonical := []string{ModuleMail, ModuleCalendar, ModuleDrive, ModuleNotes, ModuleSettings, ModuleGlobal}
+	canonical := []string{ModuleMail, ModuleCalendar, ModuleDrive, ModuleNotes, ModuleHackerNews, ModuleSettings, ModuleGlobal}
 	if ctx.ActiveScreen != "" {
 		canonical = bringFirst(canonical, ctx.ActiveScreen)
 	}

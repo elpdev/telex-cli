@@ -3,12 +3,13 @@ package commands
 import tea "charm.land/bubbletea/v2"
 
 const (
-	ModuleMail     = "mail"
-	ModuleCalendar = "calendar"
-	ModuleDrive    = "drive"
-	ModuleNotes    = "notes"
-	ModuleSettings = "settings"
-	ModuleGlobal   = "global"
+	ModuleMail       = "mail"
+	ModuleCalendar   = "calendar"
+	ModuleDrive      = "drive"
+	ModuleNotes      = "notes"
+	ModuleHackerNews = "hackernews"
+	ModuleSettings   = "settings"
+	ModuleGlobal     = "global"
 
 	GroupDrafts   = "drafts"
 	GroupMessages = "messages"

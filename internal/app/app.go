@@ -30,6 +30,7 @@ import (
 	"github.com/elpdev/telex-cli/internal/notestore"
 	"github.com/elpdev/telex-cli/internal/screens"
 	"github.com/elpdev/telex-cli/internal/theme"
+	"github.com/elpdev/tuimod"
 )
 
 const defaultScreen = "home"
@@ -45,8 +46,9 @@ type Model struct {
 	height int
 
 	activeScreen string
-	screens      map[string]screens.Screen
+	screens      map[string]tuimod.Screen
 	screenOrder  []string
+	initialized  map[string]bool
 
 	showSidebar        bool
 	showHelp           bool
@@ -102,7 +104,8 @@ func assembleModel(meta BuildInfo, configPath, dataPath, prefsPath string, prefs
 
 	m := Model{
 		activeScreen: defaultScreen,
-		screens:      make(map[string]screens.Screen),
+		screens:      make(map[string]tuimod.Screen),
+		initialized:  make(map[string]bool),
 		showSidebar:  sidebar,
 		focus:        FocusMain,
 		keys:         DefaultKeyMap(),
@@ -133,7 +136,10 @@ func themeByName(name string) (theme.Theme, bool) {
 
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{func() tea.Msg { return tea.RequestWindowSize() }}
-	for _, screen := range m.screens {
+	for id, screen := range m.screens {
+		if strings.HasPrefix(id, hackerNewsPrefix) {
+			continue
+		}
 		cmds = append(cmds, screen.Init())
 	}
 	return tea.Batch(cmds...)
@@ -152,6 +158,7 @@ func (m *Model) registerScreens() {
 	if m.devBuild() {
 		m.screens["logs"] = screens.NewLogs(m.logs)
 	}
+	m.registerHackerNewsModule()
 	m.refreshScreenOrder()
 }
 
@@ -1288,13 +1295,13 @@ func (m *Model) calendarService() (*calendar.Service, error) {
 func (m *Model) refreshScreenOrder() {
 	m.screenOrder = m.screenOrder[:0]
 	for id := range m.screens {
-		if id == "mail-admin" {
+		if id == "mail-admin" || id == "hn-comments" || id == "hn-search" || id == "hn-settings" || id == "hn-doctor" {
 			continue
 		}
 		m.screenOrder = append(m.screenOrder, id)
 	}
 	sort.Strings(m.screenOrder)
-	preferred := []string{"home", "mail", "calendar", "notes", "drive", "settings", "logs"}
+	preferred := []string{"home", "mail", "calendar", "notes", "drive", "hn-top", "hn-new", "hn-best", "hn-ask", "hn-show", "hn-jobs", "hn-saved", "settings", "logs"}
 	ordered := make([]string, 0, len(m.screenOrder))
 	seen := make(map[string]bool)
 	for _, id := range preferred {
@@ -1404,6 +1411,7 @@ func (m *Model) registerCommands() {
 	m.commands.Register(commands.Command{ID: "go-notes", Module: commands.ModuleNotes, Title: "Open Notes", Description: "Switch to cached Notes", Keywords: []string{"notes", "markdown", "memo"}, Run: route("notes")})
 	m.commands.Register(commands.Command{ID: "go-drive", Module: commands.ModuleDrive, Title: "Open Drive", Description: "Switch to local Drive mirror", Keywords: []string{"drive", "files", "documents"}, Run: route("drive")})
 	m.commands.Register(commands.Command{ID: "go-settings", Module: commands.ModuleSettings, Title: "Open Settings", Description: "Open application settings", Keywords: []string{"settings", "config"}, Run: route("settings")})
+	m.registerHackerNewsCommands()
 	if m.devBuild() {
 		m.commands.Register(commands.Command{ID: "go-logs", Module: commands.ModuleGlobal, Title: "Open Logs", Description: "Open debug event log", Keywords: []string{"logs", "debug", "events"}, Run: route("logs")})
 	}
@@ -1455,32 +1463,30 @@ func (m *Model) registerCommands() {
 	m.commands.Register(commands.Command{ID: "notes-search", Module: commands.ModuleNotes, Title: "Search current Notes folder", Description: "Filter notes and folders in the current Notes folder", Shortcut: "/", Keywords: []string{"search", "filter"}, Available: onNotes, Run: notesAction("search", false)})
 
 	// Mail / Drafts
-	m.commands.Register(commands.Command{ID: "drafts-compose", Module: commands.ModuleMail, Group: commands.GroupDrafts, Title: "Compose new", Description: "Start a new draft", Shortcut: "c", Keywords: []string{"compose", "new", "write"}, Run: mailAction("compose", true)})
-	m.commands.Register(commands.Command{ID: "drafts-actions", Module: commands.ModuleMail, Group: commands.GroupDrafts, Title: "Actions on selected draft…", Description: "Open focused list of draft actions", Available: onMailDrafts, OpensPage: "draft-actions"})
-	m.commands.Register(commands.Command{ID: "drafts-send", Module: commands.ModuleMail, Group: commands.GroupDrafts, Title: "Send", Description: "Send the highlighted draft", Shortcut: "S", Keywords: []string{"send", "deliver"}, Available: onMailDrafts, Describe: subjectDescribe("Send the highlighted draft"), Run: mailAction("send-draft", false)})
-	m.commands.Register(commands.Command{ID: "drafts-edit", Module: commands.ModuleMail, Group: commands.GroupDrafts, Title: "Edit", Description: "Open the draft in $EDITOR", Shortcut: "e", Keywords: []string{"edit", "write"}, Available: onMailDrafts, Run: mailAction("edit-draft", false)})
-	m.commands.Register(commands.Command{ID: "drafts-discard", Module: commands.ModuleMail, Group: commands.GroupDrafts, Title: "Discard", Description: "Delete the highlighted draft", Shortcut: "x", Keywords: []string{"delete", "discard", "remove"}, Available: onMailDrafts, Run: mailAction("delete-draft", false)})
-	m.commands.Register(commands.Command{ID: "drafts-attach", Module: commands.ModuleMail, Group: commands.GroupDrafts, Title: "Attach file…", Description: "Attach a file to the draft", Shortcut: "a", Keywords: []string{"attach", "file", "upload"}, Available: onMailDrafts, Run: mailAction("attach", false)})
+	m.commands.Register(commands.Command{ID: "drafts-compose", Module: commands.ModuleMail, Title: "Compose draft", Description: "Start a new draft", Shortcut: "c", Keywords: []string{"compose", "new", "write", "draft"}, Available: onMail, Run: mailAction("compose", true)})
+	m.commands.Register(commands.Command{ID: "drafts-send", Module: commands.ModuleMail, Title: "Send draft", Description: "Send the highlighted draft", Shortcut: "S", Keywords: []string{"send", "deliver", "draft"}, Available: onMailDrafts, Describe: subjectDescribe("Send draft"), Run: mailAction("send-draft", false)})
+	m.commands.Register(commands.Command{ID: "drafts-edit", Module: commands.ModuleMail, Title: "Edit draft", Description: "Open the draft in $EDITOR", Shortcut: "e", Keywords: []string{"edit", "write", "draft"}, Available: onMailDrafts, Run: mailAction("edit-draft", false)})
+	m.commands.Register(commands.Command{ID: "drafts-discard", Module: commands.ModuleMail, Title: "Discard draft", Description: "Delete the highlighted draft", Shortcut: "x", Keywords: []string{"delete", "discard", "remove", "draft"}, Available: onMailDrafts, Run: mailAction("delete-draft", false)})
+	m.commands.Register(commands.Command{ID: "drafts-attach", Module: commands.ModuleMail, Title: "Attach file to draft", Description: "Attach a file to the draft", Shortcut: "a", Keywords: []string{"attach", "file", "upload", "draft"}, Available: onMailDrafts, Run: mailAction("attach", false)})
 
 	// Mail / Messages
-	m.commands.Register(commands.Command{ID: "messages-actions", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Actions on selected message…", Description: "Open focused list of message actions", Available: onMailMessages, OpensPage: "message-actions"})
-	m.commands.Register(commands.Command{ID: "messages-reply", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Reply", Description: "Reply to the highlighted message", Shortcut: "r", Keywords: []string{"reply", "respond"}, Available: onMailMessages, Describe: subjectDescribe("Reply"), Run: mailAction("reply", false)})
-	m.commands.Register(commands.Command{ID: "messages-forward", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Forward", Description: "Forward the highlighted message", Shortcut: "f", Keywords: []string{"forward"}, Available: onMailMessages, Describe: subjectDescribe("Forward"), Run: mailAction("forward", false)})
-	m.commands.Register(commands.Command{ID: "messages-archive", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Archive", Description: "Archive the highlighted message", Shortcut: "a", Keywords: []string{"archive"}, Available: onMailMessages, Describe: subjectDescribe("Archive"), Run: mailAction("archive", false)})
-	m.commands.Register(commands.Command{ID: "messages-junk", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Mark as junk", Description: "Move the highlighted message to junk", Shortcut: "J", Keywords: []string{"junk", "spam"}, Available: func(ctx commands.Context) bool { return onMailMessages(ctx) && ctx.Selection.Mailbox == "inbox" }, Describe: subjectDescribe("Mark as junk"), Run: mailAction("junk", false)})
-	m.commands.Register(commands.Command{ID: "messages-not-junk", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Mark as not junk", Description: "Move the highlighted junk message to inbox", Shortcut: "U", Keywords: []string{"not junk", "spam", "inbox"}, Available: func(ctx commands.Context) bool { return onMailMessages(ctx) && ctx.Selection.Mailbox == "junk" }, Describe: subjectDescribe("Mark as not junk"), Run: mailAction("not-junk", false)})
-	m.commands.Register(commands.Command{ID: "messages-trash", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Move to trash", Description: "Trash the highlighted message", Shortcut: "d", Keywords: []string{"trash", "delete"}, Available: onMailMessages, Describe: subjectDescribe("Trash"), Run: mailAction("trash", false)})
-	m.commands.Register(commands.Command{ID: "messages-star", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Toggle star", Description: "Star/unstar the highlighted message", Shortcut: "s", Keywords: []string{"star", "favorite"}, Available: onMailMessages, Run: mailAction("toggle-star", false)})
-	m.commands.Register(commands.Command{ID: "messages-read", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Toggle read", Description: "Mark read/unread", Shortcut: "u", Keywords: []string{"read", "unread"}, Available: onMailMessages, Run: mailAction("toggle-read", false)})
-	m.commands.Register(commands.Command{ID: "messages-restore", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Restore", Description: "Move back to inbox from archive/trash", Shortcut: "R", Keywords: []string{"restore"}, Available: func(ctx commands.Context) bool {
+	m.commands.Register(commands.Command{ID: "messages-reply", Module: commands.ModuleMail, Title: "Reply", Description: "Reply to the highlighted message", Shortcut: "r", Keywords: []string{"reply", "respond"}, Available: onMailMessages, Describe: subjectDescribe("Reply"), Run: mailAction("reply", false)})
+	m.commands.Register(commands.Command{ID: "messages-forward", Module: commands.ModuleMail, Title: "Forward", Description: "Forward the highlighted message", Shortcut: "f", Keywords: []string{"forward"}, Available: onMailMessages, Describe: subjectDescribe("Forward"), Run: mailAction("forward", false)})
+	m.commands.Register(commands.Command{ID: "messages-archive", Module: commands.ModuleMail, Title: "Archive", Description: "Archive the highlighted message", Shortcut: "a", Keywords: []string{"archive"}, Available: onMailMessages, Describe: subjectDescribe("Archive"), Run: mailAction("archive", false)})
+	m.commands.Register(commands.Command{ID: "messages-junk", Module: commands.ModuleMail, Title: "Mark as junk", Description: "Move the highlighted message to junk", Shortcut: "J", Keywords: []string{"junk", "spam"}, Available: func(ctx commands.Context) bool { return onMailMessages(ctx) && ctx.Selection.Mailbox == "inbox" }, Describe: subjectDescribe("Mark as junk"), Run: mailAction("junk", false)})
+	m.commands.Register(commands.Command{ID: "messages-not-junk", Module: commands.ModuleMail, Title: "Mark as not junk", Description: "Move the highlighted junk message to inbox", Shortcut: "U", Keywords: []string{"not junk", "spam", "inbox"}, Available: func(ctx commands.Context) bool { return onMailMessages(ctx) && ctx.Selection.Mailbox == "junk" }, Describe: subjectDescribe("Mark as not junk"), Run: mailAction("not-junk", false)})
+	m.commands.Register(commands.Command{ID: "messages-trash", Module: commands.ModuleMail, Title: "Move to trash", Description: "Trash the highlighted message", Shortcut: "d", Keywords: []string{"trash", "delete"}, Available: onMailMessages, Describe: subjectDescribe("Trash"), Run: mailAction("trash", false)})
+	m.commands.Register(commands.Command{ID: "messages-star", Module: commands.ModuleMail, Title: "Toggle star", Description: "Star/unstar the highlighted message", Shortcut: "s", Keywords: []string{"star", "favorite"}, Available: onMailMessages, Run: mailAction("toggle-star", false)})
+	m.commands.Register(commands.Command{ID: "messages-read", Module: commands.ModuleMail, Title: "Toggle read", Description: "Mark read/unread", Shortcut: "u", Keywords: []string{"read", "unread"}, Available: onMailMessages, Run: mailAction("toggle-read", false)})
+	m.commands.Register(commands.Command{ID: "messages-restore", Module: commands.ModuleMail, Title: "Restore", Description: "Move back to inbox from archive/trash", Shortcut: "R", Keywords: []string{"restore"}, Available: func(ctx commands.Context) bool {
 		return onMail(ctx) && ctx.Selection != nil && (ctx.Selection.Mailbox == "archive" || ctx.Selection.Mailbox == "trash")
 	}, Run: mailAction("restore", false)})
-	m.commands.Register(commands.Command{ID: "messages-block-sender", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Block sender", Description: "Block future mail from this sender", Keywords: []string{"block", "sender", "spam"}, Available: onMailMessages, Run: mailAction("block-sender", false)})
-	m.commands.Register(commands.Command{ID: "messages-unblock-sender", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Unblock sender", Description: "Remove sender block", Keywords: []string{"unblock", "sender"}, Available: onMailMessages, Run: mailAction("unblock-sender", false)})
-	m.commands.Register(commands.Command{ID: "messages-trust-sender", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Trust sender", Description: "Trust future mail from this sender", Keywords: []string{"trust", "sender"}, Available: onMailMessages, Run: mailAction("trust-sender", false)})
-	m.commands.Register(commands.Command{ID: "messages-untrust-sender", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Untrust sender", Description: "Remove trusted sender policy", Keywords: []string{"untrust", "sender"}, Available: onMailMessages, Run: mailAction("untrust-sender", false)})
-	m.commands.Register(commands.Command{ID: "messages-block-domain", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Block sender domain", Description: "Block future mail from this domain", Keywords: []string{"block", "domain", "spam"}, Available: onMailMessages, Run: mailAction("block-domain", false)})
-	m.commands.Register(commands.Command{ID: "messages-unblock-domain", Module: commands.ModuleMail, Group: commands.GroupMessages, Title: "Unblock sender domain", Description: "Remove domain block", Keywords: []string{"unblock", "domain"}, Available: onMailMessages, Run: mailAction("unblock-domain", false)})
+	m.commands.Register(commands.Command{ID: "messages-block-sender", Module: commands.ModuleMail, Title: "Block sender", Description: "Block future mail from this sender", Keywords: []string{"block", "sender", "spam"}, Available: onMailMessages, Run: mailAction("block-sender", false)})
+	m.commands.Register(commands.Command{ID: "messages-unblock-sender", Module: commands.ModuleMail, Title: "Unblock sender", Description: "Remove sender block", Keywords: []string{"unblock", "sender"}, Available: onMailMessages, Run: mailAction("unblock-sender", false)})
+	m.commands.Register(commands.Command{ID: "messages-trust-sender", Module: commands.ModuleMail, Title: "Trust sender", Description: "Trust future mail from this sender", Keywords: []string{"trust", "sender"}, Available: onMailMessages, Run: mailAction("trust-sender", false)})
+	m.commands.Register(commands.Command{ID: "messages-untrust-sender", Module: commands.ModuleMail, Title: "Untrust sender", Description: "Remove trusted sender policy", Keywords: []string{"untrust", "sender"}, Available: onMailMessages, Run: mailAction("untrust-sender", false)})
+	m.commands.Register(commands.Command{ID: "messages-block-domain", Module: commands.ModuleMail, Title: "Block sender domain", Description: "Block future mail from this domain", Keywords: []string{"block", "domain", "spam"}, Available: onMailMessages, Run: mailAction("block-domain", false)})
+	m.commands.Register(commands.Command{ID: "messages-unblock-domain", Module: commands.ModuleMail, Title: "Unblock sender domain", Description: "Remove domain block", Keywords: []string{"unblock", "domain"}, Available: onMailMessages, Run: mailAction("unblock-domain", false)})
 
 	// Global
 	m.commands.Register(commands.Command{ID: "toggle-sidebar", Module: commands.ModuleGlobal, Title: "Toggle sidebar", Description: "Show or hide sidebar navigation", Keywords: []string{"sidebar", "layout"}, Run: func() tea.Cmd { return func() tea.Msg { return toggleSidebarMsg{} } }})

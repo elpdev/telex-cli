@@ -6,9 +6,11 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/bubbles/key"
+	hnscreens "github.com/elpdev/hackernews/pkg/screens"
 	"github.com/elpdev/telex-cli/internal/commands"
 	"github.com/elpdev/telex-cli/internal/config"
 	"github.com/elpdev/telex-cli/internal/screens"
+	"github.com/elpdev/tuimod"
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -18,10 +20,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case routeMsg:
+		if msg.ScreenID == "hn-search" {
+			m = m.refreshHackerNewsSearchScreen()
+		}
+		if msg.ScreenID == "hn-doctor" {
+			return m.openHackerNewsDoctor()
+		}
 		m.switchScreen(msg.ScreenID)
 		m.showCommandPalette = false
 		m.updateDerivedScreens()
-		return m, m.screens[m.activeScreen].Init()
+		return m, m.initScreen(m.activeScreen)
+	case hnscreens.NavigateMsg:
+		screenID := hackerNewsScreenID(msg.ScreenID)
+		m.switchScreen(screenID)
+		return m, m.initScreen(m.activeScreen)
+	case hnscreens.OpenCommentsMsg:
+		if existing, ok := m.screens["hn-comments"].(hnscreens.Comments); ok {
+			updated, cmd := existing.Open(msg.Story, msg.ReturnTo)
+			m.screens["hn-comments"] = updated
+			m.switchScreen("hn-comments")
+			return m, cmd
+		}
+		m.logs.Warn("Hacker News comments screen unavailable")
+		return m, nil
+	case hnscreens.HideReadToggledMsg:
+		settings := m.loadHackerNewsSettings()
+		settings.HideRead = msg.HideRead
+		return m.applyHackerNewsSettings(settings), nil
+	case hnscreens.SortModeChangedMsg:
+		settings := m.loadHackerNewsSettings()
+		settings.SortMode = msg.Mode
+		return m.applyHackerNewsSettings(settings), nil
+	case hnscreens.SettingsChangedMsg:
+		return m.applyHackerNewsSettings(msg.Settings), nil
 	case toggleSidebarMsg:
 		m.showSidebar = !m.showSidebar
 		m.logs.Info(fmt.Sprintf("Sidebar toggled: %t", m.showSidebar))
@@ -79,6 +110,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	}
 
+	if targeted, ok := msg.(tuimod.TargetedMsg); ok {
+		if id := targeted.TargetScreenID(); id != "" {
+			prefixed := hackerNewsScreenID(id)
+			if _, exists := m.screens[prefixed]; exists {
+				return m.updateScreen(prefixed, msg)
+			}
+		}
+	}
+
 	if m.showCommandPalette {
 		palette, cmd := m.commandPalette.Update(msg)
 		m.commandPalette = palette
@@ -122,6 +162,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	active := m.screens[m.activeScreen]
+	if capturer, ok := active.(tuimod.KeyCapturer); ok && capturer.CapturesKey(msg) {
+		updated, cmd := active.Update(msg)
+		m.screens[m.activeScreen] = updated
+		return m, cmd
+	}
+
 	switch {
 	case key.Matches(msg, m.keys.Commands):
 		m.showCommandPalette = true
@@ -156,9 +203,20 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleSidebarKey(msg)
 	}
 
-	active := m.screens[m.activeScreen]
+	active = m.screens[m.activeScreen]
 	updated, cmd := active.Update(msg)
 	m.screens[m.activeScreen] = updated
+	return m, cmd
+}
+
+func (m Model) updateScreen(id string, msg tea.Msg) (tea.Model, tea.Cmd) {
+	active, ok := m.screens[id]
+	if !ok {
+		m.logs.Warn(fmt.Sprintf("Message targeted unknown screen: %s", id))
+		return m, nil
+	}
+	updated, cmd := active.Update(msg)
+	m.screens[id] = updated
 	return m, cmd
 }
 
@@ -211,7 +269,7 @@ func (m Model) handleSidebarKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.switchScreen(m.screenOrder[idx])
 	m.updateDerivedScreens()
-	return m, m.screens[m.activeScreen].Init()
+	return m, m.initScreen(m.activeScreen)
 }
 
 func (m *Model) updateDerivedScreens() {

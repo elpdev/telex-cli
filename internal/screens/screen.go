@@ -1,14 +1,5 @@
 package screens
 
-import (
-	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/bubbles/key"
-)
+import "github.com/elpdev/tuimod"
 
-type Screen interface {
-	Init() tea.Cmd
-	Update(msg tea.Msg) (Screen, tea.Cmd)
-	View(width, height int) string
-	Title() string
-	KeyBindings() []key.Binding
-}
+type Screen = tuimod.Screen
