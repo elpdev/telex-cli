@@ -54,6 +54,7 @@ type EventMeta struct {
 	NextOccurrences      []time.Time    `toml:"next_occurrences"`
 	Invitation           bool           `toml:"invitation"`
 	Attendees            []AttendeeMeta `toml:"attendees"`
+	CurrentUserAttendee  *AttendeeMeta  `toml:"current_user_attendee"`
 	Links                []LinkMeta     `toml:"links"`
 	Messages             []MessageMeta  `toml:"messages"`
 	RemoteCreatedAt      time.Time      `toml:"remote_created_at"`
@@ -189,7 +190,7 @@ func (s Store) StoreEvent(value calendar.CalendarEvent, syncedAt time.Time) erro
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return err
 	}
-	meta := EventMeta{SchemaVersion: SchemaVersion, RemoteID: value.ID, CalendarID: value.CalendarID, Title: value.Title, Location: value.Location, AllDay: value.AllDay, StartsAt: value.StartsAt, EndsAt: value.EndsAt, TimeZone: value.TimeZone, Status: value.Status, Source: value.Source, UID: value.UID, OrganizerName: value.OrganizerName, OrganizerEmail: value.OrganizerEmail, RecurrenceRule: value.RecurrenceRule, RecurrenceSummary: value.RecurrenceSummary, RecurrenceExceptions: value.RecurrenceExceptions, NextOccurrences: value.NextOccurrences, Invitation: value.Invitation, Attendees: attendeeMetas(value.Attendees), Links: linkMetas(value.Links), Messages: messageMetas(value.Messages), RemoteCreatedAt: value.CreatedAt, RemoteUpdatedAt: value.UpdatedAt, SyncedAt: syncedAt}
+	meta := EventMeta{SchemaVersion: SchemaVersion, RemoteID: value.ID, CalendarID: value.CalendarID, Title: value.Title, Location: value.Location, AllDay: value.AllDay, StartsAt: value.StartsAt, EndsAt: value.EndsAt, TimeZone: value.TimeZone, Status: value.Status, Source: value.Source, UID: value.UID, OrganizerName: value.OrganizerName, OrganizerEmail: value.OrganizerEmail, RecurrenceRule: value.RecurrenceRule, RecurrenceSummary: value.RecurrenceSummary, RecurrenceExceptions: value.RecurrenceExceptions, NextOccurrences: value.NextOccurrences, Invitation: value.Invitation, Attendees: attendeeMetas(value.Attendees), CurrentUserAttendee: attendeeMeta(value.CurrentUserAttendee), Links: linkMetas(value.Links), Messages: messageMetas(value.Messages), RemoteCreatedAt: value.CreatedAt, RemoteUpdatedAt: value.UpdatedAt, SyncedAt: syncedAt}
 	if err := writeTOML(filepath.Join(path, "meta.toml"), meta); err != nil {
 		return err
 	}
@@ -241,11 +242,40 @@ func (s Store) ReadEventPath(path string) (*CachedEvent, error) {
 }
 
 func (s Store) DeleteEvent(id int64) error {
+	if err := s.DeleteEventOccurrences(id); err != nil {
+		return err
+	}
 	err := os.RemoveAll(s.eventPath(id))
 	if os.IsNotExist(err) {
 		return nil
 	}
 	return err
+}
+
+func (s Store) DeleteEventOccurrences(id int64) error {
+	entries, err := os.ReadDir(s.occurrencesRoot())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".toml" {
+			continue
+		}
+		path := filepath.Join(s.occurrencesRoot(), entry.Name())
+		var meta OccurrenceMeta
+		if _, err := toml.DecodeFile(path, &meta); err != nil {
+			return err
+		}
+		if meta.EventID == id {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (s Store) StoreOccurrences(values []calendar.CalendarOccurrence, syncedAt time.Time) error {
@@ -314,9 +344,21 @@ func (s Store) ListOccurrencesRange(from, to time.Time) ([]OccurrenceMeta, error
 func attendeeMetas(attendees []calendar.CalendarEventAttendee) []AttendeeMeta {
 	out := make([]AttendeeMeta, 0, len(attendees))
 	for _, attendee := range attendees {
-		out = append(out, AttendeeMeta{ID: attendee.ID, Email: attendee.Email, Name: attendee.Name, Role: attendee.Role, ParticipationStatus: attendee.ParticipationStatus, ResponseRequested: attendee.ResponseRequested})
+		out = append(out, attendeeMetaValue(attendee))
 	}
 	return out
+}
+
+func attendeeMeta(attendee *calendar.CalendarEventAttendee) *AttendeeMeta {
+	if attendee == nil {
+		return nil
+	}
+	meta := attendeeMetaValue(*attendee)
+	return &meta
+}
+
+func attendeeMetaValue(attendee calendar.CalendarEventAttendee) AttendeeMeta {
+	return AttendeeMeta{ID: attendee.ID, Email: attendee.Email, Name: attendee.Name, Role: attendee.Role, ParticipationStatus: attendee.ParticipationStatus, ResponseRequested: attendee.ResponseRequested}
 }
 
 func linkMetas(links []calendar.CalendarEventLink) []LinkMeta {

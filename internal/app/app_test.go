@@ -1,9 +1,11 @@
 package app
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/elpdev/telex-cli/internal/commands"
 )
 
 func TestSwitchScreenForTest(t *testing.T) {
@@ -56,6 +58,70 @@ func TestCalendarScreenRegisteredInNavigationAndCommands(t *testing.T) {
 			t.Fatalf("expected command %q", id)
 		}
 	}
+}
+
+func TestCalendarPaletteCommandAvailability(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+
+	agenda := commands.Context{ActiveScreen: "calendar", Selection: &commands.Selection{Kind: "calendar-event", Subject: "Planning", HasItems: true}}
+	assertCommandIDs(t, model.commands.Filter("calendar ", agenda), []string{"calendar-new", "calendar-edit", "calendar-previous-range", "calendar-next-range", "calendar-filter-agenda", "calendar-delete"}, true)
+	assertCommandIDs(t, model.commands.Filter("calendar ", agenda), []string{"calendar-invitation-accept", "calendars-import-ics", "calendars-edit"}, false)
+
+	invite := commands.Context{ActiveScreen: "calendar", Selection: &commands.Selection{Kind: "calendar-event", Subject: "Planning", HasItems: true, HasInvitation: true}}
+	assertCommandIDs(t, model.commands.Filter("calendar invitation", invite), []string{"calendar-invitation-show", "calendar-invitation-sync", "calendar-invitation-accept", "calendar-invitation-tentative", "calendar-invitation-decline", "calendar-invitation-needs-action"}, true)
+
+	calendarManagement := commands.Context{ActiveScreen: "calendar", Selection: &commands.Selection{Kind: "calendar", Subject: "Work", HasItems: true}}
+	assertCommandIDs(t, model.commands.Filter("calendar ", calendarManagement), []string{"calendar-view-agenda", "calendars-new", "calendars-edit", "calendars-import-ics", "calendars-delete"}, true)
+	assertCommandIDs(t, model.commands.Filter("calendar ", calendarManagement), []string{"calendar-new", "calendar-edit", "calendar-previous-range", "calendar-invitation-accept"}, false)
+
+	otherScreen := commands.Context{ActiveScreen: "home"}
+	assertCommandIDs(t, model.commands.Filter("calendar ", otherScreen), []string{"go-calendar", "calendar-sync"}, true)
+	assertCommandIDs(t, model.commands.Filter("calendar ", otherScreen), []string{"calendar-new", "calendar-edit", "calendars-new", "calendars-import-ics", "calendar-invitation-accept"}, false)
+}
+
+func TestCalendarPaletteDescriptionsIncludeSelectionSubject(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+	ctx := commands.Context{ActiveScreen: "calendar", Selection: &commands.Selection{Kind: "calendar-event", Subject: "Planning", HasItems: true, HasInvitation: true}}
+
+	for _, id := range []string{"calendar-edit", "calendar-delete", "calendar-invitation-accept"} {
+		cmd, ok := model.commands.Find(id)
+		if !ok {
+			t.Fatalf("expected command %q", id)
+		}
+		if got := cmd.DescriptionFor(ctx); !strings.Contains(got, "Planning") {
+			t.Fatalf("%s description = %q, want selected subject", id, got)
+		}
+	}
+
+	calendarCtx := commands.Context{ActiveScreen: "calendar", Selection: &commands.Selection{Kind: "calendar", Subject: "Work", HasItems: true}}
+	cmd, ok := model.commands.Find("calendars-import-ics")
+	if !ok {
+		t.Fatal("expected calendars-import-ics command")
+	}
+	if got := cmd.DescriptionFor(calendarCtx); !strings.Contains(got, "Work") {
+		t.Fatalf("calendars-import-ics description = %q, want selected calendar", got)
+	}
+}
+
+func assertCommandIDs(t *testing.T, list []commands.Command, ids []string, want bool) {
+	t.Helper()
+	found := make(map[string]bool, len(list))
+	for _, cmd := range list {
+		found[cmd.ID] = true
+	}
+	for _, id := range ids {
+		if found[id] != want {
+			t.Fatalf("command %q present = %v, want %v in %#v", id, found[id], want, commandIDs(list))
+		}
+	}
+}
+
+func commandIDs(list []commands.Command) []string {
+	ids := make([]string, 0, len(list))
+	for _, cmd := range list {
+		ids = append(ids, cmd.ID)
+	}
+	return ids
 }
 
 func TestMailAdminScreenRegisteredInNavigationAndCommands(t *testing.T) {

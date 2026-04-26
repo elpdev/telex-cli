@@ -22,7 +22,7 @@ func TestStoreCalendarEventAndOccurrencesUnderCalendarRoot(t *testing.T) {
 		t.Fatalf("calendars = %#v", cals)
 	}
 
-	event := calendar.CalendarEvent{ID: 9, CalendarID: 1, Title: "Standup", Description: "Daily sync", StartsAt: syncedAt, EndsAt: syncedAt.Add(30 * time.Minute), Status: "confirmed", RecurrenceRule: "FREQ=DAILY", RecurrenceSummary: "Daily", RecurrenceExceptions: []string{"2026-04-26"}, NextOccurrences: []time.Time{syncedAt.Add(24 * time.Hour)}, Messages: []calendar.MessageSummary{{ID: 42, InboxID: 7, Subject: "Re: Standup", SenderDisplay: "Alex", ReceivedAt: syncedAt.Add(-time.Hour), SystemState: "inbox"}}}
+	event := calendar.CalendarEvent{ID: 9, CalendarID: 1, Title: "Standup", Description: "Daily sync", StartsAt: syncedAt, EndsAt: syncedAt.Add(30 * time.Minute), Status: "confirmed", RecurrenceRule: "FREQ=DAILY", RecurrenceSummary: "Daily", RecurrenceExceptions: []string{"2026-04-26"}, NextOccurrences: []time.Time{syncedAt.Add(24 * time.Hour)}, CurrentUserAttendee: &calendar.CalendarEventAttendee{Email: "leo@example.com", Name: "Leo", ParticipationStatus: "accepted", ResponseRequested: true}, Messages: []calendar.MessageSummary{{ID: 42, InboxID: 7, Subject: "Re: Standup", SenderDisplay: "Alex", ReceivedAt: syncedAt.Add(-time.Hour), SystemState: "inbox"}}}
 	if err := store.StoreEvent(event, syncedAt); err != nil {
 		t.Fatal(err)
 	}
@@ -38,6 +38,9 @@ func TestStoreCalendarEventAndOccurrencesUnderCalendarRoot(t *testing.T) {
 	}
 	if events[0].Meta.RecurrenceRule != "FREQ=DAILY" || events[0].Meta.RecurrenceSummary != "Daily" || len(events[0].Meta.RecurrenceExceptions) != 1 || len(events[0].Meta.NextOccurrences) != 1 {
 		t.Fatalf("recurrence = %#v", events[0].Meta)
+	}
+	if events[0].Meta.CurrentUserAttendee == nil || events[0].Meta.CurrentUserAttendee.Email != "leo@example.com" || events[0].Meta.CurrentUserAttendee.ParticipationStatus != "accepted" {
+		t.Fatalf("current user attendee = %#v", events[0].Meta.CurrentUserAttendee)
 	}
 	if want := store.CalendarRoot(); events[0].Path[:len(want)] != want {
 		t.Fatalf("event path = %q, want under %q", events[0].Path, want)
@@ -86,6 +89,38 @@ func TestDeleteCalendarRemovesCalendarAndCachedEvents(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Meta.RemoteID != 10 {
 		t.Fatalf("events = %#v", events)
+	}
+}
+
+func TestDeleteEventRemovesCachedOccurrences(t *testing.T) {
+	store := New(t.TempDir())
+	syncedAt := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	standup := calendar.CalendarEvent{ID: 9, CalendarID: 1, Title: "Standup"}
+	review := calendar.CalendarEvent{ID: 10, CalendarID: 1, Title: "Review"}
+	if err := store.StoreEvent(standup, syncedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreEvent(review, syncedAt); err != nil {
+		t.Fatal(err)
+	}
+	occurrences := []calendar.CalendarOccurrence{
+		{StartsAt: syncedAt, EndsAt: syncedAt.Add(time.Hour), Event: standup},
+		{StartsAt: syncedAt.AddDate(0, 0, 1), EndsAt: syncedAt.AddDate(0, 0, 1).Add(time.Hour), Event: standup},
+		{StartsAt: syncedAt.AddDate(0, 0, 2), EndsAt: syncedAt.AddDate(0, 0, 2).Add(time.Hour), Event: review},
+	}
+	if err := store.StoreOccurrences(occurrences, syncedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.DeleteEvent(9); err != nil {
+		t.Fatal(err)
+	}
+	cached, err := store.ListOccurrences()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cached) != 1 || cached[0].EventID != 10 {
+		t.Fatalf("occurrences = %#v", cached)
 	}
 }
 

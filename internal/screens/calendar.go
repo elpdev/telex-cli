@@ -14,6 +14,7 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/elpdev/telex-cli/internal/api"
 	"github.com/elpdev/telex-cli/internal/calendar"
 	"github.com/elpdev/telex-cli/internal/calendarstore"
 	"github.com/elpdev/telex-cli/internal/components/filepicker"
@@ -54,6 +55,8 @@ type CalendarSyncResult struct {
 	Occurrences int
 }
 
+const calendarDetailMaxAttendees = 12
+
 type Calendar struct {
 	store          calendarstore.Store
 	sync           CalendarSyncFunc
@@ -93,7 +96,10 @@ type Calendar struct {
 	loading        bool
 	syncing        bool
 	err            error
+	syncErr        error
 	status         string
+	lastSynced     time.Time
+	cachedEvents   int
 	invitation     *calendar.Invitation
 	keys           CalendarKeyMap
 }
@@ -146,15 +152,17 @@ type calendarFormData struct {
 }
 
 type calendarLoadedMsg struct {
-	items     []calendarstore.OccurrenceMeta
-	calendars []calendarstore.CalendarMeta
-	err       error
+	items        []calendarstore.OccurrenceMeta
+	calendars    []calendarstore.CalendarMeta
+	lastSynced   time.Time
+	cachedEvents int
+	err          error
 }
 
 type calendarSyncedMsg struct {
-	result CalendarSyncResult
-	loaded calendarLoadedMsg
-	err    error
+	result  CalendarSyncResult
+	loaded  calendarLoadedMsg
+	syncErr error
 }
 
 type calendarActionFinishedMsg struct {
@@ -236,20 +244,34 @@ func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		if msg.err == nil {
 			c.allItems = msg.items
 			c.calendars = msg.calendars
+			c.lastSynced = msg.lastSynced
+			c.cachedEvents = msg.cachedEvents
 			c.applyAgendaFilter()
 		}
 		return c, nil
 	case calendarSyncedMsg:
 		c.syncing = false
-		c.err = msg.err
-		if msg.err != nil {
+		c.syncErr = msg.syncErr
+		if msg.loaded.err == nil {
+			c.err = nil
+			c.allItems = msg.loaded.items
+			c.calendars = msg.loaded.calendars
+			c.lastSynced = msg.loaded.lastSynced
+			c.cachedEvents = msg.loaded.cachedEvents
+			c.applyAgendaFilter()
+		} else if msg.syncErr == nil {
+			c.err = msg.loaded.err
+			c.status = ""
+			return c, nil
+		}
+		if msg.syncErr != nil {
+			if msg.loaded.err != nil {
+				c.err = msg.loaded.err
+			}
 			c.status = ""
 			return c, nil
 		}
 		c.status = fmt.Sprintf("Synced %d calendar(s), %d event(s), %d occurrence(s)", msg.result.Calendars, msg.result.Events, msg.result.Occurrences)
-		c.allItems = msg.loaded.items
-		c.calendars = msg.loaded.calendars
-		c.applyAgendaFilter()
 		return c, nil
 	case calendarActionFinishedMsg:
 		c.loading = false
@@ -277,6 +299,7 @@ func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		c.applyAgendaFilter()
 		return c, nil
 	case CalendarActionMsg:
+		c.syncErr = nil
 		return c.handleAction(msg.Action)
 	case tea.KeyPressMsg:
 		return c.handleKey(msg)
@@ -296,7 +319,7 @@ func (c Calendar) View(width, height int) string {
 		return style.Render("Calendar / Import ICS\n" + c.status + "\n\n" + c.filePicker.View(width, max(1, height-3)))
 	}
 	if c.err != nil {
-		return style.Render(fmt.Sprintf("Calendar cache error: %v\n\nRun `telex calendar sync` or press S to populate Calendar.", c.err))
+		return style.Render(calendarCacheErrorView(c.err))
 	}
 	var b strings.Builder
 	b.WriteString("Calendar / " + c.modeTitle() + "\n")
@@ -305,6 +328,12 @@ func (c Calendar) View(width, height int) string {
 	}
 	if c.mode == calendarViewAgenda {
 		b.WriteString("Range: " + c.rangeLabel() + "\n")
+	}
+	if cache := c.cacheStatusLine(); cache != "" {
+		b.WriteString(cache + "\n")
+	}
+	if c.syncErr != nil {
+		b.WriteString(calendarRemoteErrorStatus(c.syncErr) + "\n")
 	}
 	if c.syncing {
 		b.WriteString("Syncing remote Calendar...\n")
@@ -332,7 +361,7 @@ func (c Calendar) View(width, height int) string {
 		return style.Render(b.String())
 	}
 	if len(c.items) == 0 {
-		b.WriteString("No cached calendar occurrences found. Press S to sync.\n")
+		b.WriteString(c.emptyAgendaView())
 		return style.Render(b.String())
 	}
 	for i, item := range c.items {
@@ -349,6 +378,53 @@ func (c Calendar) Title() string { return "Calendar" }
 
 func (c Calendar) KeyBindings() []key.Binding {
 	return []key.Binding{c.keys.Up, c.keys.Down, c.keys.Open, c.keys.Back, c.keys.Refresh, c.keys.Sync, c.keys.Today, c.keys.Prev, c.keys.Next, c.keys.View, c.keys.New, c.keys.Edit, c.keys.Delete, c.keys.Import, c.keys.Filter, c.keys.Clear}
+}
+
+func (c Calendar) cacheStatusLine() string {
+	if c.lastSynced.IsZero() {
+		return ""
+	}
+	label := "Last synced: " + c.lastSynced.Format("2006-01-02 15:04")
+	if time.Since(c.lastSynced) > 24*time.Hour {
+		label += " (stale; press S to refresh)"
+	}
+	return label
+}
+
+func (c Calendar) emptyAgendaView() string {
+	if len(c.calendars) == 0 {
+		return "No calendars are cached. Press S to sync remote calendars, or press n to create a calendar.\n"
+	}
+	start, end := c.activeRange()
+	if c.cachedEvents > 0 {
+		return fmt.Sprintf("No events in this range (%s to %s). Press [ or ] to change range, t for today, or S to refresh.\n", start.Format("Jan 02, 2006"), end.AddDate(0, 0, -1).Format("Jan 02, 2006"))
+	}
+	return "Calendars are cached, but no events are cached yet. Press S to sync events for this range, or n to create an event.\n"
+}
+
+func calendarCacheErrorView(err error) string {
+	return fmt.Sprintf("Calendar cache error: %v\n\nCheck that the local data directory is readable and writable, then press r to reload. Remote sync is available with S after the cache issue is fixed.", err)
+}
+
+func calendarRemoteErrorStatus(err error) string {
+	if err == nil {
+		return ""
+	}
+	var apiErr *api.Error
+	if errors.As(err, &apiErr) {
+		if apiErr.StatusCode == 401 || apiErr.StatusCode == 403 {
+			return fmt.Sprintf("Calendar sync failed: authentication was rejected (%s). Run `telex auth login`, then press S.", emptyDash(apiErr.Error()))
+		}
+		if apiErr.StatusCode >= 500 {
+			return fmt.Sprintf("Calendar sync failed: remote server error (%s). Cached data is still shown; press S to retry later.", emptyDash(apiErr.Error()))
+		}
+		return fmt.Sprintf("Calendar sync failed: remote API returned %d (%s). Cached data is still shown; press S to retry.", apiErr.StatusCode, emptyDash(apiErr.Error()))
+	}
+	message := err.Error()
+	if strings.Contains(strings.ToLower(message), "config") || strings.Contains(strings.ToLower(message), "base url") || strings.Contains(strings.ToLower(message), "client") || strings.Contains(strings.ToLower(message), "secret") {
+		return fmt.Sprintf("Calendar sync failed: configuration problem (%s). Open Settings and verify your Telex instance, then press S.", message)
+	}
+	return fmt.Sprintf("Calendar sync failed: %v. Cached data is still shown; press S to retry.", err)
 }
 
 func (c Calendar) CapturesFocusKey(tea.KeyPressMsg) bool {
@@ -404,9 +480,13 @@ func (c Calendar) handleAction(action string) (Screen, tea.Cmd) {
 		return c, nil
 	case "sync":
 		if c.sync == nil || c.syncing {
+			if c.sync == nil {
+				c.status = "Calendar sync is not configured. Open Settings and verify your Telex instance, then run `telex auth login`."
+			}
 			return c, nil
 		}
 		c.syncing = true
+		c.syncErr = nil
 		c.status = ""
 		return c, c.syncCmd()
 	case "delete":
@@ -988,7 +1068,7 @@ func cachedEventDetailLines(event calendarstore.CachedEvent, cal calendarstore.C
 	lines = append(lines, descriptionView(event.Description)...)
 	lines = append(lines, eventOrganizerView(meta)...)
 	lines = append(lines, recurrenceView(meta)...)
-	lines = append(lines, attendeeListView(meta.Attendees)...)
+	lines = append(lines, attendeeListView(meta.Attendees, meta.CurrentUserAttendee)...)
 	lines = append(lines, linkListView(meta.Links)...)
 	lines = append(lines, messageSummaryView(meta.Messages)...)
 	if meta.Invitation {
@@ -1042,15 +1122,68 @@ func recurrenceView(event calendarstore.EventMeta) []string {
 	return lines
 }
 
-func attendeeListView(attendees []calendarstore.AttendeeMeta) []string {
+func attendeeListView(attendees []calendarstore.AttendeeMeta, current *calendarstore.AttendeeMeta) []string {
 	if len(attendees) == 0 {
-		return []string{"", "Attendees: none"}
+		lines := []string{"", "Attendees: none"}
+		if current != nil {
+			lines = append(lines, "Current attendee: "+attendeeSummary(*current, false))
+		}
+		return lines
 	}
 	lines := []string{"", fmt.Sprintf("Attendees: %d", len(attendees))}
-	for _, attendee := range attendees {
-		lines = append(lines, fmt.Sprintf("- %s | role:%s | status:%s | response requested:%t", attendeeDisplay(attendee), emptyDash(attendee.Role), emptyDash(attendee.ParticipationStatus), attendee.ResponseRequested))
+	if current != nil {
+		lines = append(lines, "Current attendee: "+attendeeSummary(*current, false))
+	}
+	displayed := displayedAttendees(attendees, current)
+	for _, attendee := range displayed {
+		lines = append(lines, "- "+attendeeSummary(attendee, attendeeMatchesCurrent(attendee, current)))
+	}
+	if len(attendees) > len(displayed) {
+		lines = append(lines, fmt.Sprintf("... %d more attendee(s) not shown", len(attendees)-len(displayed)))
 	}
 	return lines
+}
+
+func displayedAttendees(attendees []calendarstore.AttendeeMeta, current *calendarstore.AttendeeMeta) []calendarstore.AttendeeMeta {
+	limit := min(len(attendees), calendarDetailMaxAttendees)
+	displayed := append([]calendarstore.AttendeeMeta(nil), attendees[:limit]...)
+	if current == nil || len(attendees) <= limit || attendeeListContains(displayed, current) {
+		return displayed
+	}
+	for _, attendee := range attendees[limit:] {
+		if attendeeMatchesCurrent(attendee, current) {
+			displayed[len(displayed)-1] = attendee
+			return displayed
+		}
+	}
+	return displayed
+}
+
+func attendeeListContains(attendees []calendarstore.AttendeeMeta, current *calendarstore.AttendeeMeta) bool {
+	for _, attendee := range attendees {
+		if attendeeMatchesCurrent(attendee, current) {
+			return true
+		}
+	}
+	return false
+}
+
+func attendeeMatchesCurrent(attendee calendarstore.AttendeeMeta, current *calendarstore.AttendeeMeta) bool {
+	if current == nil {
+		return false
+	}
+	if current.ID != 0 && attendee.ID == current.ID {
+		return true
+	}
+	return strings.TrimSpace(current.Email) != "" && strings.EqualFold(strings.TrimSpace(attendee.Email), strings.TrimSpace(current.Email))
+}
+
+func attendeeSummary(attendee calendarstore.AttendeeMeta, current bool) string {
+	display := attendeeDisplay(attendee)
+	if current {
+		display += " [you]"
+	}
+	return fmt.Sprintf("%s | role:%s | status:%s | response requested:%t", display, emptyDash(attendee.Role), emptyDash(attendee.ParticipationStatus), attendee.ResponseRequested)
 }
 
 func linkListView(links []calendarstore.LinkMeta) []string {
@@ -1153,7 +1286,7 @@ func emptyDash(value string) string {
 
 func (c Calendar) calendarListView() string {
 	if len(c.calendars) == 0 {
-		return "No cached calendars found. Press S to sync or n to create one.\n"
+		return "No calendars are cached. Press S to sync remote calendars, or press n to create one. If sync fails, run `telex auth login` and verify Settings.\n"
 	}
 	var b strings.Builder
 	for i, item := range c.calendars {
@@ -1524,20 +1657,43 @@ func (c Calendar) load() calendarLoadedMsg {
 		return calendarLoadedMsg{err: err}
 	}
 	calendars, err := c.store.ListCalendars()
-	return calendarLoadedMsg{items: items, calendars: calendars, err: err}
+	if err != nil {
+		return calendarLoadedMsg{err: err}
+	}
+	events, err := c.store.ListEvents(0)
+	if err != nil {
+		return calendarLoadedMsg{err: err}
+	}
+	return calendarLoadedMsg{items: items, calendars: calendars, lastSynced: latestCalendarSync(items, calendars, events), cachedEvents: len(events)}
 }
 
 func (c Calendar) syncCmd() tea.Cmd {
 	from, to := c.rangeDates()
 	return func() tea.Msg {
 		result, err := c.sync(context.Background(), from, to)
-		loaded := calendarLoadedMsg{}
-		if err == nil {
-			loaded = c.load()
-			err = loaded.err
-		}
-		return calendarSyncedMsg{result: result, loaded: loaded, err: err}
+		loaded := c.load()
+		return calendarSyncedMsg{result: result, loaded: loaded, syncErr: err}
 	}
+}
+
+func latestCalendarSync(items []calendarstore.OccurrenceMeta, calendars []calendarstore.CalendarMeta, events []calendarstore.CachedEvent) time.Time {
+	var latest time.Time
+	for _, item := range items {
+		if item.SyncedAt.After(latest) {
+			latest = item.SyncedAt
+		}
+	}
+	for _, cal := range calendars {
+		if cal.SyncedAt.After(latest) {
+			latest = cal.SyncedAt
+		}
+	}
+	for _, event := range events {
+		if event.Meta.SyncedAt.After(latest) {
+			latest = event.Meta.SyncedAt
+		}
+	}
+	return latest
 }
 
 func (c Calendar) deleteCmd(id int64) tea.Cmd {
