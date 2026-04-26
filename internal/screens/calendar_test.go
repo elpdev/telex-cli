@@ -49,6 +49,7 @@ func TestCalendarDetailShowsLinkedMessages(t *testing.T) {
 			InboxID:       7,
 			Subject:       "Re: Planning",
 			SenderDisplay: "Alex <alex@example.com>",
+			PreviewText:   "Agenda attached",
 			ReceivedAt:    startsAt.Add(-time.Hour),
 			SystemState:   "inbox",
 		}},
@@ -62,7 +63,54 @@ func TestCalendarDetailShowsLinkedMessages(t *testing.T) {
 
 	screen := Calendar{store: store, items: []calendarstore.OccurrenceMeta{{EventID: event.ID, CalendarID: event.CalendarID, Title: event.Title, StartsAt: event.StartsAt, EndsAt: event.EndsAt}}}
 	view := screen.detailView()
-	for _, want := range []string{"Linked messages:", "Re: Planning", "Alex <alex@example.com>", "2026-04-25 13:00", "inbox:7", "inbox"} {
+	for _, want := range []string{"Messages: 1", "Re: Planning", "Alex <alex@example.com>", "2026-04-25 13:00", "inbox:7", "inbox", "Agenda attached"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("detail view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestCalendarDetailUsesCachedFullEvent(t *testing.T) {
+	store := calendarstore.New(t.TempDir())
+	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
+	event := calendar.CalendarEvent{
+		ID:                9,
+		CalendarID:        1,
+		Title:             "Planning",
+		Description:       "Discuss roadmap\nConfirm launch date",
+		Location:          "Room A",
+		StartsAt:          startsAt,
+		EndsAt:            startsAt.Add(time.Hour),
+		Status:            "confirmed",
+		OrganizerName:     "Alex",
+		OrganizerEmail:    "alex@example.com",
+		RecurrenceSummary: "Weekly on Friday",
+		RecurrenceRule:    "FREQ=WEEKLY;BYDAY=FR",
+		Attendees: []calendar.CalendarEventAttendee{{
+			Email:               "leo@example.com",
+			Name:                "Leo",
+			Role:                "required",
+			ParticipationStatus: "accepted",
+			ResponseRequested:   true,
+		}},
+		Links: []calendar.CalendarEventLink{{MessageID: 42, ICalUID: "uid-1", ICalMethod: "REQUEST", SequenceNumber: 3}},
+		Messages: []calendar.MessageSummary{{
+			ID:            42,
+			InboxID:       7,
+			Subject:       "Planning invite",
+			SenderDisplay: "Alex <alex@example.com>",
+			PreviewText:   "Please RSVP",
+			ReceivedAt:    startsAt.Add(-time.Hour),
+			SystemState:   "inbox",
+		}},
+	}
+	if err := store.StoreEvent(event, startsAt); err != nil {
+		t.Fatal(err)
+	}
+
+	screen := Calendar{store: store, items: []calendarstore.OccurrenceMeta{{EventID: event.ID, CalendarID: event.CalendarID, Title: "Occurrence title", StartsAt: event.StartsAt, EndsAt: event.EndsAt}}}
+	view := screen.detailView()
+	for _, want := range []string{"Planning", "Description:", "Discuss roadmap", "Confirm launch date", "Organizer: Alex <alex@example.com>", "Recurrence:", "Summary: Weekly on Friday", "Rule: FREQ=WEEKLY;BYDAY=FR", "Attendees: 1", "Leo <leo@example.com> | role:required | status:accepted", "Links: 1", "message:42 | uid:uid-1 | method:REQUEST | sequence:3", "Messages: 1", "Planning invite", "Please RSVP"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("detail view missing %q:\n%s", want, view)
 		}
@@ -98,7 +146,7 @@ func TestCalendarDetailShowsInvitationMetadata(t *testing.T) {
 
 	screen := Calendar{store: store, items: []calendarstore.OccurrenceMeta{{EventID: event.ID, CalendarID: event.CalendarID, Title: event.Title, StartsAt: event.StartsAt, EndsAt: event.EndsAt}}}
 	view := screen.detailView()
-	for _, want := range []string{"Invitation: true", "Organizer: Alex <alex@example.com>", "Attendee: Leo <leo@example.com> | tentative", "Invitation message: 42 | method:REQUEST | sequence:3"} {
+	for _, want := range []string{"Invitation: true", "Organizer: Alex <alex@example.com>", "Attendees: 1", "Leo <leo@example.com> | role:- | status:tentative", "Links: 1", "message:42 | uid:- | method:REQUEST | sequence:3"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("detail view missing %q:\n%s", want, view)
 		}
@@ -186,8 +234,19 @@ func TestCalendarDetailShowsEmptyLinkedMessageState(t *testing.T) {
 
 	screen := Calendar{store: store, items: []calendarstore.OccurrenceMeta{{EventID: event.ID, CalendarID: event.CalendarID, Title: event.Title, StartsAt: event.StartsAt, EndsAt: event.EndsAt}}}
 	view := screen.detailView()
-	if !strings.Contains(view, "Linked messages: none") {
+	if !strings.Contains(view, "Messages: none") {
 		t.Fatalf("detail view missing empty state:\n%s", view)
+	}
+}
+
+func TestCalendarDetailGracefullyFallsBackWhenCachedEventMissing(t *testing.T) {
+	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
+	screen := Calendar{store: calendarstore.New(t.TempDir()), items: []calendarstore.OccurrenceMeta{{EventID: 99, CalendarID: 1, Title: "Occurrence Planning", StartsAt: startsAt, EndsAt: startsAt.Add(time.Hour), Status: "confirmed"}}}
+	view := screen.detailView()
+	for _, want := range []string{"Occurrence Planning", "Event ID: 99", "Cached event details: unavailable"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("detail view missing %q:\n%s", want, view)
+		}
 	}
 }
 

@@ -820,7 +820,23 @@ func (c Calendar) detailView() string {
 	if !ok {
 		return "No event selected.\n"
 	}
-	lines := []string{
+	event, err := c.store.ReadEvent(item.EventID)
+	if err != nil {
+		lines := occurrenceDetailLines(item)
+		lines = append(lines, "", "Cached event details: unavailable")
+		return strings.Join(lines, "\n") + "\n"
+	}
+	messageID := firstEventMessageID(event.Meta)
+	lines := cachedEventDetailLines(*event)
+	if c.invitation != nil && c.invitation.MessageID == messageID {
+		lines = append(lines, "")
+		lines = append(lines, invitationView(*c.invitation)...)
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func occurrenceDetailLines(item calendarstore.OccurrenceMeta) []string {
+	return []string{
 		item.Title,
 		"",
 		"Event ID: " + strconv.FormatInt(item.EventID, 10),
@@ -831,35 +847,99 @@ func (c Calendar) detailView() string {
 		"Location: " + item.Location,
 		"Status: " + item.Status,
 	}
-	if event, err := c.store.ReadEvent(item.EventID); err == nil {
-		lines = append(lines, invitationEventView(event.Meta)...)
-		lines = append(lines, "")
-		lines = append(lines, linkedMessagesView(event.Meta.Messages)...)
-	} else {
-		lines = append(lines, "", "Linked messages: unavailable in cache")
-	}
-	if c.invitation != nil && c.invitation.MessageID == c.selectedInvitationMessageID() {
-		lines = append(lines, "")
-		lines = append(lines, invitationView(*c.invitation)...)
-	}
-	return strings.Join(lines, "\n") + "\n"
 }
 
-func invitationEventView(event calendarstore.EventMeta) []string {
-	if !event.Invitation && len(event.Links) == 0 && len(event.Attendees) == 0 {
+func cachedEventDetailLines(event calendarstore.CachedEvent) []string {
+	meta := event.Meta
+	lines := []string{
+		meta.Title,
+		"",
+		"Event ID: " + strconv.FormatInt(meta.RemoteID, 10),
+		"Calendar ID: " + strconv.FormatInt(meta.CalendarID, 10),
+		"Starts: " + meta.StartsAt.Format("2006-01-02 15:04"),
+		"Ends: " + meta.EndsAt.Format("2006-01-02 15:04"),
+		"All day: " + strconv.FormatBool(meta.AllDay),
+		"Location: " + emptyDash(meta.Location),
+		"Status: " + emptyDash(meta.Status),
+	}
+	lines = append(lines, descriptionView(event.Description)...)
+	lines = append(lines, eventOrganizerView(meta)...)
+	lines = append(lines, recurrenceView(meta)...)
+	lines = append(lines, attendeeListView(meta.Attendees)...)
+	lines = append(lines, linkListView(meta.Links)...)
+	lines = append(lines, messageSummaryView(meta.Messages)...)
+	if meta.Invitation {
+		lines = append(lines, "", "Invitation: true")
+	}
+	return lines
+}
+
+func descriptionView(description string) []string {
+	description = strings.TrimSpace(description)
+	if description == "" {
 		return nil
 	}
-	lines := []string{"", "Invitation: " + strconv.FormatBool(event.Invitation)}
-	if event.OrganizerName != "" || event.OrganizerEmail != "" {
-		lines = append(lines, "Organizer: "+organizerDisplay(event))
+	lines := []string{"", "Description:"}
+	for _, line := range strings.Split(description, "\n") {
+		lines = append(lines, strings.TrimRight(line, " \t"))
 	}
-	for _, attendee := range event.Attendees {
-		if attendee.ResponseRequested || attendee.ParticipationStatus != "" {
-			lines = append(lines, fmt.Sprintf("Attendee: %s | %s | response requested:%t", attendeeDisplay(attendee), emptyDash(attendee.ParticipationStatus), attendee.ResponseRequested))
+	return lines
+}
+
+func eventOrganizerView(event calendarstore.EventMeta) []string {
+	if event.OrganizerName == "" && event.OrganizerEmail == "" {
+		return nil
+	}
+	return []string{"", "Organizer: " + organizerDisplay(event)}
+}
+
+func recurrenceView(event calendarstore.EventMeta) []string {
+	if event.RecurrenceSummary == "" && event.RecurrenceRule == "" {
+		return nil
+	}
+	lines := []string{"", "Recurrence:"}
+	if event.RecurrenceSummary != "" {
+		lines = append(lines, "Summary: "+event.RecurrenceSummary)
+	}
+	if event.RecurrenceRule != "" {
+		lines = append(lines, "Rule: "+event.RecurrenceRule)
+	}
+	return lines
+}
+
+func attendeeListView(attendees []calendarstore.AttendeeMeta) []string {
+	if len(attendees) == 0 {
+		return []string{"", "Attendees: none"}
+	}
+	lines := []string{"", fmt.Sprintf("Attendees: %d", len(attendees))}
+	for _, attendee := range attendees {
+		lines = append(lines, fmt.Sprintf("- %s | role:%s | status:%s | response requested:%t", attendeeDisplay(attendee), emptyDash(attendee.Role), emptyDash(attendee.ParticipationStatus), attendee.ResponseRequested))
+	}
+	return lines
+}
+
+func linkListView(links []calendarstore.LinkMeta) []string {
+	if len(links) == 0 {
+		return []string{"", "Links: none"}
+	}
+	lines := []string{"", fmt.Sprintf("Links: %d", len(links))}
+	for _, link := range links {
+		lines = append(lines, fmt.Sprintf("- message:%d | uid:%s | method:%s | sequence:%d", link.MessageID, emptyDash(link.ICalUID), emptyDash(link.ICalMethod), link.SequenceNumber))
+	}
+	return lines
+}
+
+func messageSummaryView(messages []calendarstore.MessageMeta) []string {
+	if len(messages) == 0 {
+		return []string{"", "Messages: none"}
+	}
+	lines := []string{"", fmt.Sprintf("Messages: %d", len(messages))}
+	for _, message := range messages {
+		summary := fmt.Sprintf("- %s | %s | %s | inbox:%d | %s", emptyDash(message.Subject), calendarMessageSender(message), formatCalendarMessageTime(message.ReceivedAt), message.InboxID, emptyDash(message.SystemState))
+		if strings.TrimSpace(message.PreviewText) != "" {
+			summary += " | " + strings.TrimSpace(message.PreviewText)
 		}
-	}
-	for _, link := range event.Links {
-		lines = append(lines, fmt.Sprintf("Invitation message: %d | method:%s | sequence:%d", link.MessageID, emptyDash(link.ICalMethod), link.SequenceNumber))
+		lines = append(lines, summary)
 	}
 	return lines
 }
@@ -1006,12 +1086,16 @@ func (c Calendar) selectedInvitationMessageID() int64 {
 	if err != nil {
 		return 0
 	}
-	for _, link := range event.Meta.Links {
+	return firstEventMessageID(event.Meta)
+}
+
+func firstEventMessageID(event calendarstore.EventMeta) int64 {
+	for _, link := range event.Links {
 		if link.MessageID > 0 {
 			return link.MessageID
 		}
 	}
-	for _, message := range event.Meta.Messages {
+	for _, message := range event.Messages {
 		if message.ID > 0 {
 			return message.ID
 		}
