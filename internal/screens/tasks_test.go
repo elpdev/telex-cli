@@ -27,6 +27,30 @@ func TestTasksScreenLoadsCachedBoardAndOpensCard(t *testing.T) {
 	}
 }
 
+func TestTasksScreenShowsUnlinkedCards(t *testing.T) {
+	store := testTasksStore(t)
+	syncedAt := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	if err := store.StoreCard(4, tasks.Card{TaskFile: tasks.TaskFile{ID: 10, FolderID: 7, Title: "Unplanned", Filename: "Unplanned.md", UpdatedAt: syncedAt}, Body: "# Unplanned"}, syncedAt); err != nil {
+		t.Fatal(err)
+	}
+	screen := NewTasks(store, nil)
+	updated, _ := screen.Update(screen.load(4))
+	screen = updated.(Tasks)
+	view := screen.View(80, 20)
+	if !strings.Contains(view, "Unlinked") || !strings.Contains(view, "Unplanned") {
+		t.Fatalf("view = %q", view)
+	}
+}
+
+func TestTasksEditorCommandUsesNotesOverride(t *testing.T) {
+	t.Setenv("TELEX_NOTES_EDITOR", "typora")
+	t.Setenv("VISUAL", "code")
+	t.Setenv("EDITOR", "nvim")
+	if got := tasksEditorCommand(); got != "typora" {
+		t.Fatalf("editor = %q", got)
+	}
+}
+
 func testTasksStore(t *testing.T) taskstore.Store {
 	t.Helper()
 	store := taskstore.New(t.TempDir())

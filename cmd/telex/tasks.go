@@ -280,6 +280,9 @@ func newTasksCardCreateCommand(rt *runtime) *cobra.Command {
 		if err := taskstore.New(rt.dataPath).StoreCard(projectID, *card, time.Now()); err != nil {
 			return err
 		}
+		if err := addTaskCardToTodo(rt.context(), taskstore.New(rt.dataPath), service, projectID, *card); err != nil {
+			return err
+		}
 		writeRows(cmd.OutOrStdout(), []string{"key", "value"}, taskCardFields(*card))
 		return nil
 	}}
@@ -319,6 +322,9 @@ func newTasksCardEditCommand(rt *runtime) *cobra.Command {
 		}
 		card, err := service.UpdateCard(rt.context(), projectID, id, input)
 		if err != nil {
+			return err
+		}
+		if err := replaceTaskCardBoardLink(rt.context(), taskstore.New(rt.dataPath), service, projectID, current.Filename, *card); err != nil {
 			return err
 		}
 		if err := taskstore.New(rt.dataPath).StoreCard(projectID, *card, time.Now()); err != nil {
@@ -445,6 +451,41 @@ func taskCardForEdit(rt *runtime, projectID, id int64) (*tasks.Card, error) {
 		return nil, err
 	}
 	return service.ShowCard(rt.context(), projectID, id)
+}
+
+func addTaskCardToTodo(ctx context.Context, store taskstore.Store, service *tasks.Service, projectID int64, card tasks.Card) error {
+	board, err := service.ShowBoard(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	updatedBody := tasks.AddCardToColumn(board.Body, "Todo", "cards/"+card.Filename)
+	if updatedBody == board.Body {
+		return store.StoreBoard(projectID, *board, time.Now())
+	}
+	updated, err := service.UpdateBoard(ctx, projectID, tasks.BoardInput{Body: updatedBody})
+	if err != nil {
+		return err
+	}
+	return store.StoreBoard(projectID, *updated, time.Now())
+}
+
+func replaceTaskCardBoardLink(ctx context.Context, store taskstore.Store, service *tasks.Service, projectID int64, oldFilename string, card tasks.Card) error {
+	if oldFilename == "" || oldFilename == card.Filename {
+		return nil
+	}
+	board, err := service.ShowBoard(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	updatedBody := tasks.ReplaceCardPath(board.Body, "cards/"+oldFilename, "cards/"+card.Filename)
+	if updatedBody == board.Body {
+		return nil
+	}
+	updated, err := service.UpdateBoard(ctx, projectID, tasks.BoardInput{Body: updatedBody})
+	if err != nil {
+		return err
+	}
+	return store.StoreBoard(projectID, *updated, time.Now())
 }
 
 func taskBodyFromFlags(body, filePath string) (string, error) {

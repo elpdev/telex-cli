@@ -600,6 +600,7 @@ func (t Tasks) buildRows() []taskRow {
 	for i := range t.cards {
 		byID[t.cards[i].Meta.RemoteID] = &t.cards[i]
 	}
+	linked := map[int64]bool{}
 	rows := []taskRow{}
 	if t.board != nil {
 		for i := range t.board.Columns {
@@ -608,12 +609,21 @@ func (t Tasks) buildRows() []taskRow {
 			for _, link := range column.Cards {
 				if link.Card != nil {
 					if card := byID[link.Card.ID]; card != nil {
+						linked[card.Meta.RemoteID] = true
 						rows = append(rows, taskRow{Kind: "card", Name: card.Meta.Title, Card: card})
 						continue
 					}
 				}
 				rows = append(rows, taskRow{Kind: "missing", Name: link.Title, Missing: true})
 			}
+		}
+	}
+	unlinked := t.unlinkedCards(linked)
+	if len(unlinked) > 0 {
+		rows = append(rows, taskRow{Kind: "column", Name: "Unlinked", Column: &tasks.BoardColumn{Name: "Unlinked"}})
+		for i := range unlinked {
+			card := &unlinked[i]
+			rows = append(rows, taskRow{Kind: "card", Name: card.Meta.Title, Card: card})
 		}
 	}
 	if len(rows) == 0 {
@@ -623,6 +633,16 @@ func (t Tasks) buildRows() []taskRow {
 		}
 	}
 	return rows
+}
+
+func (t Tasks) unlinkedCards(linked map[int64]bool) []taskstore.CachedCard {
+	out := []taskstore.CachedCard{}
+	for _, card := range t.cards {
+		if !linked[card.Meta.RemoteID] {
+			out = append(out, card)
+		}
+	}
+	return out
 }
 
 func (t Tasks) visibleRows() []taskRow {
@@ -840,11 +860,11 @@ func parseTaskCardTemplate(content string) tasks.CardInput {
 func runTaskEditor(path string) error {
 	editor := tasksEditorCommand()
 	if editor == "" {
-		return fmt.Errorf("set TELEX_TASKS_EDITOR, VISUAL, or EDITOR to edit tasks")
+		return fmt.Errorf("set TELEX_TASKS_EDITOR, TELEX_NOTES_EDITOR, VISUAL, or EDITOR to edit tasks")
 	}
 	parts := strings.Fields(editor)
 	if len(parts) == 0 {
-		return fmt.Errorf("set TELEX_TASKS_EDITOR, VISUAL, or EDITOR to edit tasks")
+		return fmt.Errorf("set TELEX_TASKS_EDITOR, TELEX_NOTES_EDITOR, VISUAL, or EDITOR to edit tasks")
 	}
 	cmd := exec.Command(parts[0], append(parts[1:], path)...)
 	cmd.Stdin = os.Stdin
@@ -855,6 +875,9 @@ func runTaskEditor(path string) error {
 
 func tasksEditorCommand() string {
 	if editor := strings.TrimSpace(os.Getenv("TELEX_TASKS_EDITOR")); editor != "" {
+		return editor
+	}
+	if editor := strings.TrimSpace(os.Getenv("TELEX_NOTES_EDITOR")); editor != "" {
 		return editor
 	}
 	if editor := strings.TrimSpace(os.Getenv("VISUAL")); editor != "" {
