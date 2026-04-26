@@ -35,6 +35,79 @@ func TestCalendarBackFromCalendarsReturnsToAgenda(t *testing.T) {
 	}
 }
 
+func TestCalendarAgendaFilterMatchesCalendarStatusSourceAndText(t *testing.T) {
+	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
+	screen := Calendar{
+		allItems: []calendarstore.OccurrenceMeta{
+			{EventID: 1, CalendarID: 10, Title: "Planning", Location: "Room A", StartsAt: startsAt, Status: "confirmed", Source: "telex"},
+			{EventID: 2, CalendarID: 20, Title: "Lunch", Location: "Cafe", StartsAt: startsAt.Add(time.Hour), Status: "tentative", Source: "ics"},
+			{EventID: 3, CalendarID: 10, Title: "Roadmap", Location: "Room B", StartsAt: startsAt.Add(2 * time.Hour), Status: "cancelled", Source: "telex"},
+		},
+		calendars: []calendarstore.CalendarMeta{{RemoteID: 10, Name: "Work"}, {RemoteID: 20, Name: "Personal"}},
+	}
+	screen.filter = parseCalendarAgendaFilter("calendar:work status:conf source:tel planning room")
+	screen.applyAgendaFilter()
+
+	if len(screen.items) != 1 || screen.items[0].EventID != 1 {
+		t.Fatalf("items = %#v", screen.items)
+	}
+}
+
+func TestCalendarAgendaFilterSourceFallsBackToCachedEvent(t *testing.T) {
+	store := calendarstore.New(t.TempDir())
+	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
+	event := calendar.CalendarEvent{ID: 9, CalendarID: 1, Title: "Imported", StartsAt: startsAt, EndsAt: startsAt.Add(time.Hour), Source: "ics"}
+	if err := store.StoreEvent(event, startsAt); err != nil {
+		t.Fatal(err)
+	}
+	screen := Calendar{store: store, allItems: []calendarstore.OccurrenceMeta{{EventID: 9, CalendarID: 1, Title: "Imported", StartsAt: startsAt}}}
+	screen.filter = parseCalendarAgendaFilter("source:ics")
+	screen.applyAgendaFilter()
+
+	if len(screen.items) != 1 || screen.items[0].EventID != 9 {
+		t.Fatalf("items = %#v", screen.items)
+	}
+}
+
+func TestCalendarAgendaFilterModeAppliesAndRendersActiveFilters(t *testing.T) {
+	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
+	screen := Calendar{
+		allItems:  []calendarstore.OccurrenceMeta{{EventID: 1, CalendarID: 10, Title: "Planning", Location: "Room A", StartsAt: startsAt, Status: "confirmed"}, {EventID: 2, CalendarID: 20, Title: "Lunch", Location: "Cafe", StartsAt: startsAt.Add(time.Hour), Status: "tentative"}},
+		calendars: []calendarstore.CalendarMeta{{RemoteID: 10, Name: "Work"}, {RemoteID: 20, Name: "Personal"}},
+		keys:      DefaultCalendarKeyMap(),
+	}
+	screen.applyAgendaFilter()
+	updated, _ := screen.Update(tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
+	for _, r := range "calendar:work planning" {
+		updated, _ = updated.Update(tea.KeyPressMsg(tea.Key{Text: string(r), Code: r}))
+	}
+	updated, _ = updated.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	screen = updated.(Calendar)
+
+	if len(screen.items) != 1 || screen.items[0].EventID != 1 {
+		t.Fatalf("items = %#v", screen.items)
+	}
+	view := screen.View(80, 20)
+	for _, want := range []string{"Filters: calendar=work text=\"planning\" (1/2)", "Planning"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestCalendarAgendaClearFilterRestoresItems(t *testing.T) {
+	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
+	screen := Calendar{allItems: []calendarstore.OccurrenceMeta{{EventID: 1, Title: "Planning", StartsAt: startsAt}, {EventID: 2, Title: "Lunch", StartsAt: startsAt.Add(time.Hour)}}, keys: DefaultCalendarKeyMap()}
+	screen.filter = parseCalendarAgendaFilter("planning")
+	screen.applyAgendaFilter()
+	updated, _ := screen.Update(CalendarActionMsg{Action: "clear-filter"})
+	screen = updated.(Calendar)
+
+	if screen.filter.active() || len(screen.items) != 2 {
+		t.Fatalf("filter = %#v items = %#v", screen.filter, screen.items)
+	}
+}
+
 func TestCalendarDetailShowsLinkedMessages(t *testing.T) {
 	store := calendarstore.New(t.TempDir())
 	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)

@@ -67,12 +67,16 @@ type Calendar struct {
 	showInvite     ShowInvitationFunc
 	syncInvite     SyncInvitationFunc
 	respondInvite  RespondInvitationFunc
+	allItems       []calendarstore.OccurrenceMeta
 	items          []calendarstore.OccurrenceMeta
 	calendars      []calendarstore.CalendarMeta
 	mode           calendarViewMode
 	index          int
 	calendarIndex  int
 	detail         bool
+	filtering      bool
+	filterInput    string
+	filter         calendarAgendaFilter
 	form           *huh.Form
 	formKind       calendarFormKind
 	formID         int64
@@ -105,6 +109,15 @@ type CalendarKeyMap struct {
 	Edit    key.Binding
 	Delete  key.Binding
 	Import  key.Binding
+	Filter  key.Binding
+	Clear   key.Binding
+}
+
+type calendarAgendaFilter struct {
+	Calendar string
+	Status   string
+	Source   string
+	Text     string
 }
 
 type calendarEventFormData struct {
@@ -193,6 +206,8 @@ func DefaultCalendarKeyMap() CalendarKeyMap {
 		Edit:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit event")),
 		Delete:  key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "delete event")),
 		Import:  key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "import ics")),
+		Filter:  key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter agenda")),
+		Clear:   key.NewBinding(key.WithKeys("ctrl+l"), key.WithHelp("ctrl+l", "clear filters")),
 	}
 }
 
@@ -213,9 +228,9 @@ func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		c.loading = false
 		c.err = msg.err
 		if msg.err == nil {
-			c.items = msg.items
+			c.allItems = msg.items
 			c.calendars = msg.calendars
-			c.clampIndex()
+			c.applyAgendaFilter()
 		}
 		return c, nil
 	case calendarSyncedMsg:
@@ -226,9 +241,9 @@ func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			return c, nil
 		}
 		c.status = fmt.Sprintf("Synced %d calendar(s), %d event(s), %d occurrence(s)", msg.result.Calendars, msg.result.Events, msg.result.Occurrences)
-		c.items = msg.loaded.items
+		c.allItems = msg.loaded.items
 		c.calendars = msg.loaded.calendars
-		c.clampIndex()
+		c.applyAgendaFilter()
 		return c, nil
 	case calendarActionFinishedMsg:
 		c.loading = false
@@ -238,7 +253,7 @@ func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			return c, nil
 		}
 		c.status = msg.status
-		c.items = msg.loaded.items
+		c.allItems = msg.loaded.items
 		c.calendars = msg.loaded.calendars
 		c.invitation = msg.invitation
 		if msg.invitation != nil {
@@ -253,7 +268,7 @@ func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		c.confirm = ""
 		c.confirmAction = ""
 		c.confirmID = 0
-		c.clampIndex()
+		c.applyAgendaFilter()
 		return c, nil
 	case CalendarActionMsg:
 		return c.handleAction(msg.Action)
@@ -285,6 +300,12 @@ func (c Calendar) View(width, height int) string {
 	if c.syncing {
 		b.WriteString("Syncing remote Calendar...\n")
 	}
+	if c.mode == calendarViewAgenda && c.filtering {
+		b.WriteString("Filter: " + c.filterInput + "\n")
+		b.WriteString("Hint: calendar:<name|id> status:<value> source:<value> text terms\n")
+	} else if c.mode == calendarViewAgenda && c.filter.active() {
+		b.WriteString(fmt.Sprintf("Filters: %s (%d/%d)\n", c.filter.summary(), len(c.items), len(c.agendaSourceItems())))
+	}
 	if c.confirm != "" {
 		b.WriteString(c.confirm + " [y/N]\n")
 	}
@@ -295,6 +316,10 @@ func (c Calendar) View(width, height int) string {
 	}
 	if c.detail {
 		b.WriteString(c.detailView())
+		return style.Render(b.String())
+	}
+	if len(c.items) == 0 && c.filter.active() {
+		b.WriteString("No calendar occurrences match the active filters. Press ctrl+l to clear filters.\n")
 		return style.Render(b.String())
 	}
 	if len(c.items) == 0 {
@@ -314,10 +339,12 @@ func (c Calendar) View(width, height int) string {
 func (c Calendar) Title() string { return "Calendar" }
 
 func (c Calendar) KeyBindings() []key.Binding {
-	return []key.Binding{c.keys.Up, c.keys.Down, c.keys.Open, c.keys.Back, c.keys.Refresh, c.keys.Sync, c.keys.Today, c.keys.View, c.keys.New, c.keys.Edit, c.keys.Delete, c.keys.Import}
+	return []key.Binding{c.keys.Up, c.keys.Down, c.keys.Open, c.keys.Back, c.keys.Refresh, c.keys.Sync, c.keys.Today, c.keys.View, c.keys.New, c.keys.Edit, c.keys.Delete, c.keys.Import, c.keys.Filter, c.keys.Clear}
 }
 
-func (c Calendar) CapturesFocusKey(tea.KeyPressMsg) bool { return c.form != nil || c.filePickerOpen }
+func (c Calendar) CapturesFocusKey(tea.KeyPressMsg) bool {
+	return c.form != nil || c.filePickerOpen || c.filtering
+}
 
 func (c Calendar) Selection() CalendarSelection {
 	if c.mode == calendarViewCalendars {
@@ -350,6 +377,22 @@ func (c Calendar) handleAction(action string) (Screen, tea.Cmd) {
 		return c, nil
 	}
 	switch action {
+	case "filter":
+		if c.mode != calendarViewAgenda {
+			c.mode = calendarViewAgenda
+			c.detail = false
+		}
+		c.filtering = true
+		c.filterInput = c.filter.inputString()
+		c.status = "Filter agenda"
+		return c, nil
+	case "clear-filter":
+		c.filtering = false
+		c.filterInput = ""
+		c.filter = calendarAgendaFilter{}
+		c.applyAgendaFilter()
+		c.status = "Agenda filters cleared"
+		return c, nil
 	case "sync":
 		if c.sync == nil || c.syncing {
 			return c, nil
@@ -472,6 +515,9 @@ func (c Calendar) handleAction(action string) (Screen, tea.Cmd) {
 }
 
 func (c Calendar) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+	if c.filtering {
+		return c.handleFilterKey(msg)
+	}
 	if c.confirm != "" {
 		if msg.String() == "y" || msg.String() == "Y" {
 			action := c.confirmAction
@@ -554,6 +600,45 @@ func (c Calendar) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	}
 	if key.Matches(msg, c.keys.Import) && c.mode == calendarViewCalendars {
 		return c.handleAction("import-ics")
+	}
+	if key.Matches(msg, c.keys.Filter) && c.mode == calendarViewAgenda && !c.detail {
+		return c.handleAction("filter")
+	}
+	if key.Matches(msg, c.keys.Clear) && c.mode == calendarViewAgenda && c.filter.active() {
+		return c.handleAction("clear-filter")
+	}
+	return c, nil
+}
+
+func (c Calendar) handleFilterKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		c.filtering = false
+		c.filterInput = ""
+		c.status = "Filter cancelled"
+		return c, nil
+	case "enter":
+		c.filtering = false
+		c.filter = parseCalendarAgendaFilter(c.filterInput)
+		c.filterInput = ""
+		c.applyAgendaFilter()
+		if c.filter.active() {
+			c.status = fmt.Sprintf("Filtered agenda: %d occurrence(s)", len(c.items))
+		} else {
+			c.status = "Agenda filters cleared"
+		}
+		return c, nil
+	case "backspace":
+		if len(c.filterInput) > 0 {
+			c.filterInput = c.filterInput[:len(c.filterInput)-1]
+		}
+		return c, nil
+	case "ctrl+u":
+		c.filterInput = ""
+		return c, nil
+	}
+	if msg.Text != "" {
+		c.filterInput += msg.Text
 	}
 	return c, nil
 }
@@ -1061,6 +1146,149 @@ func (c *Calendar) jumpToToday() {
 			return
 		}
 	}
+}
+
+func (c *Calendar) applyAgendaFilter() {
+	source := c.agendaSourceItems()
+	if !c.filter.active() {
+		c.items = append([]calendarstore.OccurrenceMeta(nil), source...)
+		c.clampIndex()
+		return
+	}
+	items := make([]calendarstore.OccurrenceMeta, 0, len(source))
+	for _, item := range source {
+		if c.occurrenceMatchesFilter(item) {
+			items = append(items, item)
+		}
+	}
+	c.items = items
+	c.index = 0
+	c.clampIndex()
+}
+
+func (c Calendar) agendaSourceItems() []calendarstore.OccurrenceMeta {
+	if c.allItems != nil {
+		return c.allItems
+	}
+	return c.items
+}
+
+func (c Calendar) occurrenceMatchesFilter(item calendarstore.OccurrenceMeta) bool {
+	if !calendarFilterMatch(c.filter.Status, item.Status) {
+		return false
+	}
+	if !calendarFilterMatch(c.filter.Calendar, c.calendarFilterValue(item.CalendarID)) {
+		return false
+	}
+	if !calendarFilterMatch(c.filter.Source, c.occurrenceSource(item)) {
+		return false
+	}
+	if c.filter.Text != "" && !calendarTextMatch(item, c.filter.Text) {
+		return false
+	}
+	return true
+}
+
+func (c Calendar) calendarFilterValue(calendarID int64) string {
+	values := []string{strconv.FormatInt(calendarID, 10)}
+	for _, cal := range c.calendars {
+		if cal.RemoteID == calendarID {
+			values = append(values, cal.Name)
+			break
+		}
+	}
+	return strings.Join(values, " ")
+}
+
+func (c Calendar) occurrenceSource(item calendarstore.OccurrenceMeta) string {
+	if strings.TrimSpace(item.Source) != "" {
+		return item.Source
+	}
+	event, err := c.store.ReadEvent(item.EventID)
+	if err != nil || event == nil {
+		return ""
+	}
+	return event.Meta.Source
+}
+
+func calendarFilterMatch(needle, haystack string) bool {
+	needle = strings.ToLower(strings.TrimSpace(needle))
+	if needle == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(haystack), needle)
+}
+
+func calendarTextMatch(item calendarstore.OccurrenceMeta, text string) bool {
+	haystack := strings.ToLower(item.Title + " " + item.Location)
+	for _, term := range strings.Fields(strings.ToLower(strings.TrimSpace(text))) {
+		if !strings.Contains(haystack, term) {
+			return false
+		}
+	}
+	return true
+}
+
+func parseCalendarAgendaFilter(input string) calendarAgendaFilter {
+	filter := calendarAgendaFilter{}
+	text := []string{}
+	for _, token := range strings.Fields(input) {
+		key, value, ok := strings.Cut(token, ":")
+		if !ok || strings.TrimSpace(value) == "" {
+			text = append(text, token)
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "calendar", "cal":
+			filter.Calendar = strings.TrimSpace(value)
+		case "status":
+			filter.Status = strings.TrimSpace(value)
+		case "source", "src":
+			filter.Source = strings.TrimSpace(value)
+		default:
+			text = append(text, token)
+		}
+	}
+	filter.Text = strings.Join(text, " ")
+	return filter
+}
+
+func (f calendarAgendaFilter) active() bool {
+	return strings.TrimSpace(f.Calendar) != "" || strings.TrimSpace(f.Status) != "" || strings.TrimSpace(f.Source) != "" || strings.TrimSpace(f.Text) != ""
+}
+
+func (f calendarAgendaFilter) summary() string {
+	parts := []string{}
+	if strings.TrimSpace(f.Calendar) != "" {
+		parts = append(parts, "calendar="+strings.TrimSpace(f.Calendar))
+	}
+	if strings.TrimSpace(f.Status) != "" {
+		parts = append(parts, "status="+strings.TrimSpace(f.Status))
+	}
+	if strings.TrimSpace(f.Source) != "" {
+		parts = append(parts, "source="+strings.TrimSpace(f.Source))
+	}
+	if strings.TrimSpace(f.Text) != "" {
+		parts = append(parts, "text=\""+strings.TrimSpace(f.Text)+"\"")
+	}
+	return strings.Join(parts, " ")
+}
+
+func (f calendarAgendaFilter) inputString() string {
+	parts := []string{}
+	if strings.TrimSpace(f.Calendar) != "" {
+		parts = append(parts, "calendar:"+strings.TrimSpace(f.Calendar))
+	}
+	if strings.TrimSpace(f.Status) != "" {
+		parts = append(parts, "status:"+strings.TrimSpace(f.Status))
+	}
+	if strings.TrimSpace(f.Source) != "" {
+		parts = append(parts, "source:"+strings.TrimSpace(f.Source))
+	}
+	if strings.TrimSpace(f.Text) != "" {
+		parts = append(parts, strings.TrimSpace(f.Text))
+	}
+	return strings.Join(parts, " ")
 }
 
 func (c Calendar) selected() (calendarstore.OccurrenceMeta, bool) {

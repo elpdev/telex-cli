@@ -99,6 +99,7 @@ type OccurrenceMeta struct {
 	EndsAt        time.Time `toml:"ends_at"`
 	AllDay        bool      `toml:"all_day"`
 	Status        string    `toml:"status"`
+	Source        string    `toml:"source"`
 	SyncedAt      time.Time `toml:"synced_at"`
 }
 
@@ -256,7 +257,7 @@ func (s Store) StoreOccurrences(values []calendar.CalendarOccurrence, syncedAt t
 		return err
 	}
 	for i, value := range values {
-		meta := OccurrenceMeta{SchemaVersion: SchemaVersion, EventID: value.Event.ID, CalendarID: value.Event.CalendarID, Title: value.Event.Title, Location: value.Event.Location, StartsAt: value.StartsAt, EndsAt: value.EndsAt, AllDay: value.AllDay, Status: value.Event.Status, SyncedAt: syncedAt}
+		meta := OccurrenceMeta{SchemaVersion: SchemaVersion, EventID: value.Event.ID, CalendarID: value.Event.CalendarID, Title: value.Event.Title, Location: value.Event.Location, StartsAt: value.StartsAt, EndsAt: value.EndsAt, AllDay: value.AllDay, Status: value.Event.Status, Source: value.Event.Source, SyncedAt: syncedAt}
 		if err := writeTOML(filepath.Join(s.occurrencesRoot(), fmt.Sprintf("%06d-%d.toml", i, value.Event.ID)), meta); err != nil {
 			return err
 		}
