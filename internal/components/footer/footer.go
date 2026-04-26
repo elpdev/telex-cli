@@ -1,20 +1,18 @@
 package footer
 
 import (
-	"strings"
-
+	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
+	"charm.land/lipgloss/v2"
 	"github.com/elpdev/telex-cli/internal/theme"
 )
 
-func View(bindings []key.Binding, width, height int, t theme.Theme) string {
-	parts := make([]string, 0, len(bindings))
-	for _, binding := range bindings {
-		help := binding.Help()
-		parts = append(parts, help.Key+" "+help.Desc)
-	}
+func View(model help.Model, bindings []key.Binding, width, height int, t theme.Theme) string {
 	frameWidth, frameHeight := t.Footer.GetFrameSize()
-	return t.Footer.Width(max(0, width-frameWidth)).Height(max(0, height-frameHeight)).Render(strings.Join(parts, "   "))
+	contentWidth := max(0, width-frameWidth)
+	model.SetWidth(contentWidth)
+	model.Styles = helpStyles(t)
+	return t.Footer.Width(contentWidth).Height(max(0, height-frameHeight)).Render(model.ShortHelpView(bindings))
 }
 
 func max(a, b int) int {
@@ -22,4 +20,16 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func helpStyles(t theme.Theme) help.Styles {
+	styles := help.DefaultStyles(false)
+	styles.ShortKey = t.Footer.Bold(true)
+	styles.ShortDesc = t.Footer
+	styles.ShortSeparator = t.Footer
+	styles.FullKey = lipgloss.NewStyle()
+	styles.FullDesc = lipgloss.NewStyle()
+	styles.FullSeparator = lipgloss.NewStyle()
+	styles.Ellipsis = t.Footer
+	return styles
 }

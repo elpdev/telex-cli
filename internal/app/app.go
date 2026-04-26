@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	helpbubble "charm.land/bubbles/v2/help"
 	tea "charm.land/bubbletea/v2"
 	"github.com/elpdev/telex-cli/internal/api"
 	"github.com/elpdev/telex-cli/internal/calendar"
@@ -55,6 +56,7 @@ type Model struct {
 
 	focus FocusArea
 	keys  KeyMap
+	help  helpbubble.Model
 
 	commands       *commands.Registry
 	commandPalette commands.PaletteModel
@@ -108,6 +110,7 @@ func assembleModel(meta BuildInfo, configPath, dataPath, prefsPath string, prefs
 		showSidebar:  sidebar,
 		focus:        FocusMain,
 		keys:         DefaultKeyMap(),
+		help:         helpbubble.New(),
 		commands:     commands.NewRegistry(),
 		theme:        chosen,
 		logs:         log,

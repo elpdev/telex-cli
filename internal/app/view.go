@@ -3,6 +3,7 @@ package app
 import (
 	"strings"
 
+	helpbubble "charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -11,6 +12,7 @@ import (
 	"github.com/elpdev/telex-cli/internal/components/modal"
 	"github.com/elpdev/telex-cli/internal/components/sidebar"
 	"github.com/elpdev/telex-cli/internal/layout"
+	"github.com/elpdev/telex-cli/internal/theme"
 )
 
 func (m Model) View() tea.View {
@@ -22,7 +24,7 @@ func (m Model) View() tea.View {
 	active := m.screens[m.activeScreen]
 
 	head := header.View(header.Model{AppName: "Telex", ScreenTitle: active.Title(), Version: m.meta.Version, Instance: m.instance}, dims.Header.Width, dims.Header.Height, m.theme)
-	foot := footer.View(m.keys.ShortHelp(), dims.Footer.Width, dims.Footer.Height, m.theme)
+	foot := footer.View(m.help, m.keys.ShortHelp(), dims.Footer.Width, dims.Footer.Height, m.theme)
 	mainFrameWidth, mainFrameHeight := m.theme.Main.GetFrameSize()
 	mainWidth := max(0, dims.Main.Width-mainFrameWidth)
 	mainHeight := max(0, dims.Main.Height-mainFrameHeight)
@@ -66,24 +68,31 @@ func (m Model) sidebarItems() []sidebar.Item {
 }
 
 func (m Model) helpOverlay() string {
+	help := m.help
+	help.ShowAll = true
+	help.SetWidth(52)
+	help.Styles = helpStyles(m.theme)
+
 	var b strings.Builder
 	b.WriteString(m.theme.Title.Render("Keyboard Help"))
 	b.WriteString("\n\nGlobal keys\n")
-	for _, group := range m.keys.FullHelp() {
-		for _, binding := range group {
-			b.WriteString(formatBinding(binding))
-		}
-	}
+	b.WriteString(help.FullHelpView(m.keys.FullHelp()))
 	if active := m.screens[m.activeScreen]; active != nil {
 		b.WriteString("\nScreen keys\n")
-		for _, binding := range active.KeyBindings() {
-			b.WriteString(formatBinding(binding))
-		}
+		b.WriteString(help.FullHelpView([][]key.Binding{active.KeyBindings()}))
 	}
 	b.WriteString("\nPress esc to close.")
 	return m.theme.Modal.Width(56).Render(b.String())
 }
 
-func formatBinding(binding key.Binding) string {
-	return "  " + binding.Help().Key + "  " + binding.Help().Desc + "\n"
+func helpStyles(t theme.Theme) helpbubble.Styles {
+	styles := helpbubble.DefaultStyles(false)
+	styles.ShortKey = t.Footer.Bold(true)
+	styles.ShortDesc = t.Footer
+	styles.ShortSeparator = t.Footer
+	styles.FullKey = t.Selected
+	styles.FullDesc = t.Text
+	styles.FullSeparator = t.Muted
+	styles.Ellipsis = t.Muted
+	return styles
 }
