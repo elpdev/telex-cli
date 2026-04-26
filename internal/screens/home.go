@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/elpdev/telex-cli/internal/calendarstore"
+	"github.com/elpdev/telex-cli/internal/components/card"
 	"github.com/elpdev/telex-cli/internal/drivestore"
 	"github.com/elpdev/telex-cli/internal/mailstore"
 	"github.com/elpdev/telex-cli/internal/notestore"
@@ -17,6 +18,11 @@ import (
 )
 
 type HomeNavigateFunc func(screenID string) tea.Cmd
+
+const (
+	homeGridCols     = 2
+	homeStackedBelow = 100
+)
 
 type Home struct {
 	mail     mailstore.Store
@@ -26,17 +32,24 @@ type Home struct {
 	theme    theme.Theme
 	navigate HomeNavigateFunc
 
-	summary homeSummary
-	loaded  bool
-	keys    HomeKeyMap
+	summary    homeSummary
+	cards      []card.Model
+	cardIDs    []string
+	focusedIdx int
+	loaded     bool
+	keys       HomeKeyMap
 }
 
 type HomeKeyMap struct {
-	Refresh  key.Binding
-	Mail     key.Binding
-	Calendar key.Binding
-	Notes    key.Binding
-	Drive    key.Binding
+	Refresh    key.Binding
+	NextCard   key.Binding
+	PrevCard   key.Binding
+	OpenCard   key.Binding
+	ClearFocus key.Binding
+	Mail       key.Binding
+	Calendar   key.Binding
+	Notes      key.Binding
+	Drive      key.Binding
 }
 
 type homeSummary struct {
@@ -104,28 +117,36 @@ type homeLoadedMsg struct {
 
 func DefaultHomeKeyMap() HomeKeyMap {
 	return HomeKeyMap{
-		Refresh:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
-		Mail:     key.NewBinding(key.WithKeys("m", "1"), key.WithHelp("m/1", "open mail")),
-		Calendar: key.NewBinding(key.WithKeys("c", "2"), key.WithHelp("c/2", "open calendar")),
-		Notes:    key.NewBinding(key.WithKeys("n", "3"), key.WithHelp("n/3", "open notes")),
-		Drive:    key.NewBinding(key.WithKeys("d", "4"), key.WithHelp("d/4", "open drive")),
+		Refresh:    key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
+		NextCard:   key.NewBinding(key.WithKeys("tab", "right", "l"), key.WithHelp("tab", "next card")),
+		PrevCard:   key.NewBinding(key.WithKeys("shift+tab", "left", "h"), key.WithHelp("shift+tab", "prev card")),
+		OpenCard:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open focused")),
+		ClearFocus: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear focus")),
+		Mail:       key.NewBinding(key.WithKeys("m", "1"), key.WithHelp("m/1", "open mail")),
+		Calendar:   key.NewBinding(key.WithKeys("c", "2"), key.WithHelp("c/2", "open calendar")),
+		Notes:      key.NewBinding(key.WithKeys("n", "3"), key.WithHelp("n/3", "open notes")),
+		Drive:      key.NewBinding(key.WithKeys("d", "4"), key.WithHelp("d/4", "open drive")),
 	}
 }
 
 func NewHome(mail mailstore.Store, calendar calendarstore.Store, notes notestore.Store, drive drivestore.Store, t theme.Theme, navigate HomeNavigateFunc) Home {
-	return Home{
-		mail:     mail,
-		calendar: calendar,
-		notes:    notes,
-		drive:    drive,
-		theme:    t,
-		navigate: navigate,
-		keys:     DefaultHomeKeyMap(),
+	h := Home{
+		mail:       mail,
+		calendar:   calendar,
+		notes:      notes,
+		drive:      drive,
+		theme:      t,
+		navigate:   navigate,
+		focusedIdx: -1,
+		keys:       DefaultHomeKeyMap(),
 	}
+	h.cards, h.cardIDs = h.buildCards()
+	return h
 }
 
 func (h Home) Reconfigure(t theme.Theme) Home {
 	h.theme = t
+	h.cards, h.cardIDs = h.buildCards()
 	return h
 }
 
@@ -136,6 +157,7 @@ func (h Home) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	case homeLoadedMsg:
 		h.summary = msg.summary
 		h.loaded = true
+		h.cards, h.cardIDs = h.buildCards()
 		return h, nil
 	case tea.KeyPressMsg:
 		return h.handleKey(msg)
@@ -155,6 +177,18 @@ func (h Home) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return h.routeTo("notes")
 	case key.Matches(msg, h.keys.Drive):
 		return h.routeTo("drive")
+	case key.Matches(msg, h.keys.NextCard):
+		return h.moveFocus(1), nil
+	case key.Matches(msg, h.keys.PrevCard):
+		return h.moveFocus(-1), nil
+	case key.Matches(msg, h.keys.ClearFocus):
+		if h.focusedIdx >= 0 {
+			return h.setFocus(-1), nil
+		}
+	case key.Matches(msg, h.keys.OpenCard):
+		if h.focusedIdx >= 0 && h.focusedIdx < len(h.cardIDs) {
+			return h.routeTo(h.cardIDs[h.focusedIdx])
+		}
 	}
 	return h, nil
 }
@@ -166,10 +200,43 @@ func (h Home) routeTo(id string) (Screen, tea.Cmd) {
 	return h, h.navigate(id)
 }
 
+func (h Home) moveFocus(delta int) Home {
+	if len(h.cards) == 0 {
+		return h
+	}
+	next := h.focusedIdx + delta
+	if h.focusedIdx < 0 {
+		if delta > 0 {
+			next = 0
+		} else {
+			next = len(h.cards) - 1
+		}
+	}
+	if next < 0 {
+		next = len(h.cards) - 1
+	}
+	if next >= len(h.cards) {
+		next = 0
+	}
+	return h.setFocus(next)
+}
+
+func (h Home) setFocus(idx int) Home {
+	h.focusedIdx = idx
+	for i := range h.cards {
+		if i == idx {
+			h.cards[i] = h.cards[i].Focus()
+		} else {
+			h.cards[i] = h.cards[i].Blur()
+		}
+	}
+	return h
+}
+
 func (h Home) Title() string { return "Home" }
 
 func (h Home) KeyBindings() []key.Binding {
-	return []key.Binding{h.keys.Mail, h.keys.Calendar, h.keys.Notes, h.keys.Drive, h.keys.Refresh}
+	return []key.Binding{h.keys.Mail, h.keys.Calendar, h.keys.Notes, h.keys.Drive, h.keys.NextCard, h.keys.OpenCard, h.keys.Refresh}
 }
 
 func (h Home) View(width, height int) string {
@@ -178,10 +245,10 @@ func (h Home) View(width, height int) string {
 		return style.Render(h.theme.Muted.Render("Loading dashboard…"))
 	}
 
-	header := h.renderHeader(width)
+	header := h.renderHeader()
 
-	cardWidth := width / 2
-	stacked := width < 100
+	stacked := width < homeStackedBelow
+	cardWidth := width / homeGridCols
 	if stacked {
 		cardWidth = width
 	}
@@ -189,27 +256,39 @@ func (h Home) View(width, height int) string {
 		cardWidth = 32
 	}
 
-	mailCard := h.renderMailCard(cardWidth)
-	calCard := h.renderCalendarCard(cardWidth)
-	notesCard := h.renderNotesCard(cardWidth)
-	driveCard := h.renderDriveCard(cardWidth)
+	sized := make([]card.Model, len(h.cards))
+	for i, c := range h.cards {
+		sized[i] = c.WithWidth(cardWidth)
+	}
 
 	var grid string
 	if stacked {
-		grid = lipgloss.JoinVertical(lipgloss.Left, mailCard, calCard, notesCard, driveCard)
+		parts := make([]string, len(sized))
+		for i, c := range sized {
+			parts[i] = c.View()
+		}
+		grid = lipgloss.JoinVertical(lipgloss.Left, parts...)
 	} else {
-		topRow := lipgloss.JoinHorizontal(lipgloss.Top, mailCard, calCard)
-		bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, notesCard, driveCard)
-		grid = lipgloss.JoinVertical(lipgloss.Left, topRow, bottomRow)
+		rows := []string{}
+		for i := 0; i < len(sized); i += homeGridCols {
+			end := i + homeGridCols
+			if end > len(sized) {
+				end = len(sized)
+			}
+			rowViews := make([]string, end-i)
+			for j := i; j < end; j++ {
+				rowViews[j-i] = sized[j].View()
+			}
+			rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, rowViews...))
+		}
+		grid = lipgloss.JoinVertical(lipgloss.Left, rows...)
 	}
 
-	footer := h.renderFooter()
-
-	body := lipgloss.JoinVertical(lipgloss.Left, header, "", grid, "", footer)
+	body := lipgloss.JoinVertical(lipgloss.Left, header, "", grid, "", h.renderFooter())
 	return style.Render(body)
 }
 
-func (h Home) renderHeader(width int) string {
+func (h Home) renderHeader() string {
 	title := h.theme.Title.Render("Telex")
 	var sub string
 	if h.summary.lastSync.IsZero() {
@@ -224,23 +303,38 @@ func (h Home) renderFooter() string {
 	parts := []string{
 		h.theme.HeaderAccent.Render("ctrl+k") + h.theme.Muted.Render(" palette"),
 		h.theme.HeaderAccent.Render("?") + h.theme.Muted.Render(" help"),
+		h.theme.HeaderAccent.Render("tab") + h.theme.Muted.Render(" focus"),
+		h.theme.HeaderAccent.Render("enter") + h.theme.Muted.Render(" open"),
 		h.theme.HeaderAccent.Render("m c n d") + h.theme.Muted.Render(" jump"),
 		h.theme.HeaderAccent.Render("r") + h.theme.Muted.Render(" refresh"),
 	}
 	return strings.Join(parts, h.theme.Muted.Render("  •  "))
 }
 
-func (h Home) renderMailCard(width int) string {
-	d := h.summary.mail
-	body := &strings.Builder{}
-	body.WriteString(cardTitleRow(h.theme, "MAIL", "m / 1", innerWidth(width)))
-	body.WriteString("\n")
+func (h Home) buildCards() ([]card.Model, []string) {
+	cards := []card.Model{
+		h.makeMailCard(),
+		h.makeCalendarCard(),
+		h.makeNotesCard(),
+		h.makeDriveCard(),
+	}
+	ids := []string{"mail", "calendar", "notes", "drive"}
+	for i := range cards {
+		if i == h.focusedIdx {
+			cards[i] = cards[i].Focus()
+		}
+	}
+	return cards, ids
+}
 
+func (h Home) makeMailCard() card.Model {
+	d := h.summary.mail
+	c := card.New(h.theme).WithTitle("MAIL").WithKeyHint("m / 1")
 	switch {
 	case d.err != nil:
-		body.WriteString(h.theme.Warn.Render("⚠ mail cache error — see Logs"))
+		c = c.WithError("mail cache error — see Logs")
 	case !d.hasMailboxes:
-		body.WriteString(h.theme.Muted.Render("No mailbox yet — sync from Mail."))
+		c = c.WithEmpty("No mailbox yet — sync from Mail.")
 	default:
 		counts := []string{fmt.Sprintf("%d unread", d.unread)}
 		if d.drafts > 0 {
@@ -249,189 +343,113 @@ func (h Home) renderMailCard(width int) string {
 		if d.outbox > 0 {
 			counts = append(counts, fmt.Sprintf("%d outbox", d.outbox))
 		}
-		body.WriteString(h.theme.HeaderAccent.Render(strings.Join(counts, "  ")))
-	}
-	body.WriteString("\n\n")
-
-	if d.err == nil && d.hasMailboxes {
+		c = c.WithCounts(counts...)
 		if len(d.recent) == 0 {
-			body.WriteString(h.theme.Muted.Render("Inbox empty."))
-		}
-		for _, m := range d.recent {
-			subject := m.subject
-			if subject == "" {
-				subject = "(no subject)"
+			c = c.WithEmpty("Inbox empty.")
+		} else {
+			rows := make([]card.Row, 0, len(d.recent))
+			for _, m := range d.recent {
+				subject := m.subject
+				if subject == "" {
+					subject = "(no subject)"
+				}
+				left := subject
+				if m.from != "" {
+					left = m.from + " — " + subject
+				}
+				rows = append(rows, card.Row{
+					Left:   left,
+					Right:  humanAgo(time.Since(m.received)) + " ago",
+					Accent: m.unread,
+				})
 			}
-			label := subject
-			if m.from != "" {
-				label = m.from + " — " + subject
-			}
-			body.WriteString(h.renderRow(label, humanAgo(time.Since(m.received))+" ago", innerWidth(width), m.unread))
-			body.WriteString("\n")
+			c = c.WithRows(rows)
 		}
 	}
-
-	return cardFrame(h.theme, width).Render(body.String())
+	return c
 }
 
-func (h Home) renderCalendarCard(width int) string {
+func (h Home) makeCalendarCard() card.Model {
 	d := h.summary.calendar
-	body := &strings.Builder{}
-	body.WriteString(cardTitleRow(h.theme, "CALENDAR", "c / 2", innerWidth(width)))
-	body.WriteString("\n")
-
+	c := card.New(h.theme).WithTitle("CALENDAR").WithKeyHint("c / 2")
 	switch {
 	case d.err != nil:
-		body.WriteString(h.theme.Warn.Render("⚠ calendar cache error — see Logs"))
+		c = c.WithError("calendar cache error — see Logs")
 	case d.syncedAt.IsZero():
-		body.WriteString(h.theme.Muted.Render("No calendar yet — sync from Calendar."))
+		c = c.WithEmpty("No calendar yet — sync from Calendar.")
 	default:
-		counts := fmt.Sprintf("%d today  %d this week", d.today, d.thisWeek)
-		body.WriteString(h.theme.HeaderAccent.Render(counts))
-	}
-	body.WriteString("\n\n")
-
-	if d.err == nil && !d.syncedAt.IsZero() {
+		c = c.WithCounts(fmt.Sprintf("%d today", d.today), fmt.Sprintf("%d this week", d.thisWeek))
 		if len(d.upcoming) == 0 {
-			body.WriteString(h.theme.Muted.Render("No upcoming events."))
-		}
-		now := time.Now()
-		for _, occ := range d.upcoming {
-			when := formatWhen(occ.StartsAt, occ.AllDay, now)
-			body.WriteString(h.renderRow(occ.Title, when, innerWidth(width), false))
-			body.WriteString("\n")
-		}
-	}
-
-	return cardFrame(h.theme, width).Render(body.String())
-}
-
-func (h Home) renderNotesCard(width int) string {
-	d := h.summary.notes
-	body := &strings.Builder{}
-	body.WriteString(cardTitleRow(h.theme, "NOTES", "n / 3", innerWidth(width)))
-	body.WriteString("\n")
-
-	switch {
-	case d.err != nil:
-		body.WriteString(h.theme.Warn.Render("⚠ notes cache error — see Logs"))
-	case d.syncedAt.IsZero() && d.total == 0:
-		body.WriteString(h.theme.Muted.Render("No notes yet — sync from Notes."))
-	default:
-		counts := fmt.Sprintf("%d notes  %d folders", d.total, d.folders)
-		body.WriteString(h.theme.HeaderAccent.Render(counts))
-	}
-	body.WriteString("\n\n")
-
-	if d.err == nil {
-		if len(d.recent) == 0 && d.total > 0 {
-			body.WriteString(h.theme.Muted.Render("No recent edits."))
-		}
-		for _, n := range d.recent {
-			title := n.title
-			if title == "" {
-				title = "(untitled)"
+			c = c.WithEmpty("No upcoming events.")
+		} else {
+			now := time.Now()
+			rows := make([]card.Row, 0, len(d.upcoming))
+			for _, occ := range d.upcoming {
+				rows = append(rows, card.Row{
+					Left:  occ.Title,
+					Right: formatWhen(occ.StartsAt, occ.AllDay, now),
+				})
 			}
-			body.WriteString(h.renderRow(title, humanAgo(time.Since(n.updated))+" ago", innerWidth(width), false))
-			body.WriteString("\n")
+			c = c.WithRows(rows)
 		}
 	}
-
-	return cardFrame(h.theme, width).Render(body.String())
+	return c
 }
 
-func (h Home) renderDriveCard(width int) string {
-	d := h.summary.drive
-	body := &strings.Builder{}
-	body.WriteString(cardTitleRow(h.theme, "DRIVE", "d / 4", innerWidth(width)))
-	body.WriteString("\n")
-
+func (h Home) makeNotesCard() card.Model {
+	d := h.summary.notes
+	c := card.New(h.theme).WithTitle("NOTES").WithKeyHint("n / 3")
 	switch {
 	case d.err != nil:
-		body.WriteString(h.theme.Warn.Render("⚠ drive cache error — see Logs"))
-	case d.syncedAt.IsZero() && d.files == 0:
-		body.WriteString(h.theme.Muted.Render("No files yet — sync from Drive."))
+		c = c.WithError("notes cache error — see Logs")
+	case d.syncedAt.IsZero() && d.total == 0:
+		c = c.WithEmpty("No notes yet — sync from Notes.")
 	default:
-		counts := fmt.Sprintf("%d files  %s", d.files, humanBytes(d.bytes))
-		body.WriteString(h.theme.HeaderAccent.Render(counts))
-	}
-	body.WriteString("\n\n")
-
-	if d.err == nil {
-		if len(d.recent) == 0 && d.files > 0 {
-			body.WriteString(h.theme.Muted.Render("No recent uploads."))
+		c = c.WithCounts(fmt.Sprintf("%d notes", d.total), fmt.Sprintf("%d folders", d.folders))
+		if len(d.recent) == 0 {
+			c = c.WithEmpty("No recent edits.")
+		} else {
+			rows := make([]card.Row, 0, len(d.recent))
+			for _, n := range d.recent {
+				title := n.title
+				if title == "" {
+					title = "(untitled)"
+				}
+				rows = append(rows, card.Row{
+					Left:  title,
+					Right: humanAgo(time.Since(n.updated)) + " ago",
+				})
+			}
+			c = c.WithRows(rows)
 		}
-		for _, f := range d.recent {
-			body.WriteString(h.renderRow(f.name, humanAgo(time.Since(f.updated))+" ago", innerWidth(width), false))
-			body.WriteString("\n")
+	}
+	return c
+}
+
+func (h Home) makeDriveCard() card.Model {
+	d := h.summary.drive
+	c := card.New(h.theme).WithTitle("DRIVE").WithKeyHint("d / 4")
+	switch {
+	case d.err != nil:
+		c = c.WithError("drive cache error — see Logs")
+	case d.syncedAt.IsZero() && d.files == 0:
+		c = c.WithEmpty("No files yet — sync from Drive.")
+	default:
+		c = c.WithCounts(fmt.Sprintf("%d files", d.files), humanBytes(d.bytes))
+		if len(d.recent) == 0 {
+			c = c.WithEmpty("No recent uploads.")
+		} else {
+			rows := make([]card.Row, 0, len(d.recent))
+			for _, f := range d.recent {
+				rows = append(rows, card.Row{
+					Left:  f.name,
+					Right: humanAgo(time.Since(f.updated)) + " ago",
+				})
+			}
+			c = c.WithRows(rows)
 		}
 	}
-
-	return cardFrame(h.theme, width).Render(body.String())
-}
-
-func (h Home) renderRow(left, right string, width int, accent bool) string {
-	bullet := h.theme.Muted.Render("• ")
-	if accent {
-		bullet = h.theme.HeaderAccent.Render("• ")
-	}
-	rightStyled := h.theme.Muted.Render(right)
-	rightW := lipgloss.Width(rightStyled)
-	bulletW := lipgloss.Width(bullet)
-	avail := width - bulletW - rightW - 1
-	if avail < 4 {
-		avail = 4
-	}
-	leftTrunc := truncateLine(left, avail)
-	leftW := lipgloss.Width(leftTrunc)
-	pad := width - bulletW - leftW - rightW
-	if pad < 1 {
-		pad = 1
-	}
-	leftStyled := h.theme.Text.Render(leftTrunc)
-	if accent {
-		leftStyled = h.theme.Title.Render(leftTrunc)
-	}
-	return bullet + leftStyled + strings.Repeat(" ", pad) + rightStyled
-}
-
-func cardTitleRow(t theme.Theme, title, hint string, width int) string {
-	titleStyled := t.Title.Render(title)
-	hintStyled := t.HeaderAccent.Render("(" + hint + ")")
-	pad := width - lipgloss.Width(titleStyled) - lipgloss.Width(hintStyled)
-	if pad < 1 {
-		pad = 1
-	}
-	return titleStyled + strings.Repeat(" ", pad) + hintStyled
-}
-
-func cardFrame(t theme.Theme, totalWidth int) lipgloss.Style {
-	border := t.Border.GetForeground()
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(border).
-		Padding(0, 1).
-		Width(totalWidth - 4)
-}
-
-func innerWidth(totalWidth int) int { return totalWidth - 4 }
-
-func truncateLine(s string, max int) string {
-	if max <= 0 {
-		return ""
-	}
-	w := lipgloss.Width(s)
-	if w <= max {
-		return s
-	}
-	if max <= 1 {
-		return "…"
-	}
-	runes := []rune(s)
-	for len(runes) > 0 && lipgloss.Width(string(runes))+1 > max {
-		runes = runes[:len(runes)-1]
-	}
-	return string(runes) + "…"
+	return c
 }
 
 func humanAgo(d time.Duration) string {
