@@ -26,7 +26,7 @@ func (m Model) View() tea.View {
 	mainFrameWidth, mainFrameHeight := m.theme.Main.GetFrameSize()
 	mainWidth := max(0, dims.Main.Width-mainFrameWidth)
 	mainHeight := max(0, dims.Main.Height-mainFrameHeight)
-	main := m.theme.Main.Width(mainWidth).Height(mainHeight).Render(active.View(mainWidth, mainHeight))
+	main := m.theme.Main.Width(dims.Main.Width).Height(dims.Main.Height).Render(active.View(mainWidth, mainHeight))
 
 	body := main
 	if m.showSidebar && dims.Sidebar.Width > 0 {
