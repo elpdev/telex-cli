@@ -32,6 +32,8 @@ import (
 	"github.com/elpdev/telex-cli/internal/notes"
 	"github.com/elpdev/telex-cli/internal/notestore"
 	"github.com/elpdev/telex-cli/internal/screens"
+	"github.com/elpdev/telex-cli/internal/tasks"
+	"github.com/elpdev/telex-cli/internal/taskstore"
 	"github.com/elpdev/telex-cli/internal/theme"
 )
 
@@ -163,6 +165,7 @@ func (m *Model) registerScreens() {
 	m.screens["contacts"] = screens.NewContacts(contactstore.New(m.dataPath), m.syncContacts).WithActions(m.deleteContact, m.loadContactNote, m.updateContactNote, m.loadContactCommunications)
 	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive).WithActions(m.downloadDriveFile, m.openDriveFile, m.uploadDriveFile, m.createDriveFolder, m.renameDriveFile, m.renameDriveFolder, m.deleteDriveFile, m.deleteDriveFolder)
 	m.screens["notes"] = screens.NewNotes(notestore.New(m.dataPath), m.syncNotes).WithActions(m.createNote, m.updateNote, m.deleteNote)
+	m.screens["tasks"] = screens.NewTasks(taskstore.New(m.dataPath), m.syncTasks).WithActions(m.createTaskProject, m.createTaskCard, m.updateTaskCard, m.deleteTaskCard)
 	m.screens["settings"] = m.buildSettings()
 	if m.devBuild() {
 		m.screens["logs"] = screens.NewLogs(m.logs)
@@ -911,6 +914,15 @@ func (m *Model) syncNotes(ctx context.Context) (screens.NotesSyncResult, error) 
 	return screens.NotesSyncResult{Folders: result.Folders, Notes: result.Notes}, err
 }
 
+func (m *Model) syncTasks(ctx context.Context) (screens.TasksSyncResult, error) {
+	service, err := m.tasksService()
+	if err != nil {
+		return screens.TasksSyncResult{}, err
+	}
+	result, err := runTasksSync(ctx, taskstore.New(m.dataPath), service)
+	return screens.TasksSyncResult{Projects: result.Projects, Boards: result.Boards, Cards: result.Cards}, err
+}
+
 func (m *Model) syncContacts(ctx context.Context) (screens.ContactsSyncResult, error) {
 	service, err := m.contactsService()
 	if err != nil {
@@ -1015,6 +1027,62 @@ func (m *Model) deleteNote(ctx context.Context, id int64) error {
 		return err
 	}
 	return notestore.New(m.dataPath).DeleteNote(id)
+}
+
+func (m *Model) createTaskProject(ctx context.Context, input tasks.ProjectInput) (*tasks.Project, error) {
+	service, err := m.tasksService()
+	if err != nil {
+		return nil, err
+	}
+	project, err := service.CreateProject(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := storeTaskProject(taskstore.New(m.dataPath), *project, time.Now()); err != nil {
+		return nil, err
+	}
+	return project, nil
+}
+
+func (m *Model) createTaskCard(ctx context.Context, projectID int64, input tasks.CardInput) (*tasks.Card, error) {
+	service, err := m.tasksService()
+	if err != nil {
+		return nil, err
+	}
+	card, err := service.CreateCard(ctx, projectID, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := taskstore.New(m.dataPath).StoreCard(projectID, *card, time.Now()); err != nil {
+		return nil, err
+	}
+	return card, nil
+}
+
+func (m *Model) updateTaskCard(ctx context.Context, projectID, id int64, input tasks.CardInput) (*tasks.Card, error) {
+	service, err := m.tasksService()
+	if err != nil {
+		return nil, err
+	}
+	card, err := service.UpdateCard(ctx, projectID, id, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := taskstore.New(m.dataPath).StoreCard(projectID, *card, time.Now()); err != nil {
+		return nil, err
+	}
+	return card, nil
+}
+
+func (m *Model) deleteTaskCard(ctx context.Context, projectID, id int64) error {
+	service, err := m.tasksService()
+	if err != nil {
+		return err
+	}
+	if err := service.DeleteCard(ctx, projectID, id); err != nil {
+		return err
+	}
+	return taskstore.New(m.dataPath).DeleteCard(projectID, id)
 }
 
 func (m *Model) syncCalendar(ctx context.Context, from, to string) (screens.CalendarSyncResult, error) {
@@ -1255,6 +1323,104 @@ type notesSyncResult struct {
 	Notes   int
 }
 
+type tasksSyncResult struct {
+	Projects int
+	Boards   int
+	Cards    int
+}
+
+func runTasksSync(ctx context.Context, store taskstore.Store, service *tasks.Service) (tasksSyncResult, error) {
+	syncedAt := time.Now()
+	workspace, err := service.Workspace(ctx)
+	if err != nil {
+		return tasksSyncResult{}, err
+	}
+	if err := store.StoreWorkspace(workspace, syncedAt); err != nil {
+		return tasksSyncResult{}, err
+	}
+	projects, err := listAllTaskProjects(ctx, service)
+	if err != nil {
+		return tasksSyncResult{}, err
+	}
+	result := tasksSyncResult{}
+	for _, summary := range projects {
+		project, err := service.ShowProject(ctx, summary.ID)
+		if err != nil {
+			return result, err
+		}
+		if err := storeTaskProject(store, *project, syncedAt); err != nil {
+			return result, err
+		}
+		result.Projects++
+		board, err := service.ShowBoard(ctx, project.ID)
+		if err != nil {
+			return result, err
+		}
+		if err := store.StoreBoard(project.ID, *board, syncedAt); err != nil {
+			return result, err
+		}
+		result.Boards++
+		cards, err := listAllTaskCards(ctx, service, project.ID)
+		if err != nil {
+			return result, err
+		}
+		for _, card := range cards {
+			if err := store.StoreCard(project.ID, card, syncedAt); err != nil {
+				return result, err
+			}
+			result.Cards++
+		}
+	}
+	return result, nil
+}
+
+func listAllTaskProjects(ctx context.Context, service *tasks.Service) ([]tasks.Project, error) {
+	page := 1
+	all := []tasks.Project{}
+	for {
+		projects, pagination, err := service.ListProjects(ctx, tasks.ListParams{Page: page, PerPage: 100})
+		if err != nil {
+			return all, err
+		}
+		all = append(all, projects...)
+		if pagination == nil || page*pagination.PerPage >= pagination.TotalCount || len(projects) == 0 {
+			return all, nil
+		}
+		page++
+	}
+}
+
+func listAllTaskCards(ctx context.Context, service *tasks.Service, projectID int64) ([]tasks.Card, error) {
+	page := 1
+	all := []tasks.Card{}
+	for {
+		cards, pagination, err := service.ListCards(ctx, projectID, tasks.ListParams{Page: page, PerPage: 100})
+		if err != nil {
+			return all, err
+		}
+		all = append(all, cards...)
+		if pagination == nil || page*pagination.PerPage >= pagination.TotalCount || len(cards) == 0 {
+			return all, nil
+		}
+		page++
+	}
+}
+
+func storeTaskProject(store taskstore.Store, project tasks.Project, syncedAt time.Time) error {
+	if err := store.StoreProject(project, syncedAt); err != nil {
+		return err
+	}
+	if project.Board != nil {
+		_ = store.StoreBoard(project.ID, tasks.Board{TaskFile: *project.Board}, syncedAt)
+	}
+	for _, card := range project.Cards {
+		if err := store.StoreCard(project.ID, card, syncedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func runNotesSync(ctx context.Context, store notestore.Store, service *notes.Service) (notesSyncResult, error) {
 	tree, err := service.NotesTree(ctx)
 	if err != nil {
@@ -1398,6 +1564,21 @@ func (m *Model) notesService() (*notes.Service, error) {
 	return notes.NewService(m.client), nil
 }
 
+func (m *Model) tasksService() (*tasks.Service, error) {
+	configFile, tokenFile := config.Paths(m.configPath)
+	cfg, err := config.LoadFrom(configFile)
+	if err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if m.client == nil {
+		m.client = api.NewClient(cfg, tokenFile)
+	}
+	return tasks.NewService(m.client), nil
+}
+
 func (m *Model) contactsService() (*contacts.Service, error) {
 	configFile, tokenFile := config.Paths(m.configPath)
 	cfg, err := config.LoadFrom(configFile)
@@ -1437,7 +1618,7 @@ func (m *Model) refreshScreenOrder() {
 		m.screenOrder = append(m.screenOrder, id)
 	}
 	sort.Strings(m.screenOrder)
-	preferred := []string{"home", "mail", "calendar", "contacts", "notes", "drive", "news", "settings", "logs"}
+	preferred := []string{"home", "mail", "calendar", "contacts", "notes", "tasks", "drive", "news", "settings", "logs"}
 	ordered := make([]string, 0, len(m.screenOrder))
 	seen := make(map[string]bool)
 	for _, id := range preferred {
@@ -1516,6 +1697,15 @@ func (m *Model) registerCommands() {
 			return tea.Sequence(func() tea.Msg { return routeMsg{"notes"} }, actionMsg)
 		}
 	}
+	tasksAction := func(action string, alsoRoute bool) func() tea.Cmd {
+		return func() tea.Cmd {
+			actionMsg := func() tea.Msg { return screens.TasksActionMsg{Action: action} }
+			if !alsoRoute {
+				return actionMsg
+			}
+			return tea.Sequence(func() tea.Msg { return routeMsg{"tasks"} }, actionMsg)
+		}
+	}
 	contactsAction := func(action string, alsoRoute bool) func() tea.Cmd {
 		return func() tea.Cmd {
 			actionMsg := func() tea.Msg { return screens.ContactsActionMsg{Action: action} }
@@ -1547,12 +1737,16 @@ func (m *Model) registerCommands() {
 	}
 	onDrive := func(ctx commands.Context) bool { return ctx.ActiveScreen == "drive" }
 	onNotes := func(ctx commands.Context) bool { return ctx.ActiveScreen == "notes" }
+	onTasks := func(ctx commands.Context) bool { return ctx.ActiveScreen == "tasks" }
 	onContacts := func(ctx commands.Context) bool { return ctx.ActiveScreen == "contacts" }
 	onContactItem := func(ctx commands.Context) bool {
 		return ctx.ActiveScreen == "contacts" && ctx.Selection != nil && ctx.Selection.Kind == "contact" && ctx.Selection.HasItems
 	}
 	onNotesItem := func(ctx commands.Context) bool {
 		return ctx.ActiveScreen == "notes" && ctx.Selection != nil && ctx.Selection.Kind == "note" && ctx.Selection.HasItems
+	}
+	onTaskCard := func(ctx commands.Context) bool {
+		return ctx.ActiveScreen == "tasks" && ctx.Selection != nil && ctx.Selection.Kind == "task-card" && ctx.Selection.HasItems
 	}
 	onMailDrafts := func(ctx commands.Context) bool {
 		return isMailScreen(ctx.ActiveScreen) && ctx.Selection != nil && ctx.Selection.IsDraft && ctx.Selection.HasItems
@@ -1580,6 +1774,7 @@ func (m *Model) registerCommands() {
 	m.commands.Register(commands.Command{ID: "go-calendar", Module: commands.ModuleCalendar, Title: "Open Calendar", Keywords: []string{"calendar", "events", "agenda"}, Pinned: true, Run: route("calendar")})
 	m.commands.Register(commands.Command{ID: "go-contacts", Module: commands.ModuleContacts, Title: "Open Contacts", Keywords: []string{"contacts", "crm", "people"}, Pinned: true, Run: route("contacts")})
 	m.commands.Register(commands.Command{ID: "go-notes", Module: commands.ModuleNotes, Title: "Open Notes", Keywords: []string{"notes", "markdown", "memo"}, Pinned: true, Run: route("notes")})
+	m.commands.Register(commands.Command{ID: "go-tasks", Module: commands.ModuleTasks, Title: "Open Tasks", Keywords: []string{"tasks", "kanban", "cards", "projects"}, Pinned: true, Run: route("tasks")})
 	m.commands.Register(commands.Command{ID: "go-drive", Module: commands.ModuleDrive, Title: "Open Drive", Description: "Local Drive mirror", Keywords: []string{"drive", "files", "documents"}, Pinned: true, Run: route("drive")})
 	m.commands.Register(commands.Command{ID: "go-settings", Module: commands.ModuleSettings, Title: "Open Settings", Keywords: []string{"settings", "config"}, Pinned: true, Run: route("settings")})
 	m.registerHackerNewsCommands()
@@ -1634,6 +1829,15 @@ func (m *Model) registerCommands() {
 	m.commands.Register(commands.Command{ID: "notes-search", Module: commands.ModuleNotes, Title: "Search current Notes folder", Description: "Filter notes and folders in the current Notes folder", Shortcut: "/", Keywords: []string{"search", "filter"}, Available: onNotes, Run: notesAction("search", false)})
 	m.commands.Register(commands.Command{ID: "notes-toggle-sort", Module: commands.ModuleNotes, Title: "Toggle Notes sort order", Description: "Cycle Notes sort between A-Z and most recently updated", Shortcut: "o", Keywords: []string{"sort", "order", "recent"}, Available: onNotes, Run: notesAction("toggle-sort", false)})
 	m.commands.Register(commands.Command{ID: "notes-toggle-flat", Module: commands.ModuleNotes, Title: "Toggle Notes flat view", Description: "Show all notes flat across folders, or revert to folder navigation", Shortcut: "f", Keywords: []string{"flat", "all", "view"}, Available: onNotes, Run: notesAction("toggle-flat", false)})
+
+	// Tasks — module-level
+	m.commands.Register(commands.Command{ID: "tasks-sync", Module: commands.ModuleTasks, Title: "Sync Tasks", Description: "Pull latest task projects, boards, and cards", Shortcut: "S", Keywords: []string{"sync", "refresh", "kanban"}, Run: tasksAction("sync", true)})
+	m.commands.Register(commands.Command{ID: "tasks-projects", Module: commands.ModuleTasks, Title: "Show task projects", Description: "Return to the cached task project list", Shortcut: "p", Keywords: []string{"projects", "list"}, Available: onTasks, Run: tasksAction("projects", false)})
+	m.commands.Register(commands.Command{ID: "tasks-new-project", Module: commands.ModuleTasks, Title: "New task project", Description: "Create a task project", Keywords: []string{"new", "create", "project"}, Available: onTasks, Run: tasksAction("new-project", false)})
+	m.commands.Register(commands.Command{ID: "tasks-new-card", Module: commands.ModuleTasks, Title: "New task card", Description: "Create a card in the current task project", Shortcut: "n", Keywords: []string{"new", "create", "card"}, Available: onTasks, Run: tasksAction("new-card", false)})
+	m.commands.Register(commands.Command{ID: "tasks-edit-card", Module: commands.ModuleTasks, Title: "Edit selected task card", Description: "Open the highlighted task card in TELEX_TASKS_EDITOR, VISUAL, or EDITOR", Shortcut: "e", Keywords: []string{"edit", "write", "card"}, Available: onTaskCard, Run: tasksAction("edit-card", false)})
+	m.commands.Register(commands.Command{ID: "tasks-delete-card", Module: commands.ModuleTasks, Title: "Delete selected task card", Description: "Delete the highlighted task card after confirmation", Shortcut: "x", Keywords: []string{"delete", "remove", "card"}, Available: onTaskCard, Run: tasksAction("delete-card", false)})
+	m.commands.Register(commands.Command{ID: "tasks-search", Module: commands.ModuleTasks, Title: "Search Tasks", Description: "Filter cached task projects and cards", Shortcut: "/", Keywords: []string{"search", "filter"}, Available: onTasks, Run: tasksAction("search", false)})
 
 	// Contacts — module-level
 	m.commands.Register(commands.Command{ID: "contacts-sync", Module: commands.ModuleContacts, Title: "Sync Contacts", Description: "Pull latest Contacts and notes", Shortcut: "S", Keywords: []string{"sync", "refresh", "crm"}, Run: contactsAction("sync", true)})
@@ -1695,6 +1899,12 @@ func (m Model) paletteContext() commands.Context {
 			ctx.Selection = &commands.Selection{Kind: sel.Kind, Subject: sel.Subject, HasItems: sel.HasItem}
 		}
 	}
+	if m.activeScreen == "tasks" {
+		if tasksScreen, ok := m.screens["tasks"].(screens.Tasks); ok {
+			sel := tasksScreen.Selection()
+			ctx.Selection = &commands.Selection{Kind: sel.Kind, Subject: sel.Subject, HasItems: sel.HasItem}
+		}
+	}
 	if m.activeScreen == "contacts" {
 		if contactsScreen, ok := m.screens["contacts"].(screens.Contacts); ok {
 			sel := contactsScreen.Selection()
@@ -1722,6 +1932,8 @@ func (m Model) activeModule() string {
 		return commands.ModuleDrive
 	case m.activeScreen == "notes":
 		return commands.ModuleNotes
+	case m.activeScreen == "tasks":
+		return commands.ModuleTasks
 	case isHackerNewsScreen(m.activeScreen) || m.activeScreen == "news":
 		return commands.ModuleHackerNews
 	case m.activeScreen == "settings":

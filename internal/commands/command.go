@@ -8,6 +8,7 @@ const (
 	ModuleContacts   = "contacts"
 	ModuleDrive      = "drive"
 	ModuleNotes      = "notes"
+	ModuleTasks      = "tasks"
 	ModuleHackerNews = "hackernews"
 	ModuleSettings   = "settings"
 	ModuleGlobal     = "global"
@@ -22,11 +23,11 @@ const (
 )
 
 func Modules() []string {
-	return []string{ModuleMail, ModuleCalendar, ModuleContacts, ModuleDrive, ModuleNotes, ModuleHackerNews, ModuleSettings, ModuleGlobal}
+	return []string{ModuleMail, ModuleCalendar, ModuleContacts, ModuleDrive, ModuleNotes, ModuleTasks, ModuleHackerNews, ModuleSettings, ModuleGlobal}
 }
 
 func ScopedModules() []string {
-	return []string{ModuleMail, ModuleCalendar, ModuleContacts, ModuleDrive, ModuleNotes, ModuleHackerNews, ModuleSettings}
+	return []string{ModuleMail, ModuleCalendar, ModuleContacts, ModuleDrive, ModuleNotes, ModuleTasks, ModuleHackerNews, ModuleSettings}
 }
 
 func Groups() []string {

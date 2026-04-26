@@ -82,6 +82,21 @@ func TestNotesScreenRegisteredInNavigationAndCommands(t *testing.T) {
 	}
 }
 
+func TestTasksScreenRegisteredInNavigationAndCommands(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+	if _, ok := model.screens["tasks"]; !ok {
+		t.Fatal("expected tasks screen to be registered")
+	}
+	if got := model.screenOrder; len(got) < 7 || got[5] != "tasks" {
+		t.Fatalf("screenOrder = %#v", got)
+	}
+	for _, id := range []string{"go-tasks", "tasks-sync", "tasks-projects", "tasks-new-project", "tasks-new-card", "tasks-edit-card", "tasks-delete-card", "tasks-search"} {
+		if _, ok := model.commands.Find(id); !ok {
+			t.Fatalf("expected command %q", id)
+		}
+	}
+}
+
 func TestContactsScreenRegisteredInNavigationAndCommands(t *testing.T) {
 	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
 	if _, ok := model.screens["contacts"]; !ok {
