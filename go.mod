@@ -12,6 +12,7 @@ require (
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/elpdev/hackernews v0.5.0
+	github.com/elpdev/tuipalette v0.1.0
 	github.com/spf13/cobra v1.10.1
 )
 
