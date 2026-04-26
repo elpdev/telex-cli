@@ -1,8 +1,6 @@
 package commands
 
 import (
-	"strings"
-
 	tea "charm.land/bubbletea/v2"
 	"github.com/elpdev/telex-cli/internal/theme"
 	"github.com/elpdev/tuipalette"
@@ -156,110 +154,26 @@ func stylesFromTheme(t theme.Theme) tuipalette.Styles {
 	}
 }
 
-type themePage struct {
-	themes   []theme.Theme
-	original string
-	selected int
-}
-
-func newThemePage(themes []theme.Theme, original string) themePage {
-	page := themePage{themes: append([]theme.Theme(nil), themes...), original: original}
-	page.selected = page.themeIndex(original)
-	return page
-}
-
-func (p themePage) Update(msg tea.KeyPressMsg) (tuipalette.Page, tuipalette.PaletteAction) {
-	switch msg.String() {
-	case "esc", "backspace", "ctrl+h":
-		if original, ok := p.themeByName(p.original); ok {
-			return p, tuipalette.PaletteAction{Type: tuipalette.PaletteActionBack, Page: "theme-cancel", Data: original}
+func newThemePage(themes []theme.Theme, original string) tuipalette.SelectPage {
+	items := make([]tuipalette.SelectItem, 0, len(themes))
+	selected := 0
+	var cancelData any
+	for i, candidate := range themes {
+		current := candidate.Name == original
+		if current {
+			selected = i
+			cancelData = candidate
 		}
-		return p, tuipalette.PaletteAction{Type: tuipalette.PaletteActionBack, Page: "theme-cancel"}
-	case "up", "ctrl+p":
-		if p.selected > 0 {
-			p.selected--
-			return p, p.previewSelectedTheme()
-		}
-	case "down", "ctrl+n":
-		if p.selected < len(p.themes)-1 {
-			p.selected++
-			return p, p.previewSelectedTheme()
-		}
-	case "enter":
-		if len(p.themes) > 0 {
-			selected := p.themes[p.selected]
-			return p, tuipalette.PaletteAction{Type: tuipalette.PaletteActionPage, Page: "theme-confirm", Data: selected}
-		}
+		items = append(items, tuipalette.SelectItem{Label: candidate.Name, Current: current, Value: candidate})
 	}
-	return p, tuipalette.PaletteAction{}
-}
-
-func (p themePage) View(styles tuipalette.Styles, width int) string {
-	innerWidth := width - styles.Modal.GetHorizontalFrameSize()
-	var b strings.Builder
-	b.WriteString(renderPaletteHeader(styles, "Telex / Themes", "Move to preview, enter to select, esc to go back.", innerWidth))
-	b.WriteString("\n\n")
-
-	for i, candidate := range p.themes {
-		line := candidate.Name
-		if candidate.Name == p.original {
-			line += "  current"
-		}
-		if i == p.selected {
-			line = styles.Selected.Render("> " + line)
-		} else {
-			line = styles.Text.Render("  " + line)
-		}
-		b.WriteString(line + "\n")
-	}
-
-	return styles.Modal.Width(width).Render(b.String())
-}
-
-func (p themePage) Reset() {
-	p.selected = p.themeIndex(p.original)
-}
-
-func (p themePage) previewSelectedTheme() tuipalette.PaletteAction {
-	if len(p.themes) == 0 {
-		return tuipalette.PaletteAction{}
-	}
-	selected := p.themes[p.selected]
-	return tuipalette.PaletteAction{Type: tuipalette.PaletteActionPage, Page: "theme-preview", Data: selected}
-}
-
-func (p themePage) themeIndex(name string) int {
-	for i, candidate := range p.themes {
-		if candidate.Name == name {
-			return i
-		}
-	}
-	return 0
-}
-
-func (p themePage) themeByName(name string) (theme.Theme, bool) {
-	for _, candidate := range p.themes {
-		if candidate.Name == name {
-			return candidate, true
-		}
-	}
-	return theme.Theme{}, false
-}
-
-func renderPaletteHeader(styles tuipalette.Styles, title, subtitle string, width int) string {
-	rendered := styles.Title.Render(title)
-	slashCount := max(3, width-len(title)-1)
-	slashes := styles.Accent.Render(strings.Repeat("/", slashCount))
-	out := rendered + " " + slashes
-	if subtitle != "" {
-		out += "\n" + styles.Muted.Width(width).Render(subtitle)
-	}
-	return out
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
+	return tuipalette.NewSelectPage(tuipalette.SelectPageOptions{
+		Title:       "Telex / Themes",
+		Subtitle:    "Move to preview, enter to select, esc to go back.",
+		Items:       items,
+		Selected:    selected,
+		PreviewPage: "theme-preview",
+		ConfirmPage: "theme-confirm",
+		CancelPage:  "theme-cancel",
+		CancelData:  cancelData,
+	})
 }
