@@ -10,6 +10,7 @@ import (
 	"github.com/elpdev/hackernews/pkg/saved"
 	hnscreens "github.com/elpdev/hackernews/pkg/screens"
 	"github.com/elpdev/telex-cli/internal/commands"
+	"github.com/elpdev/telex-cli/internal/screens"
 	"github.com/elpdev/tuimod"
 )
 
@@ -80,9 +81,23 @@ func (m Model) loadHackerNewsSettings() hnconfig.Settings {
 }
 
 func (m *Model) registerHackerNewsCommands() {
+	m.commands.Register(commands.Command{
+		ID:          "go-news",
+		Module:      commands.ModuleHackerNews,
+		Title:       "Open News",
+		Description: "Open Hacker News feeds",
+		Keywords:    []string{"news", "hacker", "hn", "stories"},
+		Run:         func() tea.Cmd { return func() tea.Msg { return routeMsg{"news"} } },
+	})
+
 	module := m.newHackerNewsModule()
 	for _, spec := range module.Commands() {
 		if spec.ScreenID == "" && spec.Run == nil {
+			continue
+		}
+		// Per-feed nav specs are handled as tabs inside the News screen, so
+		// they'd be redundant in the palette.
+		if spec.Run == nil && isNewsTabScreen(hackerNewsScreenID(spec.ScreenID)) {
 			continue
 		}
 		command := commands.Command{
@@ -125,7 +140,14 @@ func (m Model) openHackerNewsDoctor() (Model, tea.Cmd) {
 		return m, nil
 	}
 	returnTo := "top"
-	if isHackerNewsScreen(m.activeScreen) {
+	switch {
+	case m.activeScreen == "news":
+		if news, ok := m.screens["news"].(screens.News); ok {
+			if id := news.ActiveID(); isHackerNewsScreen(id) {
+				returnTo = id[len(hackerNewsPrefix):]
+			}
+		}
+	case isHackerNewsScreen(m.activeScreen):
 		returnTo = m.activeScreen[len(hackerNewsPrefix):]
 	}
 	updated, cmd := doctor.Open(returnTo, m.loadHackerNewsSettings())

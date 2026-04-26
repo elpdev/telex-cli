@@ -26,12 +26,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ScreenID == "hn-doctor" {
 			return m.openHackerNewsDoctor()
 		}
+		if isNewsTabScreen(msg.ScreenID) {
+			cmd := m.activateNewsTab(msg.ScreenID)
+			m.switchScreen("news")
+			m.showCommandPalette = false
+			m.updateDerivedScreens()
+			return m, cmd
+		}
 		m.switchScreen(msg.ScreenID)
 		m.showCommandPalette = false
 		m.updateDerivedScreens()
 		return m, m.initScreen(m.activeScreen)
 	case hnscreens.NavigateMsg:
 		screenID := hackerNewsScreenID(msg.ScreenID)
+		if isNewsTabScreen(screenID) {
+			cmd := m.activateNewsTab(screenID)
+			m.switchScreen("news")
+			return m, cmd
+		}
 		m.switchScreen(screenID)
 		return m, m.initScreen(m.activeScreen)
 	case hnscreens.OpenCommentsMsg:
@@ -275,9 +287,31 @@ func (m Model) handleSidebarKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) updateDerivedScreens() {
 	m.screens["home"] = m.buildHome()
 	m.screens["settings"] = m.buildSettings()
+	m.screens["news"] = m.buildNews()
 	if m.devBuild() {
 		m.screens["logs"] = screens.NewLogs(m.logs)
 	}
+}
+
+func isNewsTabScreen(id string) bool {
+	switch id {
+	case "hn-top", "hn-new", "hn-best", "hn-ask", "hn-show", "hn-jobs", "hn-saved":
+		return true
+	}
+	return false
+}
+
+func (m *Model) activateNewsTab(id string) tea.Cmd {
+	news, ok := m.screens["news"].(screens.News)
+	if !ok {
+		return m.initScreen(id)
+	}
+	updated, cmd := news.SetActiveID(id)
+	m.screens["news"] = updated
+	if cmd == nil {
+		return m.initScreen("news")
+	}
+	return cmd
 }
 
 func (m *Model) saveUIPrefs() {

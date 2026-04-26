@@ -137,7 +137,7 @@ func themeByName(name string) (theme.Theme, bool) {
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{func() tea.Msg { return tea.RequestWindowSize() }}
 	for id, screen := range m.screens {
-		if strings.HasPrefix(id, hackerNewsPrefix) {
+		if id == "news" || strings.HasPrefix(id, hackerNewsPrefix) {
 			continue
 		}
 		cmds = append(cmds, screen.Init())
@@ -159,6 +159,7 @@ func (m *Model) registerScreens() {
 		m.screens["logs"] = screens.NewLogs(m.logs)
 	}
 	m.registerHackerNewsModule()
+	m.screens["news"] = m.buildNews()
 	m.refreshScreenOrder()
 }
 
@@ -177,6 +178,24 @@ func (m *Model) buildHome() screens.Home {
 		m.theme,
 		navigate,
 	)
+}
+
+func (m *Model) buildNews() screens.News {
+	tabs := []screens.NewsTab{
+		{ID: "hn-top", Label: "Top"},
+		{ID: "hn-new", Label: "New"},
+		{ID: "hn-best", Label: "Best"},
+		{ID: "hn-ask", Label: "Ask"},
+		{ID: "hn-show", Label: "Show"},
+		{ID: "hn-jobs", Label: "Jobs"},
+		{ID: "hn-saved", Label: "Saved"},
+	}
+	initFn := func(id string) tea.Cmd { return m.initScreen(id) }
+	news := screens.NewNews(tabs, m.theme, m.screens, initFn)
+	if existing, ok := m.screens["news"].(screens.News); ok {
+		news = news.SetActiveIndex(existing.ActiveIndex())
+	}
+	return news
 }
 
 func (m *Model) buildSettings() screens.Settings {
@@ -1295,13 +1314,13 @@ func (m *Model) calendarService() (*calendar.Service, error) {
 func (m *Model) refreshScreenOrder() {
 	m.screenOrder = m.screenOrder[:0]
 	for id := range m.screens {
-		if id == "mail-admin" || id == "hn-comments" || id == "hn-search" || id == "hn-settings" || id == "hn-doctor" {
+		if id == "mail-admin" || isHackerNewsScreen(id) {
 			continue
 		}
 		m.screenOrder = append(m.screenOrder, id)
 	}
 	sort.Strings(m.screenOrder)
-	preferred := []string{"home", "mail", "calendar", "notes", "drive", "hn-top", "hn-new", "hn-best", "hn-ask", "hn-show", "hn-jobs", "hn-saved", "settings", "logs"}
+	preferred := []string{"home", "mail", "calendar", "notes", "drive", "news", "settings", "logs"}
 	ordered := make([]string, 0, len(m.screenOrder))
 	seen := make(map[string]bool)
 	for _, id := range preferred {
@@ -1368,6 +1387,10 @@ func (m *Model) registerCommands() {
 		}
 	}
 	onMail := func(ctx commands.Context) bool { return ctx.ActiveScreen == "mail" }
+	onMailAdmin := func(ctx commands.Context) bool { return ctx.ActiveScreen == "mail-admin" }
+	onMailOrAdmin := func(ctx commands.Context) bool {
+		return ctx.ActiveScreen == "mail" || ctx.ActiveScreen == "mail-admin"
+	}
 	onCalendarAgenda := func(ctx commands.Context) bool {
 		return ctx.ActiveScreen == "calendar" && ctx.Selection != nil && ctx.Selection.Kind == "calendar-event"
 	}
@@ -1417,12 +1440,12 @@ func (m *Model) registerCommands() {
 	}
 
 	// Mail — module-level
-	m.commands.Register(commands.Command{ID: "mail-sync", Module: commands.ModuleMail, Title: "Sync mailbox", Description: "Pull latest messages, drafts, outbox", Keywords: []string{"sync", "refresh"}, Run: mailAction("sync", true)})
-	m.commands.Register(commands.Command{ID: "mail-admin-refresh", Module: commands.ModuleMail, Title: "Refresh Mail Admin", Description: "Reload remote domains and inboxes", Keywords: []string{"refresh", "reload", "domains", "inboxes"}, Run: mailAdminAction("refresh", true)})
-	m.commands.Register(commands.Command{ID: "domains-new", Module: commands.ModuleMail, Title: "New domain", Description: "Create a managed mail domain", Keywords: []string{"domain", "new", "create"}, Run: mailAdminAction("new-domain", true)})
-	m.commands.Register(commands.Command{ID: "domains-validate", Module: commands.ModuleMail, Title: "Validate selected domain", Description: "Validate outbound settings for the selected domain", Keywords: []string{"domain", "validate", "smtp", "outbound"}, Run: mailAdminAction("validate-domain", true)})
-	m.commands.Register(commands.Command{ID: "inboxes-new", Module: commands.ModuleMail, Title: "New inbox", Description: "Create an inbox on the selected domain", Keywords: []string{"inbox", "new", "create"}, Run: mailAdminAction("new-inbox", true)})
-	m.commands.Register(commands.Command{ID: "inboxes-pipeline", Module: commands.ModuleMail, Title: "Show selected inbox pipeline", Description: "Show pipeline metadata for the selected inbox", Keywords: []string{"inbox", "pipeline"}, Run: mailAdminAction("pipeline", true)})
+	m.commands.Register(commands.Command{ID: "mail-sync", Module: commands.ModuleMail, Title: "Sync mailbox", Description: "Pull latest messages, drafts, outbox", Keywords: []string{"sync", "refresh"}, Available: onMailOrAdmin, Run: mailAction("sync", true)})
+	m.commands.Register(commands.Command{ID: "mail-admin-refresh", Module: commands.ModuleMail, Title: "Refresh Mail Admin", Description: "Reload remote domains and inboxes", Keywords: []string{"refresh", "reload", "domains", "inboxes"}, Available: onMailAdmin, Run: mailAdminAction("refresh", true)})
+	m.commands.Register(commands.Command{ID: "domains-new", Module: commands.ModuleMail, Title: "New domain", Description: "Create a managed mail domain", Keywords: []string{"domain", "new", "create"}, Available: onMailAdmin, Run: mailAdminAction("new-domain", true)})
+	m.commands.Register(commands.Command{ID: "domains-validate", Module: commands.ModuleMail, Title: "Validate selected domain", Description: "Validate outbound settings for the selected domain", Keywords: []string{"domain", "validate", "smtp", "outbound"}, Available: onMailAdmin, Run: mailAdminAction("validate-domain", true)})
+	m.commands.Register(commands.Command{ID: "inboxes-new", Module: commands.ModuleMail, Title: "New inbox", Description: "Create an inbox on the selected domain", Keywords: []string{"inbox", "new", "create"}, Available: onMailAdmin, Run: mailAdminAction("new-inbox", true)})
+	m.commands.Register(commands.Command{ID: "inboxes-pipeline", Module: commands.ModuleMail, Title: "Show selected inbox pipeline", Description: "Show pipeline metadata for the selected inbox", Keywords: []string{"inbox", "pipeline"}, Available: onMailAdmin, Run: mailAdminAction("pipeline", true)})
 
 	// Calendar — module-level
 	m.commands.Register(commands.Command{ID: "calendar-sync", Module: commands.ModuleCalendar, Title: "Sync Calendar", Description: "Pull latest calendars, events, and occurrences", Shortcut: "S", Keywords: []string{"sync", "refresh", "agenda"}, Run: calendarAction("sync", true)})
