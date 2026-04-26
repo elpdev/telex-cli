@@ -1,5 +1,7 @@
 package layout
 
+import "github.com/elpdev/tuilayout"
+
 const (
 	compactHeaderHeight = 2
 	bannerHeaderHeight  = 4
@@ -10,45 +12,15 @@ const (
 )
 
 func Calculate(width, height int, showSidebar bool) Dimensions {
-	width = max(0, width)
-	height = max(0, height)
-
-	wantedHeader := compactHeaderHeight
-	if width >= bannerMinWidth && height >= bannerMinHeight {
-		wantedHeader = bannerHeaderHeight
-	}
-	header := min(wantedHeader, height)
-	footer := 0
-	if height > header {
-		footer = min(footerHeight, height-header)
-	}
-	bodyHeight := max(0, height-header-footer)
-
-	sidebar := 0
-	if showSidebar && width >= 24 {
-		sidebar = min(sidebarWidth, width)
-	}
-
-	return Dimensions{
-		Width:   width,
-		Height:  height,
-		Header:  Region{Width: width, Height: header},
-		Sidebar: Region{Width: sidebar, Height: bodyHeight},
-		Main:    Region{Width: max(0, width-sidebar), Height: bodyHeight},
-		Footer:  Region{Width: width, Height: footer},
-	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
+	return tuilayout.Calculate(width, height, tuilayout.Options{
+		ShowSidebar:  showSidebar,
+		HeaderHeight: compactHeaderHeight,
+		FooterHeight: footerHeight,
+		SidebarWidth: sidebarWidth,
+		ResponsiveHeader: tuilayout.ResponsiveHeader{
+			Height:    bannerHeaderHeight,
+			MinWidth:  bannerMinWidth,
+			MinHeight: bannerMinHeight,
+		},
+	})
 }
