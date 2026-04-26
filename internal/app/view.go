@@ -32,7 +32,7 @@ func (m Model) View() tea.View {
 
 	body := main
 	if m.showSidebar && dims.Sidebar.Width > 0 {
-		side := sidebar.View(sidebar.Model{Items: m.sidebarItems(), ActiveID: m.activeScreen, Focused: m.focus == FocusSidebar}, dims.Sidebar.Width, dims.Sidebar.Height, m.theme)
+		side := sidebar.View(sidebar.Model{Items: m.sidebarItems(), ActiveID: m.activeScreen, CursorID: m.currentSidebarCursorID(), Focused: m.focus == FocusSidebar}, dims.Sidebar.Width, dims.Sidebar.Height, m.theme)
 		body = lipgloss.JoinHorizontal(lipgloss.Top, side, main)
 	}
 
@@ -60,11 +60,57 @@ func max(a, b int) int {
 }
 
 func (m Model) sidebarItems() []sidebar.Item {
-	items := make([]sidebar.Item, 0, len(m.screenOrder))
-	for _, id := range m.screenOrder {
-		items = append(items, sidebar.Item{ID: id, Title: m.screens[id].Title()})
+	ids := m.sidebarScreenIDs()
+	items := make([]sidebar.Item, 0, len(ids))
+	for _, id := range ids {
+		title := m.screens[id].Title()
+		if isMailSection(m.activeScreen) && id == "mail" {
+			title = "Mailboxes"
+		}
+		items = append(items, sidebar.Item{ID: id, Title: title})
 	}
 	return items
+}
+
+func (m Model) sidebarScreenIDs() []string {
+	if isMailSection(m.activeScreen) {
+		ids := []string{"home", "mail-unread", "mail-inbox", "mail-sent", "mail-drafts", "mail-outbox", "mail-junk", "mail-archive", "mail-trash", "mail", "mail-admin"}
+		out := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if _, ok := m.screens[id]; ok {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+	return append([]string(nil), m.screenOrder...)
+}
+
+func (m Model) currentSidebarCursorID() string {
+	ids := m.sidebarScreenIDs()
+	if containsScreenID(ids, m.sidebarCursor) {
+		return m.sidebarCursor
+	}
+	if containsScreenID(ids, m.activeScreen) {
+		return m.activeScreen
+	}
+	if len(ids) > 0 {
+		return ids[0]
+	}
+	return ""
+}
+
+func containsScreenID(ids []string, id string) bool {
+	for _, candidate := range ids {
+		if candidate == id {
+			return true
+		}
+	}
+	return false
+}
+
+func isMailSection(id string) bool {
+	return id == "mail-admin" || isMailScreen(id)
 }
 
 func (m Model) helpOverlay() string {

@@ -14,6 +14,7 @@ type Item struct {
 type Model struct {
 	Items    []Item
 	ActiveID string
+	CursorID string
 	Focused  bool
 }
 
@@ -28,8 +29,12 @@ func View(m Model, width, height int, t theme.Theme) string {
 		b.WriteString(t.Muted.Render("Navigation"))
 	}
 	b.WriteString("\n\n")
+	selectedID := m.ActiveID
+	if m.Focused && m.CursorID != "" {
+		selectedID = m.CursorID
+	}
 	for _, item := range m.Items {
-		if item.ID == m.ActiveID {
+		if item.ID == selectedID {
 			b.WriteString(t.Selected.Render("▸ " + item.Title))
 		} else {
 			b.WriteString(t.Text.Render("  " + item.Title))

@@ -54,9 +54,10 @@ type Model struct {
 	showHelp           bool
 	showCommandPalette bool
 
-	focus FocusArea
-	keys  KeyMap
-	help  helpbubble.Model
+	focus         FocusArea
+	sidebarCursor string
+	keys          KeyMap
+	help          helpbubble.Model
 
 	commands       *commands.Registry
 	commandPalette commands.PaletteModel
@@ -151,7 +152,10 @@ func (m Model) devBuild() bool { return m.meta.Version == "dev" }
 
 func (m *Model) registerScreens() {
 	m.screens["home"] = m.buildHome()
-	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody).WithJunkActions(m.junkMessage, m.notJunkMessage).WithSenderPolicyActions(m.blockSender, m.unblockSender, m.blockDomain, m.unblockDomain, m.trustSender, m.untrustSender)
+	m.screens["mail"] = m.buildMailScreen()
+	for _, scope := range aggregateMailScreens() {
+		m.screens[scope.id] = m.buildAggregateMailScreen(scope)
+	}
 	m.screens["mail-admin"] = screens.NewMailAdmin(m.loadMailAdmin).WithActions(m.saveDomain, m.deleteDomain, m.validateDomainOutbound, m.saveInbox, m.deleteInbox, m.inboxPipeline)
 	m.screens["calendar"] = screens.NewCalendar(calendarstore.New(m.dataPath), m.syncCalendar).WithActions(m.createCalendarEvent, m.updateCalendarEvent, m.deleteCalendarEvent).WithCalendarActions(m.createCalendar, m.updateCalendar, m.deleteCalendar).WithImportICS(m.importCalendarICS).WithInvitationActions(m.showCalendarInvitation, m.syncCalendarInvitation, m.respondCalendarInvitation)
 	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive).WithActions(m.downloadDriveFile, m.openDriveFile, m.uploadDriveFile, m.createDriveFolder, m.renameDriveFile, m.renameDriveFolder, m.deleteDriveFile, m.deleteDriveFolder)
@@ -163,6 +167,34 @@ func (m *Model) registerScreens() {
 	m.registerHackerNewsModule()
 	m.screens["news"] = m.buildNews()
 	m.refreshScreenOrder()
+}
+
+type aggregateMailScreen struct {
+	id         string
+	title      string
+	box        string
+	unreadOnly bool
+}
+
+func aggregateMailScreens() []aggregateMailScreen {
+	return []aggregateMailScreen{
+		{id: "mail-unread", title: "Unread", box: "inbox", unreadOnly: true},
+		{id: "mail-inbox", title: "Inbox", box: "inbox"},
+		{id: "mail-sent", title: "Sent", box: "sent"},
+		{id: "mail-drafts", title: "Drafts", box: "drafts"},
+		{id: "mail-outbox", title: "Outbox", box: "outbox"},
+		{id: "mail-junk", title: "Junk", box: "junk"},
+		{id: "mail-archive", title: "Archive", box: "archive"},
+		{id: "mail-trash", title: "Trash", box: "trash"},
+	}
+}
+
+func (m *Model) buildMailScreen() screens.Mail {
+	return screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody).WithJunkActions(m.junkMessage, m.notJunkMessage).WithSenderPolicyActions(m.blockSender, m.unblockSender, m.blockDomain, m.unblockDomain, m.trustSender, m.untrustSender)
+}
+
+func (m *Model) buildAggregateMailScreen(scope aggregateMailScreen) screens.Mail {
+	return screens.NewAggregateMailWithActions(mailstore.New(m.dataPath), scope.title, scope.box, scope.unreadOnly, m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody).WithJunkActions(m.junkMessage, m.notJunkMessage).WithSenderPolicyActions(m.blockSender, m.unblockSender, m.blockDomain, m.unblockDomain, m.trustSender, m.untrustSender)
 }
 
 func (m *Model) buildHome() screens.Home {
@@ -1316,7 +1348,7 @@ func (m *Model) calendarService() (*calendar.Service, error) {
 func (m *Model) refreshScreenOrder() {
 	m.screenOrder = m.screenOrder[:0]
 	for id := range m.screens {
-		if id == "mail-admin" || isHackerNewsScreen(id) {
+		if id == "mail-admin" || isAggregateMailScreen(id) || isHackerNewsScreen(id) {
 			continue
 		}
 		m.screenOrder = append(m.screenOrder, id)
@@ -1337,6 +1369,19 @@ func (m *Model) refreshScreenOrder() {
 		}
 	}
 	m.screenOrder = ordered
+}
+
+func isAggregateMailScreen(id string) bool {
+	for _, scope := range aggregateMailScreens() {
+		if id == scope.id {
+			return true
+		}
+	}
+	return false
+}
+
+func isMailScreen(id string) bool {
+	return id == "mail" || isAggregateMailScreen(id)
 }
 
 func (m *Model) registerCommands() {
@@ -1388,10 +1433,10 @@ func (m *Model) registerCommands() {
 			return tea.Sequence(func() tea.Msg { return routeMsg{"notes"} }, actionMsg)
 		}
 	}
-	onMail := func(ctx commands.Context) bool { return ctx.ActiveScreen == "mail" }
+	onMail := func(ctx commands.Context) bool { return isMailScreen(ctx.ActiveScreen) }
 	onMailAdmin := func(ctx commands.Context) bool { return ctx.ActiveScreen == "mail-admin" }
 	onMailOrAdmin := func(ctx commands.Context) bool {
-		return ctx.ActiveScreen == "mail" || ctx.ActiveScreen == "mail-admin"
+		return isMailScreen(ctx.ActiveScreen) || ctx.ActiveScreen == "mail-admin"
 	}
 	onCalendarAgenda := func(ctx commands.Context) bool {
 		return ctx.ActiveScreen == "calendar" && ctx.Selection != nil && ctx.Selection.Kind == "calendar-event"
@@ -1414,10 +1459,10 @@ func (m *Model) registerCommands() {
 		return ctx.ActiveScreen == "notes" && ctx.Selection != nil && ctx.Selection.Kind == "note" && ctx.Selection.HasItems
 	}
 	onMailDrafts := func(ctx commands.Context) bool {
-		return ctx.ActiveScreen == "mail" && ctx.Selection != nil && ctx.Selection.IsDraft && ctx.Selection.HasItems
+		return isMailScreen(ctx.ActiveScreen) && ctx.Selection != nil && ctx.Selection.IsDraft && ctx.Selection.HasItems
 	}
 	onMailMessages := func(ctx commands.Context) bool {
-		return ctx.ActiveScreen == "mail" && ctx.Selection != nil && ctx.Selection.Kind == "message" && ctx.Selection.HasItems
+		return isMailScreen(ctx.ActiveScreen) && ctx.Selection != nil && ctx.Selection.Kind == "message" && ctx.Selection.HasItems
 	}
 	subjectDescribe := func(prefix string) func(commands.Context) string {
 		return func(ctx commands.Context) string {
@@ -1430,7 +1475,11 @@ func (m *Model) registerCommands() {
 
 	// Navigation
 	m.commands.Register(commands.Command{ID: "go-home", Module: commands.ModuleGlobal, Title: "Go to Home", Description: "Open the home screen", Keywords: []string{"home", "start"}, Run: route("home")})
-	m.commands.Register(commands.Command{ID: "go-mail", Module: commands.ModuleMail, Title: "Open Mail", Description: "Switch to cached mail", Keywords: []string{"mail", "email", "inbox"}, Run: route("mail")})
+	m.commands.Register(commands.Command{ID: "go-mail", Module: commands.ModuleMail, Title: "Open Mail", Description: "Open unread mail across all mailboxes", Keywords: []string{"mail", "email", "unread", "inbox"}, Run: route("mail-unread")})
+	m.commands.Register(commands.Command{ID: "go-mailboxes", Module: commands.ModuleMail, Title: "Open Mailboxes", Description: "Browse one mailbox at a time", Keywords: []string{"mail", "email", "mailboxes", "accounts"}, Run: route("mail")})
+	for _, scope := range aggregateMailScreens() {
+		m.commands.Register(commands.Command{ID: "go-" + scope.id, Module: commands.ModuleMail, Title: "Open " + scope.title, Description: "Open " + strings.ToLower(scope.title) + " mail across all mailboxes", Keywords: []string{"mail", "email", strings.ToLower(scope.title)}, Run: route(scope.id)})
+	}
 	m.commands.Register(commands.Command{ID: "go-mail-admin", Module: commands.ModuleMail, Title: "Open Mail Admin", Description: "Manage domains and inboxes", Keywords: []string{"mail", "admin", "domains", "inboxes"}, Run: route("mail-admin")})
 	m.commands.Register(commands.Command{ID: "go-calendar", Module: commands.ModuleCalendar, Title: "Open Calendar", Description: "Switch to cached Calendar", Keywords: []string{"calendar", "events", "agenda"}, Run: route("calendar")})
 	m.commands.Register(commands.Command{ID: "go-notes", Module: commands.ModuleNotes, Title: "Open Notes", Description: "Switch to cached Notes", Keywords: []string{"notes", "markdown", "memo"}, Run: route("notes")})
@@ -1523,8 +1572,8 @@ func (m *Model) registerCommands() {
 
 func (m Model) paletteContext() commands.Context {
 	ctx := commands.Context{ActiveScreen: m.activeScreen}
-	if m.activeScreen == "mail" {
-		if mail, ok := m.screens["mail"].(screens.Mail); ok {
+	if isMailScreen(m.activeScreen) {
+		if mail, ok := m.screens[m.activeScreen].(screens.Mail); ok {
 			sel := mail.Selection()
 			ctx.Selection = &commands.Selection{
 				Kind:     sel.BoxLikes,

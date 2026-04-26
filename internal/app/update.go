@@ -208,6 +208,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.focus == FocusMain && m.showSidebar {
 			m.focus = FocusSidebar
+			ids := m.sidebarScreenIDs()
+			if containsScreenID(ids, m.activeScreen) {
+				m.sidebarCursor = m.activeScreen
+			} else if len(ids) > 0 {
+				m.sidebarCursor = ids[0]
+			}
 		} else {
 			m.focus = FocusMain
 		}
@@ -268,23 +274,36 @@ func (m Model) handlePaletteAction(action commands.PaletteAction) (tea.Model, te
 }
 
 func (m Model) handleSidebarKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	ids := m.sidebarScreenIDs()
+	if len(ids) == 0 {
+		return m, nil
+	}
 	idx := 0
-	for i, id := range m.screenOrder {
-		if id == m.activeScreen {
+	for i, id := range ids {
+		if id == m.currentSidebarCursorID() {
 			idx = i
 			break
 		}
 	}
 	if key.Matches(msg, m.keys.Up) && idx > 0 {
 		idx--
-	} else if key.Matches(msg, m.keys.Down) && idx < len(m.screenOrder)-1 {
+		m.sidebarCursor = ids[idx]
+		return m, nil
+	} else if key.Matches(msg, m.keys.Down) && idx < len(ids)-1 {
 		idx++
+		m.sidebarCursor = ids[idx]
+		return m, nil
 	} else if key.Matches(msg, m.keys.Enter) {
 		m.focus = FocusMain
 	} else {
 		return m, nil
 	}
-	m.switchScreen(m.screenOrder[idx])
+	target := ids[idx]
+	if target == "mail" && !isMailSection(m.activeScreen) {
+		target = "mail-unread"
+	}
+	m.sidebarCursor = target
+	m.switchScreen(target)
 	m.updateDerivedScreens()
 	return m, m.initScreen(m.activeScreen)
 }

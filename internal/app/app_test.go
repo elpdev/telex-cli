@@ -30,6 +30,43 @@ func TestRouteRunsScreenInitCommand(t *testing.T) {
 	}
 }
 
+func TestGlobalMailSidebarEntryOpensUnread(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+	model = sendKey(t, model, tea.Key{Code: tea.KeyTab})
+	model = sendKey(t, model, tea.Key{Code: tea.KeyDown})
+	if model.CurrentScreenID() != "home" {
+		t.Fatalf("down should only move sidebar cursor, got %q", model.CurrentScreenID())
+	}
+	model = sendKey(t, model, tea.Key{Code: tea.KeyEnter})
+
+	if model.CurrentScreenID() != "mail-unread" {
+		t.Fatalf("expected mail sidebar entry to open unread, got %q", model.CurrentScreenID())
+	}
+}
+
+func TestMailCommandsOpenUnreadAndMailboxes(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+	cmd, ok := model.commands.Find("go-mail")
+	if !ok {
+		t.Fatal("expected go-mail command")
+	}
+	updated, _ := model.Update(cmd.Run()())
+	model = updated.(Model)
+	if model.CurrentScreenID() != "mail-unread" {
+		t.Fatalf("go-mail opened %q, want mail-unread", model.CurrentScreenID())
+	}
+
+	cmd, ok = model.commands.Find("go-mailboxes")
+	if !ok {
+		t.Fatal("expected go-mailboxes command")
+	}
+	updated, _ = model.Update(cmd.Run()())
+	model = updated.(Model)
+	if model.CurrentScreenID() != "mail" {
+		t.Fatalf("go-mailboxes opened %q, want mail", model.CurrentScreenID())
+	}
+}
+
 func TestNotesScreenRegisteredInNavigationAndCommands(t *testing.T) {
 	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
 	if _, ok := model.screens["notes"]; !ok {
@@ -124,6 +161,16 @@ func commandIDs(list []commands.Command) []string {
 	return ids
 }
 
+func assertContainsScreenID(t *testing.T, ids []string, want string) {
+	t.Helper()
+	for _, id := range ids {
+		if id == want {
+			return
+		}
+	}
+	t.Fatalf("screen id %q not found in %#v", want, ids)
+}
+
 func TestMailAdminScreenRegisteredInNavigationAndCommands(t *testing.T) {
 	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
 	if _, ok := model.screens["mail-admin"]; !ok {
@@ -139,6 +186,30 @@ func TestMailAdminScreenRegisteredInNavigationAndCommands(t *testing.T) {
 			t.Fatalf("expected command %q", id)
 		}
 	}
+}
+
+func TestAggregateMailScreensRegisteredWithMailSidebar(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+	for _, id := range []string{"mail-unread", "mail-inbox", "mail-sent", "mail-drafts", "mail-outbox", "mail-junk", "mail-archive", "mail-trash"} {
+		if _, ok := model.screens[id]; !ok {
+			t.Fatalf("expected %s screen", id)
+		}
+		if _, ok := model.commands.Find("go-" + id); !ok {
+			t.Fatalf("expected go-%s command", id)
+		}
+		for _, navID := range model.screenOrder {
+			if navID == id {
+				t.Fatalf("%s should be hidden from global sidebar: %#v", id, model.screenOrder)
+			}
+		}
+	}
+
+	model = model.SwitchScreenForTest("mail-unread")
+	ids := model.sidebarScreenIDs()
+	assertContainsScreenID(t, ids, "home")
+	assertContainsScreenID(t, ids, "mail-unread")
+	assertContainsScreenID(t, ids, "mail-trash")
+	assertContainsScreenID(t, ids, "mail-admin")
 }
 
 func TestTabCyclesFocusOutsideConversationView(t *testing.T) {

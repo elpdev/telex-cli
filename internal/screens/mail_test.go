@@ -59,6 +59,87 @@ func TestMailScreenLoadsCachedInboxAndOpensDetail(t *testing.T) {
 	}
 }
 
+func TestAggregateUnreadMailLoadsAllUnreadInboxMessages(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	first := testScreenMailbox(12, 34, "example.com", "hello", "hello@example.com")
+	second := testScreenMailbox(13, 35, "agent.test", "support", "support@agent.test")
+	for _, mailbox := range []mailstore.MailboxMeta{first, second} {
+		if err := store.CreateMailbox(mailbox); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)
+	if _, err := store.StoreInboxMessage(first, mail.Message{ID: 1, Subject: "Read Subject", FromAddress: "read@example.net", SystemState: "inbox", Read: true, ReceivedAt: now}, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StoreInboxMessage(first, mail.Message{ID: 2, Subject: "First Unread", FromAddress: "first@example.net", SystemState: "inbox", Read: false, ReceivedAt: now.Add(-time.Hour)}, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StoreInboxMessage(second, mail.Message{ID: 3, Subject: "Second Unread", FromAddress: "second@example.net", SystemState: "inbox", Read: false, ReceivedAt: now.Add(time.Hour)}, nil, now); err != nil {
+		t.Fatal(err)
+	}
+
+	screen := NewAggregateMail(store, "Unread", "inbox", true)
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	view := stripScreenANSI(screen.View(100, 20))
+
+	if !strings.Contains(view, "Mail / Unread") || !strings.Contains(view, "First Unread") || !strings.Contains(view, "Second Unread") {
+		t.Fatalf("view = %q", view)
+	}
+	if strings.Contains(view, "Read Subject") {
+		t.Fatalf("view contains read message: %q", view)
+	}
+}
+
+func TestAggregateDraftsLoadsAllMailboxDrafts(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	first := testScreenMailbox(12, 34, "example.com", "hello", "hello@example.com")
+	second := testScreenMailbox(13, 35, "agent.test", "support", "support@agent.test")
+	for _, mailbox := range []mailstore.MailboxMeta{first, second} {
+		if err := store.CreateMailbox(mailbox); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)
+	if _, err := store.CreateDraft(mailstore.DraftInput{Mailbox: first, Subject: "First Draft", To: []string{"to@example.net"}, Body: "body", Now: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateDraft(mailstore.DraftInput{Mailbox: second, Subject: "Second Draft", To: []string{"to@example.net"}, Body: "body", Now: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	screen := NewAggregateMail(store, "Drafts", "drafts", false)
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	view := stripScreenANSI(screen.View(100, 20))
+
+	if !strings.Contains(view, "Mail / Drafts") || !strings.Contains(view, "First Draft") || !strings.Contains(view, "Second Draft") {
+		t.Fatalf("view = %q", view)
+	}
+}
+
+func TestAggregateComposeOpensFromPicker(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	first := testScreenMailbox(12, 34, "example.com", "hello", "hello@example.com")
+	second := testScreenMailbox(13, 35, "agent.test", "support", "support@agent.test")
+	for _, mailbox := range []mailstore.MailboxMeta{first, second} {
+		if err := store.CreateMailbox(mailbox); err != nil {
+			t.Fatal(err)
+		}
+	}
+	screen := NewAggregateMail(store, "Unread", "inbox", true)
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Text: "c", Code: 'c'}))
+	screen = updated.(Mail)
+
+	view := stripScreenANSI(screen.View(100, 20))
+	if !strings.Contains(view, "Compose From") || !strings.Contains(view, "hello@example.com") || !strings.Contains(view, "support@agent.test") {
+		t.Fatalf("view = %q", view)
+	}
+}
+
 func TestMailScreenScrollsDetailView(t *testing.T) {
 	store := mailstore.New(t.TempDir())
 	mailbox := mailstore.MailboxMeta{
@@ -1605,4 +1686,17 @@ func TestMailScreenUpdatesSenderPolicy(t *testing.T) {
 
 func stripScreenANSI(value string) string {
 	return screenANSIRE.ReplaceAllString(value, "")
+}
+
+func testScreenMailbox(domainID, inboxID int64, domainName, localPart, address string) mailstore.MailboxMeta {
+	return mailstore.MailboxMeta{
+		SchemaVersion: mailstore.SchemaVersion,
+		DomainID:      domainID,
+		DomainName:    domainName,
+		InboxID:       inboxID,
+		Address:       address,
+		LocalPart:     localPart,
+		Active:        true,
+		SyncedAt:      time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC),
+	}
 }
