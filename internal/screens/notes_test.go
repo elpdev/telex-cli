@@ -27,8 +27,11 @@ func TestNotesScreenLoadsCachedNotesAndOpensDetail(t *testing.T) {
 	screen = updated.(Notes)
 	view = screen.View(80, 20)
 	plain := stripNotesANSI(view)
-	if !strings.Contains(plain, "Cached") || !strings.Contains(plain, "ID: 9") || strings.Contains(plain, "# Cached") {
+	if !strings.Contains(plain, "Cached Note") || !strings.Contains(plain, "Updated") || strings.Contains(plain, "ID: 9") || strings.Contains(plain, "# Cached") {
 		t.Fatalf("detail view = %q", view)
+	}
+	if !strings.Contains(plain, "[esc] back") {
+		t.Fatalf("detail view missing footer hint = %q", plain)
 	}
 }
 
@@ -197,11 +200,11 @@ func testNotesStore(t *testing.T) notestore.Store {
 	if err := store.StoreTree(tree, syncedAt); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.StoreNote(notes.Note{ID: 9, FolderID: &rootID, Title: "Cached Note", Filename: "cached.md", Body: "# Cached"}, syncedAt); err != nil {
+	if err := store.StoreNote(notes.Note{ID: 9, FolderID: &rootID, Title: "Cached Note", Filename: "cached.md", Body: "# Cached", UpdatedAt: syncedAt}, syncedAt); err != nil {
 		t.Fatal(err)
 	}
 	projectID := int64(2)
-	if err := store.StoreNote(notes.Note{ID: 10, FolderID: &projectID, Title: "Project Note", Filename: "project.md", Body: "# Project"}, syncedAt); err != nil {
+	if err := store.StoreNote(notes.Note{ID: 10, FolderID: &projectID, Title: "Project Note", Filename: "project.md", Body: "# Project", UpdatedAt: syncedAt}, syncedAt); err != nil {
 		t.Fatal(err)
 	}
 	return store
