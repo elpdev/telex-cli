@@ -145,7 +145,7 @@ func (m *Model) registerScreens() {
 	m.screens["home"] = m.buildHome()
 	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody).WithJunkActions(m.junkMessage, m.notJunkMessage).WithSenderPolicyActions(m.blockSender, m.unblockSender, m.blockDomain, m.unblockDomain, m.trustSender, m.untrustSender)
 	m.screens["mail-admin"] = screens.NewMailAdmin(m.loadMailAdmin).WithActions(m.saveDomain, m.deleteDomain, m.validateDomainOutbound, m.saveInbox, m.deleteInbox, m.inboxPipeline)
-	m.screens["calendar"] = screens.NewCalendar(calendarstore.New(m.dataPath), m.syncCalendar).WithActions(m.createCalendarEvent, m.updateCalendarEvent, m.deleteCalendarEvent).WithCalendarActions(m.createCalendar, m.updateCalendar, m.deleteCalendar)
+	m.screens["calendar"] = screens.NewCalendar(calendarstore.New(m.dataPath), m.syncCalendar).WithActions(m.createCalendarEvent, m.updateCalendarEvent, m.deleteCalendarEvent).WithCalendarActions(m.createCalendar, m.updateCalendar, m.deleteCalendar).WithImportICS(m.importCalendarICS)
 	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive).WithActions(m.downloadDriveFile, m.openDriveFile, m.uploadDriveFile, m.createDriveFolder, m.renameDriveFile, m.renameDriveFolder, m.deleteDriveFile, m.deleteDriveFolder)
 	m.screens["notes"] = screens.NewNotes(notestore.New(m.dataPath), m.syncNotes).WithActions(m.createNote, m.updateNote, m.deleteNote)
 	m.screens["settings"] = m.buildSettings()
@@ -948,6 +948,19 @@ func (m *Model) deleteCalendar(ctx context.Context, id int64) error {
 	return err
 }
 
+func (m *Model) importCalendarICS(ctx context.Context, calendarID int64, path string) (*calendar.ImportResult, error) {
+	service, err := m.calendarService()
+	if err != nil {
+		return nil, err
+	}
+	result, err := service.ImportICS(ctx, calendarID, path)
+	if err != nil {
+		return nil, err
+	}
+	_, err = runCalendarSync(ctx, calendarstore.New(m.dataPath), service, calendarSyncOptions{})
+	return result, err
+}
+
 func (m *Model) createCalendarEvent(ctx context.Context, input calendar.CalendarEventInput) (*calendar.CalendarEvent, error) {
 	service, err := m.calendarService()
 	if err != nil {
@@ -1027,6 +1040,11 @@ func runCalendarSync(ctx context.Context, store calendarstore.Store, service *ca
 				return calendarSyncResult{}, err
 			}
 			for _, event := range events {
+				messages, err := service.EventMessages(ctx, event.ID)
+				if err != nil {
+					return calendarSyncResult{}, err
+				}
+				event.Messages = messages
 				if err := store.StoreEvent(event, syncedAt); err != nil {
 					return calendarSyncResult{}, err
 				}
@@ -1357,6 +1375,7 @@ func (m *Model) registerCommands() {
 	m.commands.Register(commands.Command{ID: "calendar-delete", Module: commands.ModuleCalendar, Title: "Delete selected event", Description: "Delete the highlighted calendar event after confirmation", Shortcut: "x", Keywords: []string{"delete", "remove", "event"}, Available: onCalendarItem, Run: calendarAction("delete", false)})
 	m.commands.Register(commands.Command{ID: "calendars-new", Module: commands.ModuleCalendar, Title: "New calendar", Description: "Create a calendar", Shortcut: "n", Keywords: []string{"new", "create", "calendar"}, Available: onCalendar, Run: calendarAction("new-calendar", false)})
 	m.commands.Register(commands.Command{ID: "calendars-edit", Module: commands.ModuleCalendar, Title: "Edit selected calendar", Description: "Edit the highlighted calendar", Shortcut: "e", Keywords: []string{"edit", "update", "calendar"}, Available: onCalendarCalendar, Run: calendarAction("edit-calendar", false)})
+	m.commands.Register(commands.Command{ID: "calendars-import-ics", Module: commands.ModuleCalendar, Title: "Import ICS into selected calendar", Description: "Pick an .ics file and import it into the highlighted calendar", Shortcut: "i", Keywords: []string{"import", "ics", "calendar"}, Available: onCalendarCalendar, Run: calendarAction("import-ics", false)})
 	m.commands.Register(commands.Command{ID: "calendars-delete", Module: commands.ModuleCalendar, Title: "Delete selected calendar", Description: "Delete the highlighted calendar after confirmation", Shortcut: "x", Keywords: []string{"delete", "remove", "calendar"}, Available: onCalendarCalendar, Run: calendarAction("delete-calendar", false)})
 
 	// Drive — module-level

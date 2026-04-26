@@ -53,6 +53,7 @@ type EventMeta struct {
 	Invitation        bool           `toml:"invitation"`
 	Attendees         []AttendeeMeta `toml:"attendees"`
 	Links             []LinkMeta     `toml:"links"`
+	Messages          []MessageMeta  `toml:"messages"`
 	RemoteCreatedAt   time.Time      `toml:"remote_created_at"`
 	RemoteUpdatedAt   time.Time      `toml:"remote_updated_at"`
 	SyncedAt          time.Time      `toml:"synced_at"`
@@ -73,6 +74,19 @@ type LinkMeta struct {
 	ICalUID        string `toml:"ical_uid"`
 	ICalMethod     string `toml:"ical_method"`
 	SequenceNumber int    `toml:"sequence_number"`
+}
+
+type MessageMeta struct {
+	ID             int64     `toml:"id"`
+	InboxID        int64     `toml:"inbox_id"`
+	ConversationID int64     `toml:"conversation_id"`
+	Subject        string    `toml:"subject"`
+	FromAddress    string    `toml:"from_address"`
+	FromName       string    `toml:"from_name"`
+	SenderDisplay  string    `toml:"sender_display"`
+	PreviewText    string    `toml:"preview_text"`
+	ReceivedAt     time.Time `toml:"received_at"`
+	SystemState    string    `toml:"system_state"`
 }
 
 type OccurrenceMeta struct {
@@ -172,7 +186,7 @@ func (s Store) StoreEvent(value calendar.CalendarEvent, syncedAt time.Time) erro
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return err
 	}
-	meta := EventMeta{SchemaVersion: SchemaVersion, RemoteID: value.ID, CalendarID: value.CalendarID, Title: value.Title, Location: value.Location, AllDay: value.AllDay, StartsAt: value.StartsAt, EndsAt: value.EndsAt, TimeZone: value.TimeZone, Status: value.Status, Source: value.Source, UID: value.UID, OrganizerName: value.OrganizerName, OrganizerEmail: value.OrganizerEmail, RecurrenceRule: value.RecurrenceRule, RecurrenceSummary: value.RecurrenceSummary, Invitation: value.Invitation, Attendees: attendeeMetas(value.Attendees), Links: linkMetas(value.Links), RemoteCreatedAt: value.CreatedAt, RemoteUpdatedAt: value.UpdatedAt, SyncedAt: syncedAt}
+	meta := EventMeta{SchemaVersion: SchemaVersion, RemoteID: value.ID, CalendarID: value.CalendarID, Title: value.Title, Location: value.Location, AllDay: value.AllDay, StartsAt: value.StartsAt, EndsAt: value.EndsAt, TimeZone: value.TimeZone, Status: value.Status, Source: value.Source, UID: value.UID, OrganizerName: value.OrganizerName, OrganizerEmail: value.OrganizerEmail, RecurrenceRule: value.RecurrenceRule, RecurrenceSummary: value.RecurrenceSummary, Invitation: value.Invitation, Attendees: attendeeMetas(value.Attendees), Links: linkMetas(value.Links), Messages: messageMetas(value.Messages), RemoteCreatedAt: value.CreatedAt, RemoteUpdatedAt: value.UpdatedAt, SyncedAt: syncedAt}
 	if err := writeTOML(filepath.Join(path, "meta.toml"), meta); err != nil {
 		return err
 	}
@@ -285,6 +299,14 @@ func linkMetas(links []calendar.CalendarEventLink) []LinkMeta {
 	out := make([]LinkMeta, 0, len(links))
 	for _, link := range links {
 		out = append(out, LinkMeta{ID: link.ID, MessageID: link.MessageID, ICalUID: link.ICalUID, ICalMethod: link.ICalMethod, SequenceNumber: link.SequenceNumber})
+	}
+	return out
+}
+
+func messageMetas(messages []calendar.MessageSummary) []MessageMeta {
+	out := make([]MessageMeta, 0, len(messages))
+	for _, message := range messages {
+		out = append(out, MessageMeta{ID: message.ID, InboxID: message.InboxID, ConversationID: message.ConversationID, Subject: message.Subject, FromAddress: message.FromAddress, FromName: message.FromName, SenderDisplay: message.SenderDisplay, PreviewText: message.PreviewText, ReceivedAt: message.ReceivedAt, SystemState: message.SystemState})
 	}
 	return out
 }

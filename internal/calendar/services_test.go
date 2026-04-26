@@ -86,6 +86,18 @@ func TestEventAndOccurrenceEndpoints(t *testing.T) {
 	if fake.getPath != "/api/v1/calendar_occurrences" {
 		t.Fatalf("occurrence path = %q", fake.getPath)
 	}
+
+	fake.body = []byte(`{"data":[{"id":42,"subject":"Invite","sender_display":"Alex"}]}`)
+	messages, err := service.EventMessages(context.Background(), 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.getPath != "/api/v1/calendar_events/9/messages" {
+		t.Fatalf("messages path = %q", fake.getPath)
+	}
+	if len(messages) != 1 || messages[0].ID != 42 || messages[0].Subject != "Invite" {
+		t.Fatalf("messages = %#v", messages)
+	}
 }
 
 func TestCalendarHelpersUseExpectedEndpoints(t *testing.T) {

@@ -421,6 +421,11 @@ func runCalendarSync(rt *runtime, service *calendar.Service, store calendarstore
 				return nil, err
 			}
 			for _, event := range events {
+				messages, err := service.EventMessages(rt.context(), event.ID)
+				if err != nil {
+					return nil, err
+				}
+				event.Messages = messages
 				if err := store.StoreEvent(event, syncedAt); err != nil {
 					return nil, err
 				}

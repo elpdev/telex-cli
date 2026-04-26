@@ -22,7 +22,7 @@ func TestStoreCalendarEventAndOccurrencesUnderCalendarRoot(t *testing.T) {
 		t.Fatalf("calendars = %#v", cals)
 	}
 
-	event := calendar.CalendarEvent{ID: 9, CalendarID: 1, Title: "Standup", Description: "Daily sync", StartsAt: syncedAt, EndsAt: syncedAt.Add(30 * time.Minute), Status: "confirmed"}
+	event := calendar.CalendarEvent{ID: 9, CalendarID: 1, Title: "Standup", Description: "Daily sync", StartsAt: syncedAt, EndsAt: syncedAt.Add(30 * time.Minute), Status: "confirmed", Messages: []calendar.MessageSummary{{ID: 42, InboxID: 7, Subject: "Re: Standup", SenderDisplay: "Alex", ReceivedAt: syncedAt.Add(-time.Hour), SystemState: "inbox"}}}
 	if err := store.StoreEvent(event, syncedAt); err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +32,9 @@ func TestStoreCalendarEventAndOccurrencesUnderCalendarRoot(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Meta.RemoteID != 9 || events[0].Description != "Daily sync" {
 		t.Fatalf("events = %#v", events)
+	}
+	if len(events[0].Meta.Messages) != 1 || events[0].Meta.Messages[0].ID != 42 || events[0].Meta.Messages[0].Subject != "Re: Standup" {
+		t.Fatalf("messages = %#v", events[0].Meta.Messages)
 	}
 	if want := store.CalendarRoot(); events[0].Path[:len(want)] != want {
 		t.Fatalf("event path = %q, want under %q", events[0].Path, want)

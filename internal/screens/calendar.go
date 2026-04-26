@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -15,12 +16,14 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/elpdev/telex-cli/internal/calendar"
 	"github.com/elpdev/telex-cli/internal/calendarstore"
+	"github.com/elpdev/telex-cli/internal/components/filepicker"
 )
 
 type CalendarSyncFunc func(context.Context) (CalendarSyncResult, error)
 type CreateCalendarFunc func(context.Context, calendar.CalendarInput) (*calendar.Calendar, error)
 type UpdateCalendarFunc func(context.Context, int64, calendar.CalendarInput) (*calendar.Calendar, error)
 type DeleteCalendarFunc func(context.Context, int64) error
+type ImportICSFunc func(context.Context, int64, string) (*calendar.ImportResult, error)
 type CreateCalendarEventFunc func(context.Context, calendar.CalendarEventInput) (*calendar.CalendarEvent, error)
 type UpdateCalendarEventFunc func(context.Context, int64, calendar.CalendarEventInput) (*calendar.CalendarEvent, error)
 type DeleteCalendarEventFunc func(context.Context, int64) error
@@ -54,6 +57,7 @@ type Calendar struct {
 	createCalendar CreateCalendarFunc
 	updateCalendar UpdateCalendarFunc
 	deleteCalendar DeleteCalendarFunc
+	importICS      ImportICSFunc
 	createEvent    CreateCalendarEventFunc
 	updateEvent    UpdateCalendarEventFunc
 	deleteEvent    DeleteCalendarEventFunc
@@ -68,6 +72,9 @@ type Calendar struct {
 	formID         int64
 	formData       *calendarEventFormData
 	calendarForm   *calendarFormData
+	filePicker     filepicker.Model
+	filePickerOpen bool
+	importCalendar int64
 	confirm        string
 	confirmAction  string
 	confirmID      int64
@@ -90,6 +97,7 @@ type CalendarKeyMap struct {
 	New     key.Binding
 	Edit    key.Binding
 	Delete  key.Binding
+	Import  key.Binding
 }
 
 type calendarEventFormData struct {
@@ -151,6 +159,11 @@ func (c Calendar) WithCalendarActions(create CreateCalendarFunc, update UpdateCa
 	return c
 }
 
+func (c Calendar) WithImportICS(importICS ImportICSFunc) Calendar {
+	c.importICS = importICS
+	return c
+}
+
 func DefaultCalendarKeyMap() CalendarKeyMap {
 	return CalendarKeyMap{
 		Up:      key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "item up")),
@@ -164,12 +177,18 @@ func DefaultCalendarKeyMap() CalendarKeyMap {
 		New:     key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new event")),
 		Edit:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit event")),
 		Delete:  key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "delete event")),
+		Import:  key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "import ics")),
 	}
 }
 
 func (c Calendar) Init() tea.Cmd { return c.loadCmd() }
 
 func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
+	if c.filePickerOpen {
+		if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
+			return c.handleImportFileKey(keyMsg)
+		}
+	}
 	if c.form != nil {
 		return c.updateForm(msg)
 	}
@@ -209,6 +228,8 @@ func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		c.detail = false
 		c.form = nil
 		c.formKind = calendarFormNone
+		c.filePickerOpen = false
+		c.importCalendar = 0
 		c.confirm = ""
 		c.confirmAction = ""
 		c.confirmID = 0
@@ -229,6 +250,9 @@ func (c Calendar) View(width, height int) string {
 	}
 	if c.form != nil {
 		return style.Render(c.form.WithWidth(max(40, width-4)).WithHeight(max(8, height-3)).View())
+	}
+	if c.filePickerOpen {
+		return style.Render("Calendar / Import ICS\n" + c.status + "\n\n" + c.filePicker.View(width, max(1, height-3)))
 	}
 	if c.err != nil {
 		return style.Render(fmt.Sprintf("Calendar cache error: %v\n\nRun `telex calendar sync` or press S to populate Calendar.", c.err))
@@ -270,10 +294,10 @@ func (c Calendar) View(width, height int) string {
 func (c Calendar) Title() string { return "Calendar" }
 
 func (c Calendar) KeyBindings() []key.Binding {
-	return []key.Binding{c.keys.Up, c.keys.Down, c.keys.Open, c.keys.Back, c.keys.Refresh, c.keys.Sync, c.keys.Today, c.keys.View, c.keys.New, c.keys.Edit, c.keys.Delete}
+	return []key.Binding{c.keys.Up, c.keys.Down, c.keys.Open, c.keys.Back, c.keys.Refresh, c.keys.Sync, c.keys.Today, c.keys.View, c.keys.New, c.keys.Edit, c.keys.Delete, c.keys.Import}
 }
 
-func (c Calendar) CapturesFocusKey(tea.KeyPressMsg) bool { return c.form != nil }
+func (c Calendar) CapturesFocusKey(tea.KeyPressMsg) bool { return c.form != nil || c.filePickerOpen }
 
 func (c Calendar) Selection() CalendarSelection {
 	if c.mode == calendarViewCalendars {
@@ -373,6 +397,14 @@ func (c Calendar) handleAction(action string) (Screen, tea.Cmd) {
 		c.confirmAction = "delete-calendar"
 		c.confirmID = item.RemoteID
 		return c, nil
+	case "import-ics":
+		if c.mode != calendarViewCalendars {
+			c.mode = calendarViewCalendars
+			c.detail = false
+			c.status = "Select a calendar, then import ICS"
+			return c, nil
+		}
+		return c.startImportICS()
 	}
 	return c, nil
 }
@@ -458,7 +490,71 @@ func (c Calendar) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if key.Matches(msg, c.keys.Delete) {
 		return c.handleAction("delete")
 	}
+	if key.Matches(msg, c.keys.Import) && c.mode == calendarViewCalendars {
+		return c.handleAction("import-ics")
+	}
 	return c, nil
+}
+
+func (c Calendar) startImportICS() (Screen, tea.Cmd) {
+	item, ok := c.selectedCalendar()
+	if !ok {
+		c.status = "Select a calendar to import ICS"
+		return c, nil
+	}
+	if c.importICS == nil {
+		c.status = "ICS import is not configured"
+		return c, nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil || cwd == "" {
+		cwd, _ = os.UserHomeDir()
+	}
+	c.filePicker = filepicker.New("", cwd, filepicker.ModeOpenFile)
+	c.filePickerOpen = true
+	c.importCalendar = item.RemoteID
+	c.status = fmt.Sprintf("Select .ics file for %s", item.Name)
+	return c, nil
+}
+
+func (c Calendar) handleImportFileKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+	picker, action := c.filePicker.Update(msg)
+	c.filePicker = picker
+	switch action.Type {
+	case filepicker.ActionCancel:
+		c.filePickerOpen = false
+		c.importCalendar = 0
+		c.status = "Cancelled"
+		return c, nil
+	case filepicker.ActionSelect:
+		return c.importSelectedICS(action.Path)
+	}
+	if c.filePicker.Err != nil {
+		c.status = fmt.Sprintf("File picker: %v", c.filePicker.Err)
+	} else if c.filePicker.Filtering {
+		c.status = "ICS file filter: " + c.filePicker.Filter
+	} else {
+		c.status = "Select .ics file"
+	}
+	return c, nil
+}
+
+func (c Calendar) importSelectedICS(path string) (Screen, tea.Cmd) {
+	if c.importCalendar <= 0 {
+		c.filePickerOpen = false
+		c.status = "Select a calendar to import ICS"
+		return c, nil
+	}
+	if strings.ToLower(strings.TrimSpace(path)) == "" || !strings.HasSuffix(strings.ToLower(path), ".ics") {
+		c.status = "Select an .ics file"
+		return c, nil
+	}
+	calendarID := c.importCalendar
+	c.filePickerOpen = false
+	c.importCalendar = 0
+	c.loading = true
+	c.status = "Importing ICS..."
+	return c, c.importICSCmd(calendarID, path)
 }
 
 func (c Calendar) updateForm(msg tea.Msg) (Screen, tea.Cmd) {
@@ -662,7 +758,7 @@ func (c Calendar) detailView() string {
 	if !ok {
 		return "No event selected.\n"
 	}
-	return strings.Join([]string{
+	lines := []string{
 		item.Title,
 		"",
 		"Event ID: " + strconv.FormatInt(item.EventID, 10),
@@ -672,7 +768,53 @@ func (c Calendar) detailView() string {
 		"All day: " + strconv.FormatBool(item.AllDay),
 		"Location: " + item.Location,
 		"Status: " + item.Status,
-	}, "\n") + "\n"
+	}
+	if event, err := c.store.ReadEvent(item.EventID); err == nil {
+		lines = append(lines, "")
+		lines = append(lines, linkedMessagesView(event.Meta.Messages)...)
+	} else {
+		lines = append(lines, "", "Linked messages: unavailable in cache")
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func linkedMessagesView(messages []calendarstore.MessageMeta) []string {
+	if len(messages) == 0 {
+		return []string{"Linked messages: none"}
+	}
+	lines := []string{"Linked messages:"}
+	for _, message := range messages {
+		lines = append(lines, fmt.Sprintf("- %s | %s | %s | inbox:%d | %s", emptyDash(message.Subject), calendarMessageSender(message), formatCalendarMessageTime(message.ReceivedAt), message.InboxID, emptyDash(message.SystemState)))
+	}
+	return lines
+}
+
+func calendarMessageSender(message calendarstore.MessageMeta) string {
+	if strings.TrimSpace(message.SenderDisplay) != "" {
+		return message.SenderDisplay
+	}
+	if strings.TrimSpace(message.FromName) != "" && strings.TrimSpace(message.FromAddress) != "" {
+		return fmt.Sprintf("%s <%s>", message.FromName, message.FromAddress)
+	}
+	if strings.TrimSpace(message.FromAddress) != "" {
+		return message.FromAddress
+	}
+	return "-"
+}
+
+func formatCalendarMessageTime(value time.Time) string {
+	if value.IsZero() {
+		return "-"
+	}
+	return value.Format("2006-01-02 15:04")
+}
+
+func emptyDash(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	return value
 }
 
 func (c Calendar) calendarListView() string {
@@ -806,6 +948,29 @@ func (c Calendar) deleteCalendarCmd(id int64) tea.Cmd {
 		}
 		return calendarActionFinishedMsg{status: "Deleted calendar", loaded: loaded, err: err}
 	}
+}
+
+func (c Calendar) importICSCmd(calendarID int64, path string) tea.Cmd {
+	return func() tea.Msg {
+		result, err := c.importICS(context.Background(), calendarID, path)
+		loaded := calendarLoadedMsg{}
+		if err == nil {
+			loaded = c.load()
+			err = loaded.err
+		}
+		return calendarActionFinishedMsg{status: importICSStatus(result), loaded: loaded, err: err}
+	}
+}
+
+func importICSStatus(result *calendar.ImportResult) string {
+	if result == nil {
+		return "Imported ICS"
+	}
+	status := fmt.Sprintf("Imported ICS: created %d, updated %d, skipped %d, failed %d", result.Created, result.Updated, result.Skipped, result.Failed)
+	if len(result.Errors) > 0 {
+		status += "; errors: " + strings.Join(result.Errors, "; ")
+	}
+	return status
 }
 
 func calendarEventInputFromForm(data calendarEventFormData) (calendar.CalendarEventInput, error) {

@@ -51,7 +51,7 @@ func TestCalendarScreenRegisteredInNavigationAndCommands(t *testing.T) {
 	if got := model.screenOrder; len(got) < 4 || got[2] != "calendar" {
 		t.Fatalf("screenOrder = %#v", got)
 	}
-	for _, id := range []string{"go-calendar", "calendar-sync", "calendar-view-agenda", "calendar-view-calendars", "calendar-new", "calendar-edit", "calendar-today", "calendar-delete", "calendars-new", "calendars-edit", "calendars-delete"} {
+	for _, id := range []string{"go-calendar", "calendar-sync", "calendar-view-agenda", "calendar-view-calendars", "calendar-new", "calendar-edit", "calendar-today", "calendar-delete", "calendars-new", "calendars-edit", "calendars-import-ics", "calendars-delete"} {
 		if _, ok := model.commands.Find(id); !ok {
 			t.Fatalf("expected command %q", id)
 		}
