@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
@@ -50,6 +52,8 @@ type MailAdmin struct {
 
 	domains     []mail.Domain
 	inboxes     []mail.Inbox
+	domainList  list.Model
+	inboxList   list.Model
 	domainIndex int
 	inboxIndex  int
 	focus       mailAdminFocus
@@ -104,6 +108,14 @@ type MailAdminKeyMap struct {
 
 type MailAdminActionMsg struct{ Action string }
 
+type mailAdminDomainItem struct{ domain mail.Domain }
+
+func (i mailAdminDomainItem) FilterValue() string { return i.domain.Name }
+
+type mailAdminInboxItem struct{ inbox mail.Inbox }
+
+func (i mailAdminInboxItem) FilterValue() string { return i.inbox.Address }
+
 type mailAdminLoadedMsg struct {
 	domains []mail.Domain
 	inboxes []mail.Inbox
@@ -117,7 +129,7 @@ type mailAdminActionDoneMsg struct {
 }
 
 func NewMailAdmin(load MailAdminLoadFunc) MailAdmin {
-	return MailAdmin{load: load, loading: true, keys: DefaultMailAdminKeyMap()}
+	return MailAdmin{load: load, loading: true, keys: DefaultMailAdminKeyMap(), domainList: newMailAdminDomainList(nil, 0, 0, 0), inboxList: newMailAdminInboxList(nil, 0, 0, 0)}
 }
 
 func (m MailAdmin) WithActions(saveDomain DomainSaveFunc, deleteDomain DomainDeleteFunc, validateDomain DomainValidateFunc, saveInbox InboxSaveFunc, deleteInbox InboxDeleteFunc, inboxPipeline InboxPipelineFunc) MailAdmin {
@@ -160,6 +172,7 @@ func (m MailAdmin) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			m.domains = msg.domains
 			m.inboxes = msg.inboxes
 			m.clamp()
+			m.syncLists()
 			m.status = fmt.Sprintf("Loaded %d domain(s), %d inbox(es)", len(m.domains), len(m.inboxes))
 		}
 		return m, nil
@@ -256,22 +269,6 @@ func (m MailAdmin) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return m.handleConfirmKey(msg)
 	}
 	switch {
-	case key.Matches(msg, m.keys.Up):
-		if m.focus == mailAdminFocusDomains && m.domainIndex > 0 {
-			m.domainIndex--
-			m.inboxIndex = 0
-		} else if m.focus == mailAdminFocusInboxes && m.inboxIndex > 0 {
-			m.inboxIndex--
-		}
-		m.detail = ""
-	case key.Matches(msg, m.keys.Down):
-		if m.focus == mailAdminFocusDomains && m.domainIndex < len(m.domains)-1 {
-			m.domainIndex++
-			m.inboxIndex = 0
-		} else if m.focus == mailAdminFocusInboxes && m.inboxIndex < len(m.filteredInboxes())-1 {
-			m.inboxIndex++
-		}
-		m.detail = ""
 	case key.Matches(msg, m.keys.Focus):
 		if m.focus == mailAdminFocusDomains {
 			m.focus = mailAdminFocusInboxes
@@ -296,6 +293,8 @@ func (m MailAdmin) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return m.showSelectedPipeline()
 	case key.Matches(msg, m.keys.Back):
 		m.detail = ""
+	default:
+		m.updateFocusedList(msg)
 	}
 	return m, nil
 }
@@ -542,8 +541,9 @@ func (m MailAdmin) loadCmd() tea.Cmd {
 func (m MailAdmin) listColumns(width int) string {
 	domainWidth := max(30, width/2-3)
 	inboxWidth := max(30, width-domainWidth-4)
-	domains := m.domainLines()
-	inboxes := m.inboxLines()
+	rowsHeight := max(1, max(len(m.domains), len(m.filteredInboxes())))
+	domains := m.domainLines(domainWidth, rowsHeight)
+	inboxes := m.inboxLines(inboxWidth, rowsHeight)
 	rows := max(len(domains), len(inboxes))
 	var b strings.Builder
 	b.WriteString(mailAdminPadRight(focusTitle("Domains", m.focus == mailAdminFocusDomains), domainWidth) + "  " + focusTitle("Inboxes", m.focus == mailAdminFocusInboxes) + "\n")
@@ -561,47 +561,31 @@ func (m MailAdmin) listColumns(width int) string {
 	return b.String()
 }
 
-func (m MailAdmin) domainLines() []string {
+func (m MailAdmin) domainLines(width, height int) []string {
 	if len(m.domains) == 0 {
 		return []string{"No domains. Press n to create one."}
 	}
-	lines := make([]string, 0, len(m.domains))
-	for i, domain := range m.domains {
-		cursor := "  "
-		if i == m.domainIndex {
-			cursor = "> "
-		}
-		state := "inactive"
-		if domain.Active {
-			state = "active"
-		}
-		ready := "not ready"
-		if domain.OutboundReady {
-			ready = "ready"
-		}
-		lines = append(lines, fmt.Sprintf("%s%d  %s  %s/%s", cursor, domain.ID, domain.Name, state, ready))
-	}
-	return lines
+	m.ensureLists()
+	m.domainList.SetSize(width, height)
+	return mailAdminListLines(m.domainList.View())
 }
 
-func (m MailAdmin) inboxLines() []string {
+func (m MailAdmin) inboxLines(width, height int) []string {
 	inboxes := m.filteredInboxes()
 	if len(inboxes) == 0 {
 		return []string{"No inboxes for selected domain."}
 	}
-	lines := make([]string, 0, len(inboxes))
-	for i, inbox := range inboxes {
-		cursor := "  "
-		if i == m.inboxIndex {
-			cursor = "> "
-		}
-		state := "inactive"
-		if inbox.Active {
-			state = "active"
-		}
-		lines = append(lines, fmt.Sprintf("%s%d  %s  %s  %d msg", cursor, inbox.ID, inbox.Address, state, inbox.MessageCount))
+	m.ensureLists()
+	m.inboxList.SetSize(width, height)
+	return mailAdminListLines(m.inboxList.View())
+}
+
+func mailAdminListLines(view string) []string {
+	view = strings.TrimRight(view, "\n")
+	if view == "" {
+		return nil
 	}
-	return lines
+	return strings.Split(view, "\n")
 }
 
 func (m MailAdmin) selectionDetails() string {
@@ -620,18 +604,18 @@ func (m MailAdmin) selectionDetails() string {
 }
 
 func (m MailAdmin) selectedDomain() (mail.Domain, bool) {
-	if len(m.domains) == 0 || m.domainIndex < 0 || m.domainIndex >= len(m.domains) {
+	if len(m.domains) == 0 {
 		return mail.Domain{}, false
 	}
-	return m.domains[m.domainIndex], true
+	return m.domains[m.clampedDomainIndex()], true
 }
 
 func (m MailAdmin) selectedInbox() (mail.Inbox, bool) {
 	inboxes := m.filteredInboxes()
-	if len(inboxes) == 0 || m.inboxIndex < 0 || m.inboxIndex >= len(inboxes) {
+	if len(inboxes) == 0 {
 		return mail.Inbox{}, false
 	}
-	return inboxes[m.inboxIndex], true
+	return inboxes[m.clampedInboxIndex(inboxes)], true
 }
 
 func (m MailAdmin) filteredInboxes() []mail.Inbox {
@@ -649,12 +633,172 @@ func (m MailAdmin) filteredInboxes() []mail.Inbox {
 }
 
 func (m *MailAdmin) clamp() {
+	m.domainIndex = m.clampedDomainIndex()
+	m.inboxIndex = m.clampedInboxIndex(m.filteredInboxes())
+}
+
+func (m MailAdmin) clampedDomainIndex() int {
+	if m.domainIndex < 0 || len(m.domains) == 0 {
+		return 0
+	}
 	if m.domainIndex >= len(m.domains) {
-		m.domainIndex = max(0, len(m.domains)-1)
+		return len(m.domains) - 1
 	}
-	if m.inboxIndex >= len(m.filteredInboxes()) {
-		m.inboxIndex = max(0, len(m.filteredInboxes())-1)
+	return m.domainIndex
+}
+
+func (m MailAdmin) clampedInboxIndex(inboxes []mail.Inbox) int {
+	if m.inboxIndex < 0 || len(inboxes) == 0 {
+		return 0
 	}
+	if m.inboxIndex >= len(inboxes) {
+		return len(inboxes) - 1
+	}
+	return m.inboxIndex
+}
+
+func (m *MailAdmin) updateFocusedList(msg tea.KeyPressMsg) {
+	m.ensureLists()
+	if m.focus == mailAdminFocusDomains {
+		updated, _ := m.domainList.Update(msg)
+		m.domainList = updated
+		previousDomain := m.domainIndex
+		m.domainIndex = m.domainList.GlobalIndex()
+		m.clamp()
+		if m.domainIndex != previousDomain {
+			m.inboxIndex = 0
+			m.syncInboxList()
+		}
+	} else {
+		updated, _ := m.inboxList.Update(msg)
+		m.inboxList = updated
+		m.inboxIndex = m.inboxList.GlobalIndex()
+		m.clamp()
+	}
+	m.detail = ""
+}
+
+func (m *MailAdmin) ensureLists() {
+	if len(m.domainList.Items()) != len(m.domains) {
+		m.syncDomainList()
+	} else {
+		m.domainList.Select(m.clampedDomainIndex())
+	}
+	if len(m.inboxList.Items()) != len(m.filteredInboxes()) {
+		m.syncInboxList()
+	} else {
+		m.inboxList.Select(m.clampedInboxIndex(m.filteredInboxes()))
+	}
+}
+
+func (m *MailAdmin) syncLists() {
+	m.syncDomainList()
+	m.syncInboxList()
+}
+
+func (m *MailAdmin) syncDomainList() {
+	m.domainIndex = m.clampedDomainIndex()
+	m.domainList = newMailAdminDomainList(m.domains, m.domainIndex, m.domainList.Width(), m.domainList.Height())
+}
+
+func (m *MailAdmin) syncInboxList() {
+	inboxes := m.filteredInboxes()
+	m.inboxIndex = m.clampedInboxIndex(inboxes)
+	m.inboxList = newMailAdminInboxList(inboxes, m.inboxIndex, m.inboxList.Width(), m.inboxList.Height())
+}
+
+func newMailAdminDomainList(domains []mail.Domain, selected, width, height int) list.Model {
+	items := make([]list.Item, 0, len(domains))
+	for _, domain := range domains {
+		items = append(items, mailAdminDomainItem{domain: domain})
+	}
+	m := newMailAdminList(items, mailAdminDomainDelegate{}, selected, width, height)
+	return m
+}
+
+func newMailAdminInboxList(inboxes []mail.Inbox, selected, width, height int) list.Model {
+	items := make([]list.Item, 0, len(inboxes))
+	for _, inbox := range inboxes {
+		items = append(items, mailAdminInboxItem{inbox: inbox})
+	}
+	m := newMailAdminList(items, mailAdminInboxDelegate{}, selected, width, height)
+	return m
+}
+
+func newMailAdminList(items []list.Item, delegate list.ItemDelegate, selected, width, height int) list.Model {
+	m := list.New(items, delegate, width, height)
+	m.SetShowTitle(false)
+	m.SetShowFilter(false)
+	m.SetFilteringEnabled(false)
+	m.SetShowStatusBar(false)
+	m.SetShowHelp(false)
+	m.DisableQuitKeybindings()
+	if len(items) > 0 {
+		if selected < 0 {
+			selected = 0
+		}
+		if selected >= len(items) {
+			selected = len(items) - 1
+		}
+		m.Select(selected)
+	}
+	return m
+}
+
+type mailAdminDomainDelegate struct{}
+
+func (d mailAdminDomainDelegate) Height() int  { return 1 }
+func (d mailAdminDomainDelegate) Spacing() int { return 0 }
+func (d mailAdminDomainDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d mailAdminDomainDelegate) Render(w io.Writer, model list.Model, index int, item list.Item) {
+	domainItem, ok := item.(mailAdminDomainItem)
+	if !ok {
+		return
+	}
+	domain := domainItem.domain
+	cursor := "  "
+	if index == model.Index() {
+		cursor = "> "
+	}
+	state := "inactive"
+	if domain.Active {
+		state = "active"
+	}
+	ready := "not ready"
+	if domain.OutboundReady {
+		ready = "ready"
+	}
+	line := fmt.Sprintf("%s%d  %s  %s/%s", cursor, domain.ID, domain.Name, state, ready)
+	_, _ = io.WriteString(w, mailAdminPadRight(line, model.Width()))
+}
+
+type mailAdminInboxDelegate struct{}
+
+func (d mailAdminInboxDelegate) Height() int  { return 1 }
+func (d mailAdminInboxDelegate) Spacing() int { return 0 }
+func (d mailAdminInboxDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d mailAdminInboxDelegate) Render(w io.Writer, model list.Model, index int, item list.Item) {
+	inboxItem, ok := item.(mailAdminInboxItem)
+	if !ok {
+		return
+	}
+	inbox := inboxItem.inbox
+	cursor := "  "
+	if index == model.Index() {
+		cursor = "> "
+	}
+	state := "inactive"
+	if inbox.Active {
+		state = "active"
+	}
+	line := fmt.Sprintf("%s%d  %s  %s  %d msg", cursor, inbox.ID, inbox.Address, state, inbox.MessageCount)
+	_, _ = io.WriteString(w, mailAdminPadRight(line, model.Width()))
 }
 
 func domainInputFromForm(data mailAdminFormData) (mail.DomainInput, error) {

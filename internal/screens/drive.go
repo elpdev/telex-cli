@@ -3,11 +3,13 @@ package screens
 import (
 	"context"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/elpdev/telex-cli/internal/components/filepicker"
@@ -44,6 +46,7 @@ type Drive struct {
 	deleteDir   DriveDeleteFunc
 	path        string
 	entries     []drivestore.Entry
+	entryList   list.Model
 	index       int
 	filter      string
 	filtering   bool
@@ -104,8 +107,14 @@ type driveActionFinishedMsg struct {
 
 type DriveActionMsg struct{ Action string }
 
+type driveListItem struct {
+	entry drivestore.Entry
+}
+
+func (i driveListItem) FilterValue() string { return i.entry.Name }
+
 func NewDrive(store drivestore.Store, sync DriveSyncFunc) Drive {
-	return Drive{store: store, sync: sync, path: store.DriveRoot(), loading: true, keys: DefaultDriveKeyMap()}
+	return Drive{store: store, sync: sync, path: store.DriveRoot(), loading: true, keys: DefaultDriveKeyMap(), entryList: newDriveList(nil, 0, 0, 0)}
 }
 
 func (d Drive) WithActions(download DriveDownloadFunc, open DriveOpenFunc, upload DriveUploadFunc, create DriveCreateFolderFunc, renameFile DriveRenameFileFunc, renameDir DriveRenameFolderFunc, deleteFile DriveDeleteFunc, deleteDir DriveDeleteFunc) Drive {
@@ -151,9 +160,8 @@ func (d Drive) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		if msg.err == nil {
 			d.path = msg.path
 			d.entries = msg.entries
-			if d.index >= len(d.entries) {
-				d.index = maxDriveIndex(len(d.entries))
-			}
+			d.clampIndex()
+			d.syncEntryList()
 			d.breadcrumbs = d.pathParts()
 		}
 		return d, nil
@@ -167,6 +175,8 @@ func (d Drive) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			}
 			d.path = msg.loaded.path
 			d.entries = msg.loaded.entries
+			d.clampIndex()
+			d.syncEntryList()
 			d.breadcrumbs = d.pathParts()
 		} else {
 			d.status = ""
@@ -185,9 +195,8 @@ func (d Drive) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		d.entries = loaded.entries
 		d.err = loaded.err
 		d.breadcrumbs = d.pathParts()
-		if d.index >= len(d.visibleEntries()) {
-			d.index = maxDriveIndex(len(d.visibleEntries()))
-		}
+		d.clampIndex()
+		d.syncEntryList()
 		return d, nil
 	case DriveActionMsg:
 		return d.handleAction(msg.Action)
@@ -271,20 +280,8 @@ func (d Drive) View(width, height int) string {
 		b.WriteString("No mirrored Drive items found. Press S to sync.\n")
 		return style.Render(b.String())
 	}
-	for i, entry := range entries {
-		cursor := "  "
-		if i == d.index {
-			cursor = "> "
-		}
-		kind := "file"
-		status := ""
-		if entry.Kind == "folder" {
-			kind = "dir "
-		} else if !entry.Cached {
-			status = " remote-only"
-		}
-		b.WriteString(fmt.Sprintf("%s%s  %s%s\n", cursor, kind, entry.Name, status))
-	}
+	headerLines := strings.Count(b.String(), "\n")
+	b.WriteString(d.renderEntryList(entries, width, max(1, height-headerLines)))
 	if d.details {
 		b.WriteString("\n" + d.detailsView())
 	}
@@ -311,16 +308,7 @@ func (d Drive) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return d.handleFilterKey(msg)
 	}
 	entries := d.visibleEntries()
-	switch {
-	case key.Matches(msg, d.keys.Up):
-		if d.index > 0 {
-			d.index--
-		}
-	case key.Matches(msg, d.keys.Down):
-		if d.index < len(entries)-1 {
-			d.index++
-		}
-	case key.Matches(msg, d.keys.Open):
+	if key.Matches(msg, d.keys.Open) {
 		if len(entries) == 0 {
 			return d, nil
 		}
@@ -330,12 +318,16 @@ func (d Drive) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		}
 		path := entry.Path
 		d.index = 0
+		d.syncEntryList()
 		return d, d.loadCmd(path)
+	}
+	switch {
 	case key.Matches(msg, d.keys.Back):
 		if filepath.Clean(d.path) == filepath.Clean(d.store.DriveRoot()) {
 			return d, nil
 		}
 		d.index = 0
+		d.syncEntryList()
 		return d, d.loadCmd(filepath.Dir(d.path))
 	case key.Matches(msg, d.keys.Refresh):
 		return d, d.loadCmd(d.path)
@@ -350,6 +342,7 @@ func (d Drive) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		d.filtering = true
 		d.filter = ""
 		d.index = 0
+		d.syncEntryList()
 	case key.Matches(msg, d.keys.Details):
 		d.details = !d.details
 	case key.Matches(msg, d.keys.Upload):
@@ -374,6 +367,13 @@ func (d Drive) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			return d, nil
 		}
 		d.confirm = "Delete " + entries[d.index].Name + "?"
+	default:
+		d.ensureEntryList(entries)
+		updated, cmd := d.entryList.Update(msg)
+		d.entryList = updated
+		d.index = d.entryList.GlobalIndex()
+		d.clampIndex()
+		return d, cmd
 	}
 	return d, nil
 }
@@ -420,6 +420,7 @@ func (d Drive) handleFilterKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			d.index = 0
 		}
 	}
+	d.syncEntryList()
 	return d, nil
 }
 
@@ -602,10 +603,10 @@ func (d Drive) deleteCmd() tea.Cmd {
 
 func (d Drive) selectedEntry() (drivestore.Entry, bool) {
 	entries := d.visibleEntries()
-	if len(entries) == 0 || d.index < 0 || d.index >= len(entries) {
+	if len(entries) == 0 {
 		return drivestore.Entry{}, false
 	}
-	return entries[d.index], true
+	return entries[d.clampedEntryIndex(entries)], true
 }
 
 func (d Drive) visibleEntries() []drivestore.Entry {
@@ -620,6 +621,92 @@ func (d Drive) visibleEntries() []drivestore.Entry {
 		}
 	}
 	return out
+}
+
+func (d Drive) renderEntryList(entries []drivestore.Entry, width, height int) string {
+	d.ensureEntryList(entries)
+	d.entryList.SetSize(width, height)
+	return d.entryList.View()
+}
+
+func (d *Drive) ensureEntryList(entries []drivestore.Entry) {
+	if len(d.entryList.Items()) == len(entries) {
+		d.entryList.Select(d.clampedEntryIndex(entries))
+		return
+	}
+	d.syncEntryList()
+}
+
+func (d *Drive) syncEntryList() {
+	entries := d.visibleEntries()
+	d.index = d.clampedEntryIndex(entries)
+	d.entryList = newDriveList(entries, d.index, d.entryList.Width(), d.entryList.Height())
+}
+
+func (d *Drive) clampIndex() {
+	d.index = d.clampedEntryIndex(d.visibleEntries())
+}
+
+func (d Drive) clampedEntryIndex(entries []drivestore.Entry) int {
+	if d.index < 0 || len(entries) == 0 {
+		return 0
+	}
+	if d.index >= len(entries) {
+		return len(entries) - 1
+	}
+	return d.index
+}
+
+func newDriveList(entries []drivestore.Entry, selected, width, height int) list.Model {
+	items := make([]list.Item, 0, len(entries))
+	for _, entry := range entries {
+		items = append(items, driveListItem{entry: entry})
+	}
+	m := list.New(items, driveListDelegate{}, width, height)
+	m.SetShowTitle(false)
+	m.SetShowFilter(false)
+	m.SetFilteringEnabled(false)
+	m.SetShowStatusBar(false)
+	m.SetShowHelp(false)
+	m.DisableQuitKeybindings()
+	if len(items) > 0 {
+		if selected < 0 {
+			selected = 0
+		}
+		if selected >= len(items) {
+			selected = len(items) - 1
+		}
+		m.Select(selected)
+	}
+	return m
+}
+
+type driveListDelegate struct{}
+
+func (d driveListDelegate) Height() int  { return 1 }
+func (d driveListDelegate) Spacing() int { return 0 }
+func (d driveListDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d driveListDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	driveItem, ok := item.(driveListItem)
+	if !ok {
+		return
+	}
+	entry := driveItem.entry
+	cursor := "  "
+	if index == m.Index() {
+		cursor = "> "
+	}
+	kind := "file"
+	status := ""
+	if entry.Kind == "folder" {
+		kind = "dir "
+	} else if !entry.Cached {
+		status = " remote-only"
+	}
+	_, _ = io.WriteString(w, padRight(fmt.Sprintf("%s%s  %s%s", cursor, kind, entry.Name, status), m.Width()))
 }
 
 func (d Drive) promptLabel() string {

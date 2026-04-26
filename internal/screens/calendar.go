@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
@@ -72,6 +74,7 @@ type Calendar struct {
 	allItems       []calendarstore.OccurrenceMeta
 	items          []calendarstore.OccurrenceMeta
 	calendars      []calendarstore.CalendarMeta
+	calendarList   list.Model
 	rangeStart     time.Time
 	rangeEnd       time.Time
 	mode           calendarViewMode
@@ -150,6 +153,14 @@ type calendarFormData struct {
 	Position string
 }
 
+type calendarListItem struct {
+	meta calendarstore.CalendarMeta
+}
+
+func (i calendarListItem) FilterValue() string {
+	return strings.Join([]string{i.meta.Name, i.meta.Color, i.meta.TimeZone, i.meta.Source, strconv.FormatInt(i.meta.RemoteID, 10)}, " ")
+}
+
 type calendarLoadedMsg struct {
 	items        []calendarstore.OccurrenceMeta
 	calendars    []calendarstore.CalendarMeta
@@ -174,7 +185,7 @@ type calendarActionFinishedMsg struct {
 type CalendarActionMsg struct{ Action string }
 
 func NewCalendar(store calendarstore.Store, sync CalendarSyncFunc) Calendar {
-	return Calendar{store: store, sync: sync, loading: true, keys: DefaultCalendarKeyMap()}
+	return Calendar{store: store, sync: sync, loading: true, keys: DefaultCalendarKeyMap(), calendarList: newCalendarList(nil, 0, 0, 0)}
 }
 
 func (c Calendar) WithActions(create CreateCalendarEventFunc, update UpdateCalendarEventFunc, delete DeleteCalendarEventFunc) Calendar {
@@ -241,6 +252,7 @@ func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		if msg.err == nil {
 			c.allItems = msg.items
 			c.calendars = msg.calendars
+			c.syncCalendarList()
 			c.lastSynced = msg.lastSynced
 			c.cachedEvents = msg.cachedEvents
 			c.applyAgendaFilter()
@@ -253,6 +265,7 @@ func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			c.err = nil
 			c.allItems = msg.loaded.items
 			c.calendars = msg.loaded.calendars
+			c.syncCalendarList()
 			c.lastSynced = msg.loaded.lastSynced
 			c.cachedEvents = msg.loaded.cachedEvents
 			c.applyAgendaFilter()
@@ -280,6 +293,7 @@ func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		c.status = msg.status
 		c.allItems = msg.loaded.items
 		c.calendars = msg.loaded.calendars
+		c.syncCalendarList()
 		c.invitation = msg.invitation
 		if msg.invitation != nil {
 			c.detail = true
@@ -346,7 +360,7 @@ func (c Calendar) View(width, height int) string {
 	}
 	b.WriteString("\n")
 	if c.mode == calendarViewCalendars {
-		b.WriteString(c.calendarListView())
+		b.WriteString(c.calendarListView(width, max(1, height-8)))
 		return style.Render(b.String())
 	}
 	if c.detail {
@@ -639,13 +653,20 @@ func (c Calendar) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		}
 		return c, nil
 	}
-	if key.Matches(msg, c.keys.Up) && c.mode == calendarViewCalendars && c.calendarIndex > 0 {
-		c.calendarIndex--
-		return c, nil
-	}
-	if key.Matches(msg, c.keys.Down) && c.mode == calendarViewCalendars && c.calendarIndex < len(c.calendars)-1 {
-		c.calendarIndex++
-		return c, nil
+	if c.mode == calendarViewCalendars {
+		if key.Matches(msg, c.keys.Back) {
+			c.mode = calendarViewAgenda
+			c.status = "Showing agenda"
+			return c, nil
+		}
+		c.ensureCalendarList()
+		updated, cmd := c.calendarList.Update(msg)
+		c.calendarList = updated
+		c.calendarIndex = c.calendarList.GlobalIndex()
+		c.clampCalendarIndex()
+		if cmd != nil {
+			return c, cmd
+		}
 	}
 	if key.Matches(msg, c.keys.Up) && c.mode == calendarViewAgenda && c.index > 0 {
 		c.index--
@@ -661,11 +682,6 @@ func (c Calendar) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	}
 	if key.Matches(msg, c.keys.Back) && c.detail {
 		c.detail = false
-		return c, nil
-	}
-	if key.Matches(msg, c.keys.Back) && c.mode == calendarViewCalendars {
-		c.mode = calendarViewAgenda
-		c.status = "Showing agenda"
 		return c, nil
 	}
 	if key.Matches(msg, c.keys.Refresh) {
@@ -1282,23 +1298,92 @@ func emptyDash(value string) string {
 	return value
 }
 
-func (c Calendar) calendarListView() string {
+func (c Calendar) calendarListView(width, height int) string {
 	if len(c.calendars) == 0 {
 		return "No calendars are cached. Press S to sync remote calendars, or press n to create one. If sync fails, run `telex auth login` and verify Settings.\n"
 	}
+	c.ensureCalendarList()
+	c.calendarList.SetSize(width, height)
 	var b strings.Builder
-	for i, item := range c.calendars {
-		cursor := "  "
-		if i == c.calendarIndex {
-			cursor = "> "
-		}
-		b.WriteString(fmt.Sprintf("%s%s  %s  %s  pos:%d  %s\n", cursor, item.Name, item.Color, item.TimeZone, item.Position, item.Source))
-	}
+	b.WriteString(c.calendarList.View())
 	if item, ok := c.selectedCalendar(); ok {
 		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf("Calendar ID: %d\nName: %s\nColor: %s\nTime zone: %s\nPosition: %d\nSource: %s\n", item.RemoteID, item.Name, item.Color, item.TimeZone, item.Position, item.Source))
 	}
 	return b.String()
+}
+
+func (c *Calendar) ensureCalendarList() {
+	if len(c.calendarList.Items()) == len(c.calendars) {
+		c.calendarList.Select(c.clampedCalendarIndex())
+		return
+	}
+	c.syncCalendarList()
+}
+
+func (c *Calendar) syncCalendarList() {
+	c.clampCalendarIndex()
+	c.calendarList = newCalendarList(c.calendars, c.calendarIndex, c.calendarList.Width(), c.calendarList.Height())
+}
+
+func (c *Calendar) clampCalendarIndex() {
+	c.calendarIndex = c.clampedCalendarIndex()
+}
+
+func (c Calendar) clampedCalendarIndex() int {
+	if c.calendarIndex < 0 || len(c.calendars) == 0 {
+		return 0
+	}
+	if c.calendarIndex >= len(c.calendars) {
+		return len(c.calendars) - 1
+	}
+	return c.calendarIndex
+}
+
+func newCalendarList(calendars []calendarstore.CalendarMeta, selected, width, height int) list.Model {
+	items := make([]list.Item, 0, len(calendars))
+	for _, cal := range calendars {
+		items = append(items, calendarListItem{meta: cal})
+	}
+	m := list.New(items, calendarListDelegate{}, width, height)
+	m.SetShowTitle(false)
+	m.SetShowFilter(false)
+	m.SetFilteringEnabled(false)
+	m.SetShowStatusBar(false)
+	m.SetShowHelp(false)
+	m.DisableQuitKeybindings()
+	if len(items) > 0 {
+		if selected < 0 {
+			selected = 0
+		}
+		if selected >= len(items) {
+			selected = len(items) - 1
+		}
+		m.Select(selected)
+	}
+	return m
+}
+
+type calendarListDelegate struct{}
+
+func (d calendarListDelegate) Height() int  { return 1 }
+func (d calendarListDelegate) Spacing() int { return 0 }
+func (d calendarListDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d calendarListDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	calendarItem, ok := item.(calendarListItem)
+	if !ok {
+		return
+	}
+	cal := calendarItem.meta
+	cursor := "  "
+	if index == m.Index() {
+		cursor = "> "
+	}
+	line := fmt.Sprintf("%s%s  %s  %s  pos:%d  %s", cursor, cal.Name, cal.Color, cal.TimeZone, cal.Position, cal.Source)
+	_, _ = io.WriteString(w, padRight(line, m.Width()))
 }
 
 func (c Calendar) agendaCalendarMarker(calendarID int64) string {
@@ -1589,10 +1674,10 @@ func (c Calendar) selected() (calendarstore.OccurrenceMeta, bool) {
 }
 
 func (c Calendar) selectedCalendar() (calendarstore.CalendarMeta, bool) {
-	if c.calendarIndex < 0 || c.calendarIndex >= len(c.calendars) {
+	if len(c.calendars) == 0 {
 		return calendarstore.CalendarMeta{}, false
 	}
-	return c.calendars[c.calendarIndex], true
+	return c.calendars[c.clampedCalendarIndex()], true
 }
 
 func (c Calendar) selectedInvitationMessageID() int64 {

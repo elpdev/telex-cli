@@ -80,6 +80,31 @@ func TestNotesScreenFilter(t *testing.T) {
 	}
 }
 
+func TestNotesScreenUsesListNavigation(t *testing.T) {
+	store := testNotesStore(t)
+	screen := NewNotes(store, nil)
+	updated, _ := screen.Update(screen.load(0))
+	screen = updated.(Notes)
+
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnd}))
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	screen = updated.(Notes)
+	if screen.index != len(screen.visibleRows())-1 {
+		t.Fatalf("index = %d, want last row", screen.index)
+	}
+	row, ok := screen.selectedRow()
+	if !ok || row.Note == nil || row.Note.Meta.Title != "Cached Note" {
+		t.Fatalf("selected row = %#v ok = %v", row, ok)
+	}
+
+	view := stripNotesANSI(screen.View(80, 20))
+	if !strings.Contains(view, ">   Cached Note") {
+		t.Fatalf("view missing selected cached note:\n%s", view)
+	}
+}
+
 func TestNotesScreenSyncRefreshesList(t *testing.T) {
 	store := notestore.New(t.TempDir())
 	rootID := int64(1)

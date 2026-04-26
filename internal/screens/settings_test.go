@@ -98,6 +98,29 @@ func TestSettingsThemeSelectEnterAndEsc(t *testing.T) {
 	}
 }
 
+func TestSettingsThemeSelectUsesListNavigation(t *testing.T) {
+	s := newTestSettings()
+	s, _ = runUpdate(t, s, keyMsg(tea.Key{Code: tea.KeyEnter}))
+
+	s, msg := runUpdate(t, s, keyMsg(tea.Key{Code: tea.KeyEnd}))
+	preview, ok := msg.(SettingsThemePreviewMsg)
+	if !ok {
+		t.Fatalf("expected SettingsThemePreviewMsg on end, got %T", msg)
+	}
+	if preview.Name != "Miami" {
+		t.Fatalf("preview name = %q, want %q", preview.Name, "Miami")
+	}
+
+	_, msg = runUpdate(t, s, keyMsg(tea.Key{Code: tea.KeyEnter}))
+	changed, ok := msg.(SettingsThemeChangedMsg)
+	if !ok {
+		t.Fatalf("expected SettingsThemeChangedMsg on enter, got %T", msg)
+	}
+	if changed.Name != "Miami" {
+		t.Fatalf("changed name = %q, want %q", changed.Name, "Miami")
+	}
+}
+
 func TestSettingsDriveSyncCycles(t *testing.T) {
 	s := newTestSettings()
 	// Cursor: theme, sidebar, instance, status, mail-admin, sign-out, data-dir, cache-size, drive-sync (8 downs)

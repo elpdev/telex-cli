@@ -131,6 +131,35 @@ func TestDriveScreenLocalFilterAndDetails(t *testing.T) {
 	}
 }
 
+func TestDriveScreenUsesListNavigation(t *testing.T) {
+	store := drivestore.New(t.TempDir())
+	if _, err := store.StoreFile("", drive.File{ID: 1, Filename: "alpha.txt"}, nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StoreFile("", drive.File{ID: 2, Filename: "beta.txt"}, nil, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	screen := NewDrive(store, nil)
+	updated, _ := screen.Update(screen.load(store.DriveRoot()))
+	screen = updated.(Drive)
+
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnd}))
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	screen = updated.(Drive)
+	if screen.index != len(screen.visibleEntries())-1 {
+		t.Fatalf("index = %d, want last entry", screen.index)
+	}
+	entry, ok := screen.selectedEntry()
+	if !ok || entry.Name != "beta.txt" {
+		t.Fatalf("entry = %#v ok = %v", entry, ok)
+	}
+	if !strings.Contains(screen.View(80, 20), "> file  beta.txt") {
+		t.Fatalf("view missing selected beta entry:\n%s", screen.View(80, 20))
+	}
+}
+
 func TestDriveScreenUploadPickerSelectionInvokesUpload(t *testing.T) {
 	store := drivestore.New(t.TempDir())
 	source := t.TempDir() + "/upload.txt"

@@ -21,6 +21,7 @@ require (
 require (
 	charm.land/glamour/v2 v2.0.0 // indirect
 	github.com/bits-and-blooms/bitset v1.24.4 // indirect
+	github.com/sahilm/fuzzy v0.1.1 // indirect
 	golang.org/x/image v0.39.0 // indirect
 )
 

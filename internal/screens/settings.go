@@ -1,9 +1,11 @@
 package screens
 
 import (
+	"io"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/elpdev/telex-cli/internal/theme"
@@ -114,11 +116,18 @@ type Settings struct {
 
 	cursor     int
 	mode       settingsMode
-	themeIdx   int
+	themeList  list.Model
 	preTheme   string
 	confirming string
 	keys       settingsKeyMap
 }
+
+type settingsThemeItem struct {
+	name string
+	was  bool
+}
+
+func (i settingsThemeItem) FilterValue() string { return i.name }
 
 type settingsKeyMap struct {
 	Up    key.Binding
@@ -138,11 +147,12 @@ func defaultSettingsKeyMap() settingsKeyMap {
 
 func NewSettings(state SettingsState, th theme.Theme, themes []theme.Theme, actions SettingsActions) Settings {
 	return Settings{
-		state:   state,
-		th:      th,
-		themes:  themes,
-		actions: actions,
-		keys:    defaultSettingsKeyMap(),
+		state:     state,
+		th:        th,
+		themes:    themes,
+		actions:   actions,
+		themeList: newSettingsThemeList(themes, state.ThemeName, state.ThemeName, th, 0, 0),
+		keys:      defaultSettingsKeyMap(),
 	}
 }
 
@@ -157,11 +167,13 @@ func (s Settings) Reconfigure(state SettingsState, th theme.Theme, themes []them
 	if s.cursor >= len(focusableSettingsRowIdx) {
 		s.cursor = len(focusableSettingsRowIdx) - 1
 	}
+	selected := state.ThemeName
 	if s.mode == settingsModeThemes {
-		if s.themeIdx >= len(s.themes) {
-			s.themeIdx = 0
+		if name, ok := s.selectedThemeName(); ok {
+			selected = name
 		}
 	}
+	s.themeList = newSettingsThemeList(s.themes, selected, s.preTheme, s.th, s.themeList.Width(), s.themeList.Height())
 	return s
 }
 
@@ -207,7 +219,7 @@ func (s Settings) activateRow() (Screen, tea.Cmd) {
 		}
 		s.mode = settingsModeThemes
 		s.preTheme = s.state.ThemeName
-		s.themeIdx = s.themeIndexByName(s.state.ThemeName)
+		s.themeList = newSettingsThemeList(s.themes, s.state.ThemeName, s.preTheme, s.th, s.themeList.Width(), s.themeList.Height())
 		return s, nil
 	case "sidebar-visible":
 		next := !s.state.SidebarVisible
@@ -246,23 +258,11 @@ func (s Settings) activateRow() (Screen, tea.Cmd) {
 
 func (s Settings) updateThemeSelect(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	switch {
-	case key.Matches(msg, s.keys.Up):
-		if s.themeIdx > 0 {
-			s.themeIdx--
-			return s, s.previewThemeCmd()
-		}
-		return s, nil
-	case key.Matches(msg, s.keys.Down):
-		if s.themeIdx < len(s.themes)-1 {
-			s.themeIdx++
-			return s, s.previewThemeCmd()
-		}
-		return s, nil
 	case key.Matches(msg, s.keys.Enter):
-		if len(s.themes) == 0 {
+		name, ok := s.selectedThemeName()
+		if !ok {
 			return s, nil
 		}
-		name := s.themes[s.themeIdx].Name
 		s.mode = settingsModeNormal
 		s.preTheme = ""
 		return s, func() tea.Msg { return SettingsThemeChangedMsg{Name: name} }
@@ -272,24 +272,30 @@ func (s Settings) updateThemeSelect(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		s.preTheme = ""
 		return s, func() tea.Msg { return SettingsThemeCancelMsg{Name: original} }
 	}
-	return s, nil
+	previous, _ := s.selectedThemeName()
+	updated, cmd := s.themeList.Update(msg)
+	s.themeList = updated
+	current, _ := s.selectedThemeName()
+	if current != "" && current != previous {
+		return s, tea.Batch(cmd, s.previewThemeCmd())
+	}
+	return s, cmd
 }
 
 func (s Settings) previewThemeCmd() tea.Cmd {
-	if len(s.themes) == 0 {
+	name, ok := s.selectedThemeName()
+	if !ok {
 		return nil
 	}
-	name := s.themes[s.themeIdx].Name
 	return func() tea.Msg { return SettingsThemePreviewMsg{Name: name} }
 }
 
-func (s Settings) themeIndexByName(name string) int {
-	for i, t := range s.themes {
-		if t.Name == name {
-			return i
-		}
+func (s Settings) selectedThemeName() (string, bool) {
+	item, ok := s.themeList.SelectedItem().(settingsThemeItem)
+	if !ok {
+		return "", false
 	}
-	return 0
+	return item.name, true
 }
 
 func nextDriveSyncMode(current string) string {
@@ -411,25 +417,62 @@ func (s Settings) toggleValue(id string) bool {
 }
 
 func (s Settings) themeSelectView(width, height int) string {
+	s.themeList.SetSize(width, max(1, height-4))
 	var b strings.Builder
 	b.WriteString(s.th.Title.Render("Theme"))
 	b.WriteString("\n")
 	b.WriteString(s.th.Muted.Render("Move to preview · enter selects · esc reverts"))
 	b.WriteString("\n\n")
-	for i, t := range s.themes {
-		marker := "  "
-		label := t.Name
-		if t.Name == s.preTheme {
-			label += "  (was)"
-		}
-		if i == s.themeIdx {
-			marker = "▸ "
-			b.WriteString(s.th.Selected.Render(padRight(marker+label, width)) + "\n")
-		} else {
-			b.WriteString(s.th.Text.Render(marker+label) + "\n")
+	b.WriteString(s.themeList.View())
+	return lipgloss.NewStyle().Width(width).Height(height).Render(b.String())
+}
+
+func newSettingsThemeList(themes []theme.Theme, selected, original string, th theme.Theme, width, height int) list.Model {
+	items := make([]list.Item, 0, len(themes))
+	selectedIdx := 0
+	for i, t := range themes {
+		items = append(items, settingsThemeItem{name: t.Name, was: t.Name == original})
+		if t.Name == selected {
+			selectedIdx = i
 		}
 	}
-	return lipgloss.NewStyle().Width(width).Height(height).Render(b.String())
+
+	m := list.New(items, settingsThemeDelegate{th: th}, width, height)
+	m.SetShowTitle(false)
+	m.SetShowFilter(false)
+	m.SetFilteringEnabled(false)
+	m.SetShowStatusBar(false)
+	m.SetShowHelp(false)
+	m.DisableQuitKeybindings()
+	m.Select(selectedIdx)
+	return m
+}
+
+type settingsThemeDelegate struct{ th theme.Theme }
+
+func (d settingsThemeDelegate) Height() int  { return 1 }
+func (d settingsThemeDelegate) Spacing() int { return 0 }
+func (d settingsThemeDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d settingsThemeDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	themeItem, ok := item.(settingsThemeItem)
+	if !ok {
+		return
+	}
+	marker := "  "
+	label := themeItem.name
+	if themeItem.was {
+		label += "  (was)"
+	}
+	line := padRight(marker+label, m.Width())
+	if index == m.Index() {
+		line = padRight("▸ "+label, m.Width())
+		_, _ = io.WriteString(w, d.th.Selected.Render(line))
+		return
+	}
+	_, _ = io.WriteString(w, d.th.Text.Render(line))
 }
 
 func valueOrDash(value string) string {

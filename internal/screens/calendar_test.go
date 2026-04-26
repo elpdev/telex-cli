@@ -37,6 +37,39 @@ func TestCalendarBackFromCalendarsReturnsToAgenda(t *testing.T) {
 	}
 }
 
+func TestCalendarCalendarsViewUsesListNavigation(t *testing.T) {
+	screen := Calendar{
+		mode: calendarViewCalendars,
+		calendars: []calendarstore.CalendarMeta{
+			{RemoteID: 10, Name: "Work", Color: "#22c55e", TimeZone: "UTC", Position: 1, Source: "telex"},
+			{RemoteID: 20, Name: "Personal", Color: "#0ea5e9", TimeZone: "America/New_York", Position: 2, Source: "telex"},
+			{RemoteID: 30, Name: "Shared", Color: "#f97316", TimeZone: "Europe/Berlin", Position: 3, Source: "ics"},
+		},
+		keys: DefaultCalendarKeyMap(),
+	}
+	screen.syncCalendarList()
+
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnd}))
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	screen = updated.(Calendar)
+	if screen.calendarIndex != 2 {
+		t.Fatalf("calendarIndex = %d, want 2", screen.calendarIndex)
+	}
+	selected, ok := screen.selectedCalendar()
+	if !ok || selected.Name != "Shared" {
+		t.Fatalf("selected = %#v ok = %v", selected, ok)
+	}
+
+	view := screen.View(100, 20)
+	for _, want := range []string{"> Shared", "Calendar ID: 30", "Europe/Berlin"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("calendar list view missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestCalendarAgendaFilterMatchesCalendarStatusSourceAndText(t *testing.T) {
 	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
 	screen := Calendar{

@@ -3,6 +3,7 @@ package screens
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/elpdev/telex-cli/internal/emailtext"
@@ -39,6 +41,7 @@ type Notes struct {
 	folder       *notes.FolderTree
 	notes        []notestore.CachedNote
 	rows         []noteRow
+	rowList      list.Model
 	index        int
 	detail       *notestore.CachedNote
 	detailScroll int
@@ -76,6 +79,12 @@ type noteRow struct {
 	Note   *notestore.CachedNote
 }
 
+type noteListItem struct {
+	row noteRow
+}
+
+func (i noteListItem) FilterValue() string { return i.row.Name }
+
 type notesLoadedMsg struct {
 	tree   *notes.FolderTree
 	folder *notes.FolderTree
@@ -98,7 +107,7 @@ type noteActionFinishedMsg struct {
 type NotesActionMsg struct{ Action string }
 
 func NewNotes(store notestore.Store, sync NotesSyncFunc) Notes {
-	return Notes{store: store, sync: sync, loading: true, keys: DefaultNotesKeyMap()}
+	return Notes{store: store, sync: sync, loading: true, keys: DefaultNotesKeyMap(), rowList: newNotesList(nil, 0, 0, 0)}
 }
 
 func (n Notes) WithActions(create CreateNoteFunc, update UpdateNoteFunc, delete DeleteNoteFunc) Notes {
@@ -138,6 +147,7 @@ func (n Notes) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			n.notes = msg.notes
 			n.rows = n.buildRows()
 			n.clampIndex()
+			n.syncNoteList()
 		}
 		return n, nil
 	case notesSyncedMsg:
@@ -150,6 +160,7 @@ func (n Notes) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			n.notes = msg.loaded.notes
 			n.rows = n.buildRows()
 			n.clampIndex()
+			n.syncNoteList()
 		} else {
 			n.status = ""
 		}
@@ -167,6 +178,7 @@ func (n Notes) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		n.notes = msg.loaded.notes
 		n.rows = n.buildRows()
 		n.clampIndex()
+		n.syncNoteList()
 		return n, nil
 	case NotesActionMsg:
 		return n.handleAction(msg.Action)
@@ -224,8 +236,10 @@ func (n Notes) View(width, height int) string {
 		b.WriteString("No cached notes found. Press S to sync or n to create a note.\n")
 		return style.Render(b.String())
 	}
+	headerLines := strings.Count(b.String(), "\n")
+	bodyHeight := max(1, height-headerLines)
 	listWidth, previewWidth := notesPaneWidths(width)
-	listCol := renderNotesList(rows, n.index, listWidth)
+	listCol := n.renderNotesList(rows, listWidth, bodyHeight)
 	if previewWidth <= 0 {
 		b.WriteString(listCol)
 		return style.Render(b.String())
@@ -259,12 +273,10 @@ func notesPaneWidths(width int) (listWidth, previewWidth int) {
 	return listWidth, previewWidth
 }
 
-func renderNotesList(rows []noteRow, index, width int) string {
-	var b strings.Builder
-	for i, row := range rows {
-		b.WriteString(formatNotesRow(row, i == index, width) + "\n")
-	}
-	return b.String()
+func (n Notes) renderNotesList(rows []noteRow, width, height int) string {
+	n.ensureNoteList(rows)
+	n.rowList.SetSize(width, height)
+	return n.rowList.View()
 }
 
 func (n Notes) renderNotesPreview(rows []noteRow, width int) string {
@@ -368,15 +380,18 @@ func (n Notes) handleAction(action string) (Screen, tea.Cmd) {
 		n.editing = true
 		n.filter = ""
 		n.index = 0
+		n.syncNoteList()
 	case "toggle-sort":
 		n.sortMode = nextSortMode(n.sortMode)
 		n.rows = n.buildRows()
 		n.index = 0
+		n.syncNoteList()
 		n.status = "Sort: " + sortModeLabel(n.sortMode)
 	case "toggle-flat":
 		n.flat = !n.flat
 		n.rows = n.buildRows()
 		n.index = 0
+		n.syncNoteList()
 		if n.flat {
 			n.status = "Flat view: all notes"
 		} else {
@@ -434,22 +449,14 @@ func (n Notes) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return n, nil
 	}
 	rows := n.visibleRows()
-	switch {
-	case key.Matches(msg, n.keys.Up):
-		if n.index > 0 {
-			n.index--
-		}
-	case key.Matches(msg, n.keys.Down):
-		if n.index < len(rows)-1 {
-			n.index++
-		}
-	case key.Matches(msg, n.keys.Open):
+	if key.Matches(msg, n.keys.Open) {
 		if len(rows) == 0 {
 			return n, nil
 		}
 		row := rows[n.index]
 		if row.Folder != nil {
 			n.index = 0
+			n.syncNoteList()
 			return n, n.loadCmd(row.Folder.ID)
 		}
 		if row.Note != nil {
@@ -457,9 +464,13 @@ func (n Notes) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			n.detail = &note
 			n.detailScroll = 0
 		}
+		return n, nil
+	}
+	switch {
 	case key.Matches(msg, n.keys.Back):
 		if n.folder != nil && n.folder.ParentID != nil {
 			n.index = 0
+			n.syncNoteList()
 			return n, n.loadCmd(*n.folder.ParentID)
 		}
 	case key.Matches(msg, n.keys.Refresh):
@@ -475,6 +486,7 @@ func (n Notes) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		n.editing = true
 		n.filter = ""
 		n.index = 0
+		n.syncNoteList()
 	case key.Matches(msg, n.keys.New):
 		return n, n.createCmd()
 	case key.Matches(msg, n.keys.Edit):
@@ -487,6 +499,13 @@ func (n Notes) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return n.handleAction("toggle-sort")
 	case key.Matches(msg, n.keys.Flat):
 		return n.handleAction("toggle-flat")
+	default:
+		n.ensureNoteList(rows)
+		updated, cmd := n.rowList.Update(msg)
+		n.rowList = updated
+		n.index = n.rowList.GlobalIndex()
+		n.clampIndex()
+		return n, cmd
 	}
 	return n, nil
 }
@@ -613,6 +632,7 @@ func (n Notes) handleFilterKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			n.index = 0
 		}
 	}
+	n.syncNoteList()
 	return n, nil
 }
 
@@ -722,6 +742,73 @@ func (n *Notes) clampIndex() {
 	if n.index >= len(n.visibleRows()) {
 		n.index = maxNotesIndex(len(n.visibleRows()))
 	}
+	if n.index < 0 {
+		n.index = 0
+	}
+}
+
+func (n *Notes) ensureNoteList(rows []noteRow) {
+	if len(n.rowList.Items()) == len(rows) {
+		n.rowList.Select(n.clampedRowIndex(rows))
+		return
+	}
+	n.syncNoteList()
+}
+
+func (n *Notes) syncNoteList() {
+	rows := n.visibleRows()
+	n.index = n.clampedRowIndex(rows)
+	n.rowList = newNotesList(rows, n.index, n.rowList.Width(), n.rowList.Height())
+}
+
+func (n Notes) clampedRowIndex(rows []noteRow) int {
+	if n.index < 0 || len(rows) == 0 {
+		return 0
+	}
+	if n.index >= len(rows) {
+		return len(rows) - 1
+	}
+	return n.index
+}
+
+func newNotesList(rows []noteRow, selected, width, height int) list.Model {
+	items := make([]list.Item, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, noteListItem{row: row})
+	}
+	m := list.New(items, noteListDelegate{}, width, height)
+	m.SetShowTitle(false)
+	m.SetShowFilter(false)
+	m.SetFilteringEnabled(false)
+	m.SetShowStatusBar(false)
+	m.SetShowHelp(false)
+	m.DisableQuitKeybindings()
+	if len(items) > 0 {
+		if selected < 0 {
+			selected = 0
+		}
+		if selected >= len(items) {
+			selected = len(items) - 1
+		}
+		m.Select(selected)
+	}
+	return m
+}
+
+type noteListDelegate struct{}
+
+func (d noteListDelegate) Height() int  { return 1 }
+func (d noteListDelegate) Spacing() int { return 0 }
+func (d noteListDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d noteListDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	noteItem, ok := item.(noteListItem)
+	if !ok {
+		return
+	}
+	_, _ = io.WriteString(w, formatNotesRow(noteItem.row, index == m.Index(), m.Width()))
 }
 
 func (n Notes) selectedRow() (noteRow, bool) {
