@@ -56,6 +56,9 @@ func TestCalendarDetailShowsLinkedMessages(t *testing.T) {
 	if err := store.StoreEvent(event, startsAt); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.StoreOccurrences([]calendar.CalendarOccurrence{{StartsAt: event.StartsAt, EndsAt: event.EndsAt, Event: event}}, startsAt); err != nil {
+		t.Fatal(err)
+	}
 
 	screen := Calendar{store: store, items: []calendarstore.OccurrenceMeta{{EventID: event.ID, CalendarID: event.CalendarID, Title: event.Title, StartsAt: event.StartsAt, EndsAt: event.EndsAt}}}
 	view := screen.detailView()
@@ -63,6 +66,113 @@ func TestCalendarDetailShowsLinkedMessages(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("detail view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestCalendarDetailShowsInvitationMetadata(t *testing.T) {
+	store := calendarstore.New(t.TempDir())
+	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
+	event := calendar.CalendarEvent{
+		ID:             9,
+		CalendarID:     1,
+		Title:          "Planning",
+		StartsAt:       startsAt,
+		EndsAt:         startsAt.Add(time.Hour),
+		Invitation:     true,
+		OrganizerName:  "Alex",
+		OrganizerEmail: "alex@example.com",
+		Attendees: []calendar.CalendarEventAttendee{{
+			Email:               "leo@example.com",
+			Name:                "Leo",
+			ParticipationStatus: "tentative",
+			ResponseRequested:   true,
+		}},
+		Links: []calendar.CalendarEventLink{{MessageID: 42, ICalMethod: "REQUEST", SequenceNumber: 3}},
+	}
+	if err := store.StoreEvent(event, startsAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreOccurrences([]calendar.CalendarOccurrence{{StartsAt: event.StartsAt, EndsAt: event.EndsAt, Event: event}}, startsAt); err != nil {
+		t.Fatal(err)
+	}
+
+	screen := Calendar{store: store, items: []calendarstore.OccurrenceMeta{{EventID: event.ID, CalendarID: event.CalendarID, Title: event.Title, StartsAt: event.StartsAt, EndsAt: event.EndsAt}}}
+	view := screen.detailView()
+	for _, want := range []string{"Invitation: true", "Organizer: Alex <alex@example.com>", "Attendee: Leo <leo@example.com> | tentative", "Invitation message: 42 | method:REQUEST | sequence:3"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("detail view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestCalendarInvitationShowLoadsDetails(t *testing.T) {
+	store := calendarstore.New(t.TempDir())
+	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
+	event := calendar.CalendarEvent{ID: 9, CalendarID: 1, Title: "Planning", StartsAt: startsAt, EndsAt: startsAt.Add(time.Hour), Links: []calendar.CalendarEventLink{{MessageID: 42}}}
+	if err := store.StoreEvent(event, startsAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreOccurrences([]calendar.CalendarOccurrence{{StartsAt: event.StartsAt, EndsAt: event.EndsAt, Event: event}}, startsAt); err != nil {
+		t.Fatal(err)
+	}
+	var gotMessageID int64
+	screen := Calendar{
+		store: store,
+		items: []calendarstore.OccurrenceMeta{{EventID: event.ID, CalendarID: event.CalendarID, Title: event.Title, StartsAt: event.StartsAt, EndsAt: event.EndsAt}},
+		showInvite: func(_ context.Context, messageID int64) (*calendar.Invitation, error) {
+			gotMessageID = messageID
+			return &calendar.Invitation{MessageID: messageID, Available: true, CalendarEvent: &event, CurrentUserAttendee: &calendar.CalendarEventAttendee{ParticipationStatus: "accepted"}}, nil
+		},
+	}
+
+	updated, cmd := screen.Update(CalendarActionMsg{Action: "invitation-show"})
+	if cmd == nil {
+		t.Fatal("expected command")
+	}
+	updated, _ = updated.Update(cmd())
+	screen = updated.(Calendar)
+	if gotMessageID != 42 {
+		t.Fatalf("message id = %d", gotMessageID)
+	}
+	if screen.invitation == nil || screen.invitation.MessageID != 42 || !screen.detail {
+		t.Fatalf("screen = %#v", screen)
+	}
+	view := screen.detailView()
+	for _, want := range []string{"Invitation details:", "Message ID: 42", "Current response: accepted"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("detail view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestCalendarInvitationRespondUsesParticipationStatus(t *testing.T) {
+	store := calendarstore.New(t.TempDir())
+	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
+	event := calendar.CalendarEvent{ID: 9, CalendarID: 1, Title: "Planning", StartsAt: startsAt, EndsAt: startsAt.Add(time.Hour), Links: []calendar.CalendarEventLink{{MessageID: 42}}}
+	if err := store.StoreEvent(event, startsAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreOccurrences([]calendar.CalendarOccurrence{{StartsAt: event.StartsAt, EndsAt: event.EndsAt, Event: event}}, startsAt); err != nil {
+		t.Fatal(err)
+	}
+	var gotStatus string
+	screen := Calendar{
+		store: store,
+		items: []calendarstore.OccurrenceMeta{{EventID: event.ID, CalendarID: event.CalendarID, Title: event.Title, StartsAt: event.StartsAt, EndsAt: event.EndsAt}},
+		respondInvite: func(_ context.Context, _ int64, input calendar.InvitationInput) (*calendar.Invitation, error) {
+			gotStatus = input.ParticipationStatus
+			return &calendar.Invitation{MessageID: 42, Available: true, CalendarEvent: &event, CurrentUserAttendee: &calendar.CalendarEventAttendee{ParticipationStatus: input.ParticipationStatus}}, nil
+		},
+	}
+
+	updated, cmd := screen.Update(CalendarActionMsg{Action: "invitation-declined"})
+	if cmd == nil {
+		t.Fatal("expected command")
+	}
+	updated, _ = updated.Update(cmd())
+	screen = updated.(Calendar)
+	if gotStatus != "declined" || screen.status != "Responded declined" {
+		t.Fatalf("status = %q screen status = %q", gotStatus, screen.status)
 	}
 }
 

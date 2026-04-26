@@ -36,11 +36,12 @@ type Context struct {
 }
 
 type Selection struct {
-	Kind     string
-	Subject  string
-	Mailbox  string
-	IsDraft  bool
-	HasItems bool
+	Kind          string
+	Subject       string
+	Mailbox       string
+	IsDraft       bool
+	HasItems      bool
+	HasInvitation bool
 }
 
 func (c Command) IsAvailable(ctx Context) bool {

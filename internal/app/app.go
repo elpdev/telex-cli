@@ -145,7 +145,7 @@ func (m *Model) registerScreens() {
 	m.screens["home"] = m.buildHome()
 	m.screens["mail"] = screens.NewMailWithActions(mailstore.New(m.dataPath), m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody).WithJunkActions(m.junkMessage, m.notJunkMessage).WithSenderPolicyActions(m.blockSender, m.unblockSender, m.blockDomain, m.unblockDomain, m.trustSender, m.untrustSender)
 	m.screens["mail-admin"] = screens.NewMailAdmin(m.loadMailAdmin).WithActions(m.saveDomain, m.deleteDomain, m.validateDomainOutbound, m.saveInbox, m.deleteInbox, m.inboxPipeline)
-	m.screens["calendar"] = screens.NewCalendar(calendarstore.New(m.dataPath), m.syncCalendar).WithActions(m.createCalendarEvent, m.updateCalendarEvent, m.deleteCalendarEvent).WithCalendarActions(m.createCalendar, m.updateCalendar, m.deleteCalendar).WithImportICS(m.importCalendarICS)
+	m.screens["calendar"] = screens.NewCalendar(calendarstore.New(m.dataPath), m.syncCalendar).WithActions(m.createCalendarEvent, m.updateCalendarEvent, m.deleteCalendarEvent).WithCalendarActions(m.createCalendar, m.updateCalendar, m.deleteCalendar).WithImportICS(m.importCalendarICS).WithInvitationActions(m.showCalendarInvitation, m.syncCalendarInvitation, m.respondCalendarInvitation)
 	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive).WithActions(m.downloadDriveFile, m.openDriveFile, m.uploadDriveFile, m.createDriveFolder, m.renameDriveFile, m.renameDriveFolder, m.deleteDriveFile, m.deleteDriveFolder)
 	m.screens["notes"] = screens.NewNotes(notestore.New(m.dataPath), m.syncNotes).WithActions(m.createNote, m.updateNote, m.deleteNote)
 	m.screens["settings"] = m.buildSettings()
@@ -961,6 +961,49 @@ func (m *Model) importCalendarICS(ctx context.Context, calendarID int64, path st
 	return result, err
 }
 
+func (m *Model) showCalendarInvitation(ctx context.Context, messageID int64) (*calendar.Invitation, error) {
+	service, err := m.calendarService()
+	if err != nil {
+		return nil, err
+	}
+	invite, err := service.ShowInvitation(ctx, messageID)
+	if err != nil {
+		return nil, err
+	}
+	if invite.CalendarEvent != nil {
+		if err := calendarstore.New(m.dataPath).StoreEvent(*invite.CalendarEvent, time.Now()); err != nil {
+			return nil, err
+		}
+	}
+	return invite, nil
+}
+
+func (m *Model) syncCalendarInvitation(ctx context.Context, messageID int64) (*calendar.Invitation, error) {
+	service, err := m.calendarService()
+	if err != nil {
+		return nil, err
+	}
+	invite, err := service.SyncInvitation(ctx, messageID)
+	if err != nil {
+		return nil, err
+	}
+	_, err = runCalendarSync(ctx, calendarstore.New(m.dataPath), service, calendarSyncOptions{})
+	return invite, err
+}
+
+func (m *Model) respondCalendarInvitation(ctx context.Context, messageID int64, input calendar.InvitationInput) (*calendar.Invitation, error) {
+	service, err := m.calendarService()
+	if err != nil {
+		return nil, err
+	}
+	invite, err := service.UpdateInvitation(ctx, messageID, input)
+	if err != nil {
+		return nil, err
+	}
+	_, err = runCalendarSync(ctx, calendarstore.New(m.dataPath), service, calendarSyncOptions{})
+	return invite, err
+}
+
 func (m *Model) createCalendarEvent(ctx context.Context, input calendar.CalendarEventInput) (*calendar.CalendarEvent, error) {
 	service, err := m.calendarService()
 	if err != nil {
@@ -1322,6 +1365,9 @@ func (m *Model) registerCommands() {
 	onCalendarItem := func(ctx commands.Context) bool {
 		return ctx.ActiveScreen == "calendar" && ctx.Selection != nil && ctx.Selection.Kind == "calendar-event" && ctx.Selection.HasItems
 	}
+	onCalendarInvitation := func(ctx commands.Context) bool {
+		return onCalendarItem(ctx) && ctx.Selection.HasInvitation
+	}
 	onCalendarCalendar := func(ctx commands.Context) bool {
 		return ctx.ActiveScreen == "calendar" && ctx.Selection != nil && ctx.Selection.Kind == "calendar" && ctx.Selection.HasItems
 	}
@@ -1373,6 +1419,12 @@ func (m *Model) registerCommands() {
 	m.commands.Register(commands.Command{ID: "calendar-edit", Module: commands.ModuleCalendar, Title: "Edit selected event", Description: "Edit the highlighted calendar event", Shortcut: "e", Keywords: []string{"edit", "update", "event"}, Available: onCalendarItem, Run: calendarAction("edit", false)})
 	m.commands.Register(commands.Command{ID: "calendar-today", Module: commands.ModuleCalendar, Title: "Jump to today", Description: "Move selection to the next occurrence today or later", Shortcut: "t", Keywords: []string{"today", "agenda"}, Available: onCalendar, Run: calendarAction("today", false)})
 	m.commands.Register(commands.Command{ID: "calendar-delete", Module: commands.ModuleCalendar, Title: "Delete selected event", Description: "Delete the highlighted calendar event after confirmation", Shortcut: "x", Keywords: []string{"delete", "remove", "event"}, Available: onCalendarItem, Run: calendarAction("delete", false)})
+	m.commands.Register(commands.Command{ID: "calendar-invitation-show", Module: commands.ModuleCalendar, Title: "Show invitation details", Description: "Load invitation details for the linked message", Keywords: []string{"invitation", "invite", "details", "message"}, Available: onCalendarInvitation, Run: calendarAction("invitation-show", false)})
+	m.commands.Register(commands.Command{ID: "calendar-invitation-sync", Module: commands.ModuleCalendar, Title: "Sync selected invitation", Description: "Sync the linked invitation message into Calendar", Keywords: []string{"invitation", "invite", "sync", "message"}, Available: onCalendarInvitation, Run: calendarAction("invitation-sync", false)})
+	m.commands.Register(commands.Command{ID: "calendar-invitation-accept", Module: commands.ModuleCalendar, Title: "Accept invitation", Description: "Respond accepted to the linked invitation", Keywords: []string{"invitation", "invite", "accept", "accepted", "rsvp"}, Available: onCalendarInvitation, Run: calendarAction("invitation-accepted", false)})
+	m.commands.Register(commands.Command{ID: "calendar-invitation-tentative", Module: commands.ModuleCalendar, Title: "Tentatively accept invitation", Description: "Respond tentative to the linked invitation", Keywords: []string{"invitation", "invite", "tentative", "maybe", "rsvp"}, Available: onCalendarInvitation, Run: calendarAction("invitation-tentative", false)})
+	m.commands.Register(commands.Command{ID: "calendar-invitation-decline", Module: commands.ModuleCalendar, Title: "Decline invitation", Description: "Respond declined to the linked invitation", Keywords: []string{"invitation", "invite", "decline", "declined", "rsvp"}, Available: onCalendarInvitation, Run: calendarAction("invitation-declined", false)})
+	m.commands.Register(commands.Command{ID: "calendar-invitation-needs-action", Module: commands.ModuleCalendar, Title: "Mark invitation needs action", Description: "Respond needs_action to the linked invitation", Keywords: []string{"invitation", "invite", "needs_action", "needs action", "rsvp"}, Available: onCalendarInvitation, Run: calendarAction("invitation-needs-action", false)})
 	m.commands.Register(commands.Command{ID: "calendars-new", Module: commands.ModuleCalendar, Title: "New calendar", Description: "Create a calendar", Shortcut: "n", Keywords: []string{"new", "create", "calendar"}, Available: onCalendar, Run: calendarAction("new-calendar", false)})
 	m.commands.Register(commands.Command{ID: "calendars-edit", Module: commands.ModuleCalendar, Title: "Edit selected calendar", Description: "Edit the highlighted calendar", Shortcut: "e", Keywords: []string{"edit", "update", "calendar"}, Available: onCalendarCalendar, Run: calendarAction("edit-calendar", false)})
 	m.commands.Register(commands.Command{ID: "calendars-import-ics", Module: commands.ModuleCalendar, Title: "Import ICS into selected calendar", Description: "Pick an .ics file and import it into the highlighted calendar", Shortcut: "i", Keywords: []string{"import", "ics", "calendar"}, Available: onCalendarCalendar, Run: calendarAction("import-ics", false)})
@@ -1450,7 +1502,7 @@ func (m Model) paletteContext() commands.Context {
 	if m.activeScreen == "calendar" {
 		if calendarScreen, ok := m.screens["calendar"].(screens.Calendar); ok {
 			sel := calendarScreen.Selection()
-			ctx.Selection = &commands.Selection{Kind: sel.Kind, Subject: sel.Subject, HasItems: sel.HasItem}
+			ctx.Selection = &commands.Selection{Kind: sel.Kind, Subject: sel.Subject, HasItems: sel.HasItem, HasInvitation: sel.HasInvitation}
 		}
 	}
 	return ctx

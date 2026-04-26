@@ -27,6 +27,9 @@ type ImportICSFunc func(context.Context, int64, string) (*calendar.ImportResult,
 type CreateCalendarEventFunc func(context.Context, calendar.CalendarEventInput) (*calendar.CalendarEvent, error)
 type UpdateCalendarEventFunc func(context.Context, int64, calendar.CalendarEventInput) (*calendar.CalendarEvent, error)
 type DeleteCalendarEventFunc func(context.Context, int64) error
+type ShowInvitationFunc func(context.Context, int64) (*calendar.Invitation, error)
+type SyncInvitationFunc func(context.Context, int64) (*calendar.Invitation, error)
+type RespondInvitationFunc func(context.Context, int64, calendar.InvitationInput) (*calendar.Invitation, error)
 
 type calendarViewMode int
 
@@ -61,6 +64,9 @@ type Calendar struct {
 	createEvent    CreateCalendarEventFunc
 	updateEvent    UpdateCalendarEventFunc
 	deleteEvent    DeleteCalendarEventFunc
+	showInvite     ShowInvitationFunc
+	syncInvite     SyncInvitationFunc
+	respondInvite  RespondInvitationFunc
 	items          []calendarstore.OccurrenceMeta
 	calendars      []calendarstore.CalendarMeta
 	mode           calendarViewMode
@@ -82,6 +88,7 @@ type Calendar struct {
 	syncing        bool
 	err            error
 	status         string
+	invitation     *calendar.Invitation
 	keys           CalendarKeyMap
 }
 
@@ -134,9 +141,10 @@ type calendarSyncedMsg struct {
 }
 
 type calendarActionFinishedMsg struct {
-	status string
-	loaded calendarLoadedMsg
-	err    error
+	status     string
+	loaded     calendarLoadedMsg
+	invitation *calendar.Invitation
+	err        error
 }
 
 type CalendarActionMsg struct{ Action string }
@@ -161,6 +169,13 @@ func (c Calendar) WithCalendarActions(create CreateCalendarFunc, update UpdateCa
 
 func (c Calendar) WithImportICS(importICS ImportICSFunc) Calendar {
 	c.importICS = importICS
+	return c
+}
+
+func (c Calendar) WithInvitationActions(show ShowInvitationFunc, sync SyncInvitationFunc, respond RespondInvitationFunc) Calendar {
+	c.showInvite = show
+	c.syncInvite = sync
+	c.respondInvite = respond
 	return c
 }
 
@@ -225,7 +240,12 @@ func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		c.status = msg.status
 		c.items = msg.loaded.items
 		c.calendars = msg.loaded.calendars
-		c.detail = false
+		c.invitation = msg.invitation
+		if msg.invitation != nil {
+			c.detail = true
+		} else {
+			c.detail = false
+		}
 		c.form = nil
 		c.formKind = calendarFormNone
 		c.filePickerOpen = false
@@ -311,13 +331,18 @@ func (c Calendar) Selection() CalendarSelection {
 	if !ok {
 		return CalendarSelection{Kind: "calendar-event", HasItem: false}
 	}
-	return CalendarSelection{Kind: "calendar-event", Subject: item.Title, HasItem: true}
+	selection := CalendarSelection{Kind: "calendar-event", Subject: item.Title, HasItem: true}
+	if c.selectedInvitationMessageID() > 0 {
+		selection.HasInvitation = true
+	}
+	return selection
 }
 
 type CalendarSelection struct {
-	Kind    string
-	Subject string
-	HasItem bool
+	Kind          string
+	Subject       string
+	HasItem       bool
+	HasInvitation bool
 }
 
 func (c Calendar) handleAction(action string) (Screen, tea.Cmd) {
@@ -405,6 +430,43 @@ func (c Calendar) handleAction(action string) (Screen, tea.Cmd) {
 			return c, nil
 		}
 		return c.startImportICS()
+	case "invitation-show":
+		messageID := c.selectedInvitationMessageID()
+		if messageID <= 0 {
+			c.status = "Selected event has no linked invitation message"
+			return c, nil
+		}
+		if c.showInvite == nil {
+			c.status = "Invitation details are not configured"
+			return c, nil
+		}
+		c.loading = true
+		c.detail = true
+		return c, c.invitationCmd(messageID, "show", "")
+	case "invitation-sync":
+		messageID := c.selectedInvitationMessageID()
+		if messageID <= 0 {
+			c.status = "Selected event has no linked invitation message"
+			return c, nil
+		}
+		if c.syncInvite == nil {
+			c.status = "Invitation sync is not configured"
+			return c, nil
+		}
+		c.loading = true
+		return c, c.invitationCmd(messageID, "sync", "")
+	case "invitation-accepted", "invitation-tentative", "invitation-declined", "invitation-needs-action":
+		messageID := c.selectedInvitationMessageID()
+		if messageID <= 0 {
+			c.status = "Selected event has no linked invitation message"
+			return c, nil
+		}
+		if c.respondInvite == nil {
+			c.status = "Invitation responses are not configured"
+			return c, nil
+		}
+		c.loading = true
+		return c, c.invitationCmd(messageID, "respond", invitationStatusFromAction(action))
 	}
 	return c, nil
 }
@@ -770,12 +832,69 @@ func (c Calendar) detailView() string {
 		"Status: " + item.Status,
 	}
 	if event, err := c.store.ReadEvent(item.EventID); err == nil {
+		lines = append(lines, invitationEventView(event.Meta)...)
 		lines = append(lines, "")
 		lines = append(lines, linkedMessagesView(event.Meta.Messages)...)
 	} else {
 		lines = append(lines, "", "Linked messages: unavailable in cache")
 	}
+	if c.invitation != nil && c.invitation.MessageID == c.selectedInvitationMessageID() {
+		lines = append(lines, "")
+		lines = append(lines, invitationView(*c.invitation)...)
+	}
 	return strings.Join(lines, "\n") + "\n"
+}
+
+func invitationEventView(event calendarstore.EventMeta) []string {
+	if !event.Invitation && len(event.Links) == 0 && len(event.Attendees) == 0 {
+		return nil
+	}
+	lines := []string{"", "Invitation: " + strconv.FormatBool(event.Invitation)}
+	if event.OrganizerName != "" || event.OrganizerEmail != "" {
+		lines = append(lines, "Organizer: "+organizerDisplay(event))
+	}
+	for _, attendee := range event.Attendees {
+		if attendee.ResponseRequested || attendee.ParticipationStatus != "" {
+			lines = append(lines, fmt.Sprintf("Attendee: %s | %s | response requested:%t", attendeeDisplay(attendee), emptyDash(attendee.ParticipationStatus), attendee.ResponseRequested))
+		}
+	}
+	for _, link := range event.Links {
+		lines = append(lines, fmt.Sprintf("Invitation message: %d | method:%s | sequence:%d", link.MessageID, emptyDash(link.ICalMethod), link.SequenceNumber))
+	}
+	return lines
+}
+
+func invitationView(invite calendar.Invitation) []string {
+	lines := []string{"Invitation details:", "Message ID: " + strconv.FormatInt(invite.MessageID, 10), "Available: " + strconv.FormatBool(invite.Available)}
+	if invite.CalendarEvent != nil {
+		lines = append(lines, "Event: "+invite.CalendarEvent.Title, "Event ID: "+strconv.FormatInt(invite.CalendarEvent.ID, 10))
+	}
+	if invite.CurrentUserAttendee != nil {
+		lines = append(lines, "Current response: "+emptyDash(invite.CurrentUserAttendee.ParticipationStatus))
+	}
+	return lines
+}
+
+func attendeeDisplay(attendee calendarstore.AttendeeMeta) string {
+	if strings.TrimSpace(attendee.Name) != "" && strings.TrimSpace(attendee.Email) != "" {
+		return fmt.Sprintf("%s <%s>", attendee.Name, attendee.Email)
+	}
+	if strings.TrimSpace(attendee.Email) != "" {
+		return attendee.Email
+	}
+	return emptyDash(attendee.Name)
+}
+
+func organizerDisplay(event calendarstore.EventMeta) string {
+	name := strings.TrimSpace(event.OrganizerName)
+	email := strings.TrimSpace(event.OrganizerEmail)
+	if name != "" && email != "" {
+		return fmt.Sprintf("%s <%s>", name, email)
+	}
+	if email != "" {
+		return email
+	}
+	return emptyDash(name)
 }
 
 func linkedMessagesView(messages []calendarstore.MessageMeta) []string {
@@ -878,6 +997,28 @@ func (c Calendar) selectedCalendar() (calendarstore.CalendarMeta, bool) {
 	return c.calendars[c.calendarIndex], true
 }
 
+func (c Calendar) selectedInvitationMessageID() int64 {
+	item, ok := c.selected()
+	if !ok {
+		return 0
+	}
+	event, err := c.store.ReadEvent(item.EventID)
+	if err != nil {
+		return 0
+	}
+	for _, link := range event.Meta.Links {
+		if link.MessageID > 0 {
+			return link.MessageID
+		}
+	}
+	for _, message := range event.Meta.Messages {
+		if message.ID > 0 {
+			return message.ID
+		}
+	}
+	return 0
+}
+
 func (c *Calendar) clampIndex() {
 	if c.index < 0 {
 		c.index = 0
@@ -960,6 +1101,61 @@ func (c Calendar) importICSCmd(calendarID int64, path string) tea.Cmd {
 		}
 		return calendarActionFinishedMsg{status: importICSStatus(result), loaded: loaded, err: err}
 	}
+}
+
+func (c Calendar) invitationCmd(messageID int64, action, status string) tea.Cmd {
+	return func() tea.Msg {
+		var invite *calendar.Invitation
+		var err error
+		switch action {
+		case "show":
+			invite, err = c.showInvite(context.Background(), messageID)
+		case "sync":
+			invite, err = c.syncInvite(context.Background(), messageID)
+		case "respond":
+			invite, err = c.respondInvite(context.Background(), messageID, calendar.InvitationInput{ParticipationStatus: status})
+		default:
+			err = errors.New("unknown invitation action")
+		}
+		loaded := calendarLoadedMsg{}
+		if err == nil {
+			loaded = c.load()
+			err = loaded.err
+		}
+		return calendarActionFinishedMsg{status: invitationActionStatus(action, status, invite), loaded: loaded, invitation: invite, err: err}
+	}
+}
+
+func invitationStatusFromAction(action string) string {
+	switch action {
+	case "invitation-accepted":
+		return "accepted"
+	case "invitation-tentative":
+		return "tentative"
+	case "invitation-declined":
+		return "declined"
+	case "invitation-needs-action":
+		return "needs_action"
+	default:
+		return ""
+	}
+}
+
+func invitationActionStatus(action, status string, invite *calendar.Invitation) string {
+	switch action {
+	case "show":
+		return "Loaded invitation details"
+	case "sync":
+		return "Synced invitation into Calendar"
+	case "respond":
+		if status != "" {
+			return "Responded " + status
+		}
+	}
+	if invite != nil && invite.CalendarEvent != nil && invite.CalendarEvent.Title != "" {
+		return invite.CalendarEvent.Title
+	}
+	return "Updated invitation"
 }
 
 func importICSStatus(result *calendar.ImportResult) string {
