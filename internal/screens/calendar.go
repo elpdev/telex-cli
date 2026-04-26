@@ -425,6 +425,11 @@ func (c Calendar) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		c.detail = false
 		return c, nil
 	}
+	if key.Matches(msg, c.keys.Back) && c.mode == calendarViewCalendars {
+		c.mode = calendarViewAgenda
+		c.status = "Showing agenda"
+		return c, nil
+	}
 	if key.Matches(msg, c.keys.Refresh) {
 		c.loading = true
 		return c, c.loadCmd()

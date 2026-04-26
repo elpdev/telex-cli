@@ -1,6 +1,35 @@
 package screens
 
-import "testing"
+import (
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/elpdev/telex-cli/internal/calendarstore"
+)
+
+func TestCalendarBackFromCalendarsReturnsToAgenda(t *testing.T) {
+	screen := NewCalendar(calendarstore.New(t.TempDir()), nil)
+	updated, cmd := screen.Update(CalendarActionMsg{Action: "view-calendars"})
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+
+	updated, cmd = updated.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+
+	calendar, ok := updated.(Calendar)
+	if !ok {
+		t.Fatalf("updated = %T", updated)
+	}
+	if calendar.mode != calendarViewAgenda {
+		t.Fatalf("mode = %v, want agenda", calendar.mode)
+	}
+	if calendar.status != "Showing agenda" {
+		t.Fatalf("status = %q", calendar.status)
+	}
+}
 
 func TestCalendarEventInputFromFormValidatesRequiredFields(t *testing.T) {
 	_, err := calendarEventInputFromForm(calendarEventFormData{CalendarID: "1", Title: "", StartDate: "2026-04-25", EndDate: "2026-04-25", StartTime: "09:00", EndTime: "10:00"})
