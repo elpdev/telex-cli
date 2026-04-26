@@ -16,6 +16,9 @@ const (
 	GroupMessages = "messages"
 	GroupOutbox   = "outbox"
 	GroupInbox    = "inbox"
+	GroupNav      = "nav"
+	GroupPolicy   = "policy"
+	GroupAdmin    = "admin"
 )
 
 func Modules() []string {
@@ -27,7 +30,7 @@ func ScopedModules() []string {
 }
 
 func Groups() []string {
-	return []string{GroupDrafts, GroupMessages, GroupOutbox, GroupInbox}
+	return []string{GroupNav, GroupDrafts, GroupMessages, GroupOutbox, GroupInbox, GroupPolicy, GroupAdmin}
 }
 
 type Command struct {

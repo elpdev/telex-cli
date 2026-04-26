@@ -16,7 +16,17 @@ type PaletteModel struct {
 	original string
 	executed *Command
 	action   PaletteAction
+	width    int
+	height   int
 }
+
+const (
+	paletteMinWidth  = 70
+	paletteMaxWidth  = 120
+	paletteMargin    = 8
+	paletteMinHeight = 12
+	paletteVMargin   = 4
+)
 
 type PaletteAction struct {
 	Type    PaletteActionType
@@ -64,6 +74,37 @@ func (m *PaletteModel) Reset(currentTheme string, ctx Context) {
 	m.inner.Reset(tuipalette.Context{ActiveScreen: activeModule(ctx)})
 }
 
+func (m *PaletteModel) SetSize(width, height int) {
+	m.width = width
+	m.height = height
+	m.inner.SetSize(m.paletteWidth(), m.paletteHeight())
+}
+
+func (m PaletteModel) paletteWidth() int {
+	if m.width <= 0 {
+		return 0
+	}
+	w := m.width - paletteMargin
+	if w > paletteMaxWidth {
+		w = paletteMaxWidth
+	}
+	if w < paletteMinWidth {
+		w = paletteMinWidth
+	}
+	return w
+}
+
+func (m PaletteModel) paletteHeight() int {
+	if m.height <= 0 {
+		return 0
+	}
+	h := m.height - paletteVMargin
+	if h < paletteMinHeight {
+		h = paletteMinHeight
+	}
+	return h
+}
+
 func (m PaletteModel) ExecutedCommand() *Command { return m.executed }
 
 func (m PaletteModel) Action() PaletteAction { return m.action }
@@ -102,7 +143,9 @@ func (m *PaletteModel) rebuildInner() {
 
 	m.inner = tuipalette.NewPaletteModel(registry, tuipalette.Options{
 		Title:              "Telex",
-		Placeholder:        "type a command, or 'mail ' to scope...",
+		Placeholder:        "type a command, or 'mail ' / 'mail messages ' to scope...",
+		Width:              m.paletteWidth(),
+		Height:             m.paletteHeight(),
 		Modules:            Modules(),
 		Groups:             Groups(),
 		ReservedNamespaces: ScopedModules(),
