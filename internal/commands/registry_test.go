@@ -39,6 +39,8 @@ func TestParseScope(t *testing.T) {
 		{"drafts ", Scope{Group: GroupDrafts}, ""},
 		{"drafts send", Scope{Group: GroupDrafts}, "send"},
 		{"mail drafts send", Scope{Module: ModuleMail, Group: GroupDrafts}, "send"},
+		{"contacts ", Scope{Module: ModuleContacts}, ""},
+		{"contacts sync", Scope{Module: ModuleContacts}, "sync"},
 		{"unknown ", Scope{}, "unknown "},
 	}
 	for _, c := range cases {
@@ -75,6 +77,39 @@ func TestFilterContextRanking(t *testing.T) {
 	}
 	if matches[0].Module != ModuleMail {
 		t.Fatalf("expected mail-module command first, got module %q", matches[0].Module)
+	}
+}
+
+func TestFilterContextRankingUsesActiveModule(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(Command{ID: "go-mail", Module: ModuleMail, Title: "Open Mail"})
+	registry.Register(Command{ID: "contacts-sync", Module: ModuleContacts, Title: "Sync Contacts"})
+
+	matches := registry.Filter("", Context{ActiveScreen: "contacts", ActiveModule: ModuleContacts})
+	if len(matches) < 2 {
+		t.Fatalf("expected at least 2 matches, got %d", len(matches))
+	}
+	if matches[0].Module != ModuleContacts {
+		t.Fatalf("expected contacts-module command first, got module %q", matches[0].Module)
+	}
+}
+
+func TestDefaultPaletteAvailabilityRestrictsUnscopedModuleCommands(t *testing.T) {
+	ctx := Context{ActiveScreen: "contacts", ActiveModule: ModuleContacts}
+	if defaultAvailableInPalette(Command{ID: "go-mail", Module: ModuleMail}, ctx) {
+		t.Fatal("expected unscoped mail command to be hidden on contacts screen")
+	}
+	if !defaultAvailableInPalette(Command{ID: "go-mail", Module: ModuleMail, Pinned: true}, ctx) {
+		t.Fatal("expected pinned mail command to be visible on contacts screen")
+	}
+	if !defaultAvailableInPalette(Command{ID: "go-contacts", Module: ModuleContacts}, ctx) {
+		t.Fatal("expected contacts command to be visible on contacts screen")
+	}
+	if !defaultAvailableInPalette(Command{ID: "quit", Module: ModuleGlobal}, ctx) {
+		t.Fatal("expected global command to be visible on contacts screen")
+	}
+	if !defaultAvailableInPalette(Command{ID: "go-mail", Module: ModuleMail}, Context{ActiveScreen: "home"}) {
+		t.Fatal("expected unscoped module commands to remain visible when no active module is set")
 	}
 }
 

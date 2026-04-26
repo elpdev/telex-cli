@@ -1,6 +1,10 @@
 package mail
 
-import "time"
+import (
+	"time"
+
+	"github.com/elpdev/telex-cli/internal/contacts"
+)
 
 type ListParams struct {
 	Page    int
@@ -161,34 +165,35 @@ type Attachment struct {
 }
 
 type Message struct {
-	ID             int64          `json:"id"`
-	InboxID        int64          `json:"inbox_id"`
-	ConversationID int64          `json:"conversation_id"`
-	MessageID      string         `json:"message_id"`
-	FromAddress    string         `json:"from_address"`
-	FromName       string         `json:"from_name"`
-	SenderDisplay  string         `json:"sender_display"`
-	ToAddresses    []string       `json:"to_addresses"`
-	CCAddresses    []string       `json:"cc_addresses"`
-	Subject        string         `json:"subject"`
-	Subaddress     string         `json:"subaddress"`
-	Status         string         `json:"status"`
-	PreviewText    string         `json:"preview_text"`
-	TextBody       string         `json:"text_body"`
-	HTMLEmail      bool           `json:"html_email"`
-	Metadata       map[string]any `json:"metadata"`
-	Read           bool           `json:"read"`
-	ReadAt         *time.Time     `json:"read_at"`
-	Starred        bool           `json:"starred"`
-	SystemState    string         `json:"system_state"`
-	SenderBlocked  bool           `json:"sender_blocked"`
-	SenderTrusted  bool           `json:"sender_trusted"`
-	DomainBlocked  bool           `json:"domain_blocked"`
-	Labels         []Label        `json:"labels"`
-	ReceivedAt     time.Time      `json:"received_at"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
-	Attachments    []Attachment   `json:"attachments"`
+	ID             int64                    `json:"id"`
+	InboxID        int64                    `json:"inbox_id"`
+	ConversationID int64                    `json:"conversation_id"`
+	MessageID      string                   `json:"message_id"`
+	FromAddress    string                   `json:"from_address"`
+	FromName       string                   `json:"from_name"`
+	Contact        *contacts.ContactSummary `json:"contact"`
+	SenderDisplay  string                   `json:"sender_display"`
+	ToAddresses    []string                 `json:"to_addresses"`
+	CCAddresses    []string                 `json:"cc_addresses"`
+	Subject        string                   `json:"subject"`
+	Subaddress     string                   `json:"subaddress"`
+	Status         string                   `json:"status"`
+	PreviewText    string                   `json:"preview_text"`
+	TextBody       string                   `json:"text_body"`
+	HTMLEmail      bool                     `json:"html_email"`
+	Metadata       map[string]any           `json:"metadata"`
+	Read           bool                     `json:"read"`
+	ReadAt         *time.Time               `json:"read_at"`
+	Starred        bool                     `json:"starred"`
+	SystemState    string                   `json:"system_state"`
+	SenderBlocked  bool                     `json:"sender_blocked"`
+	SenderTrusted  bool                     `json:"sender_trusted"`
+	DomainBlocked  bool                     `json:"domain_blocked"`
+	Labels         []Label                  `json:"labels"`
+	ReceivedAt     time.Time                `json:"received_at"`
+	CreatedAt      time.Time                `json:"created_at"`
+	UpdatedAt      time.Time                `json:"updated_at"`
+	Attachments    []Attachment             `json:"attachments"`
 }
 
 type MessageBody struct {

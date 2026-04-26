@@ -61,7 +61,7 @@ func (m *PaletteModel) Reset(currentTheme string, ctx Context) {
 	m.executed = nil
 	m.action = PaletteAction{}
 	m.rebuildInner()
-	m.inner.Reset(tuipalette.Context{ActiveScreen: ctx.ActiveScreen})
+	m.inner.Reset(tuipalette.Context{ActiveScreen: activeModule(ctx)})
 }
 
 func (m PaletteModel) ExecutedCommand() *Command { return m.executed }
@@ -89,6 +89,9 @@ func (m *PaletteModel) rebuildInner() {
 			OpensPage:   command.OpensPage,
 			Run:         command.Run,
 			Available: func(tuipalette.Context) bool {
+				if !command.HasCustomAvailability() && !defaultAvailableInPalette(command, m.ctx) {
+					return false
+				}
 				return command.IsAvailable(m.ctx)
 			},
 			Describe: func(tuipalette.Context) string {
@@ -100,13 +103,26 @@ func (m *PaletteModel) rebuildInner() {
 	m.inner = tuipalette.NewPaletteModel(registry, tuipalette.Options{
 		Title:              "Telex",
 		Placeholder:        "type a command, or 'mail ' to scope...",
-		Modules:            []string{ModuleMail, ModuleCalendar, ModuleDrive, ModuleNotes, ModuleHackerNews, ModuleSettings, ModuleGlobal},
-		Groups:             []string{GroupDrafts, GroupMessages, GroupOutbox, GroupInbox},
-		ReservedNamespaces: []string{ModuleCalendar, ModuleDrive, ModuleNotes},
+		Modules:            Modules(),
+		Groups:             Groups(),
+		ReservedNamespaces: ScopedModules(),
 		Pages: map[string]tuipalette.Page{
 			pageThemes: newThemePage(m.themes, m.original),
 		},
 	})
+}
+
+func defaultAvailableInPalette(command Command, ctx Context) bool {
+	if command.Pinned {
+		return true
+	}
+	if command.Module == "" || command.Module == ModuleGlobal {
+		return true
+	}
+	if ctx.ActiveModule == "" {
+		return true
+	}
+	return command.Module == ctx.ActiveModule
 }
 
 func (m *PaletteModel) translateAction(action tuipalette.PaletteAction) {

@@ -89,6 +89,7 @@ func (m *Model) registerHackerNewsCommands() {
 		Title:       "Open News",
 		Description: "Open Hacker News feeds",
 		Keywords:    []string{"news", "hacker", "hn", "stories"},
+		Pinned:      true,
 		Run:         func() tea.Cmd { return func() tea.Msg { return routeMsg{"news"} } },
 	})
 

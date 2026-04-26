@@ -74,17 +74,19 @@ func ParseScope(query string) (Scope, string) {
 }
 
 func matchModule(token string) (string, bool) {
-	switch token {
-	case ModuleMail, ModuleCalendar, ModuleDrive, ModuleNotes, ModuleHackerNews, ModuleSettings, ModuleGlobal:
-		return token, true
+	for _, module := range Modules() {
+		if token == module {
+			return token, true
+		}
 	}
 	return "", false
 }
 
 func matchGroup(token string) (string, bool) {
-	switch token {
-	case GroupDrafts, GroupMessages, GroupOutbox, GroupInbox:
-		return token, true
+	for _, group := range Groups() {
+		if token == group {
+			return token, true
+		}
 	}
 	return "", false
 }
@@ -131,7 +133,7 @@ func (r *Registry) Filter(query string, ctx Context) []Command {
 			continue
 		}
 		bucket := 1
-		if ctx.ActiveScreen != "" && cmd.Module == ctx.ActiveScreen {
+		if active := activeModule(ctx); active != "" && cmd.Module == active {
 			bucket = 0
 		}
 		matches = append(matches, ranked{cmd: cmd, bucket: bucket, ordinal: i})
@@ -165,9 +167,9 @@ func textMatch(cmd Command, query string) bool {
 // GroupByModule returns commands grouped by module in display order. The
 // active-screen module appears first, followed by the rest in canonical order.
 func (r *Registry) GroupByModule(ctx Context) []ModuleGroup {
-	canonical := []string{ModuleMail, ModuleCalendar, ModuleDrive, ModuleNotes, ModuleHackerNews, ModuleSettings, ModuleGlobal}
-	if ctx.ActiveScreen != "" {
-		canonical = bringFirst(canonical, ctx.ActiveScreen)
+	canonical := Modules()
+	if active := activeModule(ctx); active != "" {
+		canonical = bringFirst(canonical, active)
 	}
 	buckets := make(map[string][]Command)
 	for _, cmd := range r.List() {
@@ -181,6 +183,13 @@ func (r *Registry) GroupByModule(ctx Context) []ModuleGroup {
 		groups = append(groups, ModuleGroup{Module: module, Commands: buckets[module]})
 	}
 	return groups
+}
+
+func activeModule(ctx Context) string {
+	if ctx.ActiveModule != "" {
+		return ctx.ActiveModule
+	}
+	return ctx.ActiveScreen
 }
 
 type ModuleGroup struct {

@@ -54,6 +54,7 @@ func newRootCommand(meta buildInfo) *cobra.Command {
 	cmd.AddCommand(newCalendarCommand(rt))
 	cmd.AddCommand(newDriveCommand(rt))
 	cmd.AddCommand(newNotesCommand(rt))
+	cmd.AddCommand(newContactsCommand(rt))
 	return cmd
 }
 

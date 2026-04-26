@@ -72,10 +72,25 @@ func TestNotesScreenRegisteredInNavigationAndCommands(t *testing.T) {
 	if _, ok := model.screens["notes"]; !ok {
 		t.Fatal("expected notes screen to be registered")
 	}
-	if got := model.screenOrder; len(got) < 5 || got[3] != "notes" {
+	if got := model.screenOrder; len(got) < 6 || got[4] != "notes" {
 		t.Fatalf("screenOrder = %#v", got)
 	}
 	for _, id := range []string{"go-notes", "notes-sync", "notes-new", "notes-edit", "notes-delete", "notes-search"} {
+		if _, ok := model.commands.Find(id); !ok {
+			t.Fatalf("expected command %q", id)
+		}
+	}
+}
+
+func TestContactsScreenRegisteredInNavigationAndCommands(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+	if _, ok := model.screens["contacts"]; !ok {
+		t.Fatal("expected contacts screen to be registered")
+	}
+	if got := model.screenOrder; len(got) < 5 || got[3] != "contacts" {
+		t.Fatalf("screenOrder = %#v", got)
+	}
+	for _, id := range []string{"go-contacts", "contacts-sync", "contacts-search", "contacts-delete", "contacts-edit-note", "contacts-refresh-note", "contacts-communications"} {
 		if _, ok := model.commands.Find(id); !ok {
 			t.Fatalf("expected command %q", id)
 		}

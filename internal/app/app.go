@@ -19,6 +19,8 @@ import (
 	"github.com/elpdev/telex-cli/internal/calendarstore"
 	"github.com/elpdev/telex-cli/internal/commands"
 	"github.com/elpdev/telex-cli/internal/config"
+	"github.com/elpdev/telex-cli/internal/contacts"
+	"github.com/elpdev/telex-cli/internal/contactstore"
 	"github.com/elpdev/telex-cli/internal/debug"
 	"github.com/elpdev/telex-cli/internal/drive"
 	"github.com/elpdev/telex-cli/internal/drivestore"
@@ -158,6 +160,7 @@ func (m *Model) registerScreens() {
 	}
 	m.screens["mail-admin"] = screens.NewMailAdmin(m.loadMailAdmin).WithActions(m.saveDomain, m.deleteDomain, m.validateDomainOutbound, m.saveInbox, m.deleteInbox, m.inboxPipeline)
 	m.screens["calendar"] = screens.NewCalendar(calendarstore.New(m.dataPath), m.syncCalendar).WithActions(m.createCalendarEvent, m.updateCalendarEvent, m.deleteCalendarEvent).WithCalendarActions(m.createCalendar, m.updateCalendar, m.deleteCalendar).WithImportICS(m.importCalendarICS).WithInvitationActions(m.showCalendarInvitation, m.syncCalendarInvitation, m.respondCalendarInvitation)
+	m.screens["contacts"] = screens.NewContacts(contactstore.New(m.dataPath), m.syncContacts).WithActions(m.deleteContact, m.loadContactNote, m.updateContactNote, m.loadContactCommunications)
 	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive).WithActions(m.downloadDriveFile, m.openDriveFile, m.uploadDriveFile, m.createDriveFolder, m.renameDriveFile, m.renameDriveFolder, m.deleteDriveFile, m.deleteDriveFolder)
 	m.screens["notes"] = screens.NewNotes(notestore.New(m.dataPath), m.syncNotes).WithActions(m.createNote, m.updateNote, m.deleteNote)
 	m.screens["settings"] = m.buildSettings()
@@ -908,6 +911,71 @@ func (m *Model) syncNotes(ctx context.Context) (screens.NotesSyncResult, error) 
 	return screens.NotesSyncResult{Folders: result.Folders, Notes: result.Notes}, err
 }
 
+func (m *Model) syncContacts(ctx context.Context) (screens.ContactsSyncResult, error) {
+	service, err := m.contactsService()
+	if err != nil {
+		return screens.ContactsSyncResult{}, err
+	}
+	result, err := runContactsSync(ctx, contactstore.New(m.dataPath), service)
+	return screens.ContactsSyncResult{Contacts: result.Contacts, Notes: result.Notes}, err
+}
+
+func (m *Model) deleteContact(ctx context.Context, id int64) error {
+	service, err := m.contactsService()
+	if err != nil {
+		return err
+	}
+	if err := service.DeleteContact(ctx, id); err != nil {
+		return err
+	}
+	return contactstore.New(m.dataPath).DeleteContact(id)
+}
+
+func (m *Model) loadContactNote(ctx context.Context, id int64) (*contacts.ContactNote, error) {
+	service, err := m.contactsService()
+	if err != nil {
+		return nil, err
+	}
+	note, err := service.ContactNote(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := contactstore.New(m.dataPath).StoreContactNote(*note, time.Now()); err != nil {
+		return nil, err
+	}
+	return note, nil
+}
+
+func (m *Model) updateContactNote(ctx context.Context, id int64, input contacts.ContactNoteInput) (*contacts.ContactNote, error) {
+	service, err := m.contactsService()
+	if err != nil {
+		return nil, err
+	}
+	note, err := service.UpdateContactNote(ctx, id, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := contactstore.New(m.dataPath).StoreContactNote(*note, time.Now()); err != nil {
+		return nil, err
+	}
+	return note, nil
+}
+
+func (m *Model) loadContactCommunications(ctx context.Context, id int64) ([]contacts.ContactCommunication, error) {
+	service, err := m.contactsService()
+	if err != nil {
+		return nil, err
+	}
+	communications, _, err := service.ContactCommunications(ctx, id, contacts.ListParams{Page: 1, PerPage: 100})
+	if err != nil {
+		return nil, err
+	}
+	if err := contactstore.New(m.dataPath).StoreCommunications(id, communications); err != nil {
+		return nil, err
+	}
+	return communications, nil
+}
+
 func (m *Model) createNote(ctx context.Context, input notes.NoteInput) (*notes.Note, error) {
 	service, err := m.notesService()
 	if err != nil {
@@ -1330,6 +1398,21 @@ func (m *Model) notesService() (*notes.Service, error) {
 	return notes.NewService(m.client), nil
 }
 
+func (m *Model) contactsService() (*contacts.Service, error) {
+	configFile, tokenFile := config.Paths(m.configPath)
+	cfg, err := config.LoadFrom(configFile)
+	if err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if m.client == nil {
+		m.client = api.NewClient(cfg, tokenFile)
+	}
+	return contacts.NewService(m.client), nil
+}
+
 func (m *Model) calendarService() (*calendar.Service, error) {
 	configFile, tokenFile := config.Paths(m.configPath)
 	cfg, err := config.LoadFrom(configFile)
@@ -1354,7 +1437,7 @@ func (m *Model) refreshScreenOrder() {
 		m.screenOrder = append(m.screenOrder, id)
 	}
 	sort.Strings(m.screenOrder)
-	preferred := []string{"home", "mail", "calendar", "notes", "drive", "news", "settings", "logs"}
+	preferred := []string{"home", "mail", "calendar", "contacts", "notes", "drive", "news", "settings", "logs"}
 	ordered := make([]string, 0, len(m.screenOrder))
 	seen := make(map[string]bool)
 	for _, id := range preferred {
@@ -1433,6 +1516,15 @@ func (m *Model) registerCommands() {
 			return tea.Sequence(func() tea.Msg { return routeMsg{"notes"} }, actionMsg)
 		}
 	}
+	contactsAction := func(action string, alsoRoute bool) func() tea.Cmd {
+		return func() tea.Cmd {
+			actionMsg := func() tea.Msg { return screens.ContactsActionMsg{Action: action} }
+			if !alsoRoute {
+				return actionMsg
+			}
+			return tea.Sequence(func() tea.Msg { return routeMsg{"contacts"} }, actionMsg)
+		}
+	}
 	onMail := func(ctx commands.Context) bool { return isMailScreen(ctx.ActiveScreen) }
 	onMailAdmin := func(ctx commands.Context) bool { return ctx.ActiveScreen == "mail-admin" }
 	onMailOrAdmin := func(ctx commands.Context) bool {
@@ -1455,6 +1547,10 @@ func (m *Model) registerCommands() {
 	}
 	onDrive := func(ctx commands.Context) bool { return ctx.ActiveScreen == "drive" }
 	onNotes := func(ctx commands.Context) bool { return ctx.ActiveScreen == "notes" }
+	onContacts := func(ctx commands.Context) bool { return ctx.ActiveScreen == "contacts" }
+	onContactItem := func(ctx commands.Context) bool {
+		return ctx.ActiveScreen == "contacts" && ctx.Selection != nil && ctx.Selection.Kind == "contact" && ctx.Selection.HasItems
+	}
 	onNotesItem := func(ctx commands.Context) bool {
 		return ctx.ActiveScreen == "notes" && ctx.Selection != nil && ctx.Selection.Kind == "note" && ctx.Selection.HasItems
 	}
@@ -1475,16 +1571,17 @@ func (m *Model) registerCommands() {
 
 	// Navigation
 	m.commands.Register(commands.Command{ID: "go-home", Module: commands.ModuleGlobal, Title: "Go to Home", Description: "Open the home screen", Keywords: []string{"home", "start"}, Run: route("home")})
-	m.commands.Register(commands.Command{ID: "go-mail", Module: commands.ModuleMail, Title: "Open Mail", Description: "Open unread mail across all mailboxes", Keywords: []string{"mail", "email", "unread", "inbox"}, Run: route("mail-unread")})
-	m.commands.Register(commands.Command{ID: "go-mailboxes", Module: commands.ModuleMail, Title: "Open Mailboxes", Description: "Browse one mailbox at a time", Keywords: []string{"mail", "email", "mailboxes", "accounts"}, Run: route("mail")})
+	m.commands.Register(commands.Command{ID: "go-mail", Module: commands.ModuleMail, Title: "Open Mail", Description: "Open unread mail across all mailboxes", Keywords: []string{"mail", "email", "unread", "inbox"}, Pinned: true, Run: route("mail-unread")})
+	m.commands.Register(commands.Command{ID: "go-mailboxes", Module: commands.ModuleMail, Title: "Open Mailboxes", Description: "Browse one mailbox at a time", Keywords: []string{"mail", "email", "mailboxes", "accounts"}, Pinned: true, Run: route("mail")})
 	for _, scope := range aggregateMailScreens() {
 		m.commands.Register(commands.Command{ID: "go-" + scope.id, Module: commands.ModuleMail, Title: "Open " + scope.title, Description: "Open " + strings.ToLower(scope.title) + " mail across all mailboxes", Keywords: []string{"mail", "email", strings.ToLower(scope.title)}, Run: route(scope.id)})
 	}
 	m.commands.Register(commands.Command{ID: "go-mail-admin", Module: commands.ModuleMail, Title: "Open Mail Admin", Description: "Manage domains and inboxes", Keywords: []string{"mail", "admin", "domains", "inboxes"}, Run: route("mail-admin")})
-	m.commands.Register(commands.Command{ID: "go-calendar", Module: commands.ModuleCalendar, Title: "Open Calendar", Description: "Switch to cached Calendar", Keywords: []string{"calendar", "events", "agenda"}, Run: route("calendar")})
-	m.commands.Register(commands.Command{ID: "go-notes", Module: commands.ModuleNotes, Title: "Open Notes", Description: "Switch to cached Notes", Keywords: []string{"notes", "markdown", "memo"}, Run: route("notes")})
-	m.commands.Register(commands.Command{ID: "go-drive", Module: commands.ModuleDrive, Title: "Open Drive", Description: "Switch to local Drive mirror", Keywords: []string{"drive", "files", "documents"}, Run: route("drive")})
-	m.commands.Register(commands.Command{ID: "go-settings", Module: commands.ModuleSettings, Title: "Open Settings", Description: "Open application settings", Keywords: []string{"settings", "config"}, Run: route("settings")})
+	m.commands.Register(commands.Command{ID: "go-calendar", Module: commands.ModuleCalendar, Title: "Open Calendar", Description: "Switch to cached Calendar", Keywords: []string{"calendar", "events", "agenda"}, Pinned: true, Run: route("calendar")})
+	m.commands.Register(commands.Command{ID: "go-contacts", Module: commands.ModuleContacts, Title: "Open Contacts", Description: "Switch to cached Contacts", Keywords: []string{"contacts", "crm", "people"}, Pinned: true, Run: route("contacts")})
+	m.commands.Register(commands.Command{ID: "go-notes", Module: commands.ModuleNotes, Title: "Open Notes", Description: "Switch to cached Notes", Keywords: []string{"notes", "markdown", "memo"}, Pinned: true, Run: route("notes")})
+	m.commands.Register(commands.Command{ID: "go-drive", Module: commands.ModuleDrive, Title: "Open Drive", Description: "Switch to local Drive mirror", Keywords: []string{"drive", "files", "documents"}, Pinned: true, Run: route("drive")})
+	m.commands.Register(commands.Command{ID: "go-settings", Module: commands.ModuleSettings, Title: "Open Settings", Description: "Open application settings", Keywords: []string{"settings", "config"}, Pinned: true, Run: route("settings")})
 	m.registerHackerNewsCommands()
 	if m.devBuild() {
 		m.commands.Register(commands.Command{ID: "go-logs", Module: commands.ModuleGlobal, Title: "Open Logs", Description: "Open debug event log", Keywords: []string{"logs", "debug", "events"}, Run: route("logs")})
@@ -1538,6 +1635,14 @@ func (m *Model) registerCommands() {
 	m.commands.Register(commands.Command{ID: "notes-toggle-sort", Module: commands.ModuleNotes, Title: "Toggle Notes sort order", Description: "Cycle Notes sort between A-Z and most recently updated", Shortcut: "o", Keywords: []string{"sort", "order", "recent"}, Available: onNotes, Run: notesAction("toggle-sort", false)})
 	m.commands.Register(commands.Command{ID: "notes-toggle-flat", Module: commands.ModuleNotes, Title: "Toggle Notes flat view", Description: "Show all notes flat across folders, or revert to folder navigation", Shortcut: "f", Keywords: []string{"flat", "all", "view"}, Available: onNotes, Run: notesAction("toggle-flat", false)})
 
+	// Contacts — module-level
+	m.commands.Register(commands.Command{ID: "contacts-sync", Module: commands.ModuleContacts, Title: "Sync Contacts", Description: "Pull latest Contacts and notes", Shortcut: "S", Keywords: []string{"sync", "refresh", "crm"}, Run: contactsAction("sync", true)})
+	m.commands.Register(commands.Command{ID: "contacts-search", Module: commands.ModuleContacts, Title: "Search Contacts", Description: "Filter cached contacts", Shortcut: "/", Keywords: []string{"search", "filter", "contacts"}, Available: onContacts, Run: contactsAction("search", false)})
+	m.commands.Register(commands.Command{ID: "contacts-delete", Module: commands.ModuleContacts, Title: "Delete selected contact", Description: "Delete the highlighted contact after confirmation", Shortcut: "x", Keywords: []string{"delete", "remove", "contact"}, Available: onContactItem, Describe: subjectDescribe("Delete contact"), Run: contactsAction("delete", false)})
+	m.commands.Register(commands.Command{ID: "contacts-edit-note", Module: commands.ModuleContacts, Title: "Edit selected contact note", Description: "Open the highlighted contact note in an editor", Shortcut: "e", Keywords: []string{"edit", "note", "contact"}, Available: onContactItem, Describe: subjectDescribe("Edit note for"), Run: contactsAction("edit-note", false)})
+	m.commands.Register(commands.Command{ID: "contacts-refresh-note", Module: commands.ModuleContacts, Title: "Refresh selected contact note", Description: "Fetch the latest note for the highlighted contact", Shortcut: "N", Keywords: []string{"note", "refresh", "contact"}, Available: onContactItem, Describe: subjectDescribe("Refresh note for"), Run: contactsAction("refresh-note", false)})
+	m.commands.Register(commands.Command{ID: "contacts-communications", Module: commands.ModuleContacts, Title: "Load selected contact communications", Description: "Fetch communication history for the highlighted contact", Shortcut: "c", Keywords: []string{"communications", "history", "contact"}, Available: onContactItem, Describe: subjectDescribe("Load communications for"), Run: contactsAction("communications", false)})
+
 	// Mail / Drafts
 	m.commands.Register(commands.Command{ID: "drafts-compose", Module: commands.ModuleMail, Title: "Compose draft", Description: "Start a new draft", Shortcut: "c", Keywords: []string{"compose", "new", "write", "draft"}, Available: onMail, Run: mailAction("compose", true)})
 	m.commands.Register(commands.Command{ID: "drafts-send", Module: commands.ModuleMail, Title: "Send draft", Description: "Send the highlighted draft", Shortcut: "S", Keywords: []string{"send", "deliver", "draft"}, Available: onMailDrafts, Describe: subjectDescribe("Send draft"), Run: mailAction("send-draft", false)})
@@ -1571,7 +1676,7 @@ func (m *Model) registerCommands() {
 }
 
 func (m Model) paletteContext() commands.Context {
-	ctx := commands.Context{ActiveScreen: m.activeScreen}
+	ctx := commands.Context{ActiveScreen: m.activeScreen, ActiveModule: m.activeModule()}
 	if isMailScreen(m.activeScreen) {
 		if mail, ok := m.screens[m.activeScreen].(screens.Mail); ok {
 			sel := mail.Selection()
@@ -1590,6 +1695,12 @@ func (m Model) paletteContext() commands.Context {
 			ctx.Selection = &commands.Selection{Kind: sel.Kind, Subject: sel.Subject, HasItems: sel.HasItem}
 		}
 	}
+	if m.activeScreen == "contacts" {
+		if contactsScreen, ok := m.screens["contacts"].(screens.Contacts); ok {
+			sel := contactsScreen.Selection()
+			ctx.Selection = &commands.Selection{Kind: sel.Kind, Subject: sel.Subject, HasItems: sel.HasItem}
+		}
+	}
 	if m.activeScreen == "calendar" {
 		if calendarScreen, ok := m.screens["calendar"].(screens.Calendar); ok {
 			sel := calendarScreen.Selection()
@@ -1597,6 +1708,26 @@ func (m Model) paletteContext() commands.Context {
 		}
 	}
 	return ctx
+}
+
+func (m Model) activeModule() string {
+	switch {
+	case isMailScreen(m.activeScreen) || m.activeScreen == "mail-admin":
+		return commands.ModuleMail
+	case m.activeScreen == "calendar":
+		return commands.ModuleCalendar
+	case m.activeScreen == "contacts":
+		return commands.ModuleContacts
+	case m.activeScreen == "drive":
+		return commands.ModuleDrive
+	case m.activeScreen == "notes":
+		return commands.ModuleNotes
+	case isHackerNewsScreen(m.activeScreen) || m.activeScreen == "news":
+		return commands.ModuleHackerNews
+	case m.activeScreen == "settings":
+		return commands.ModuleSettings
+	}
+	return ""
 }
 
 func (m *Model) switchScreen(id string) {

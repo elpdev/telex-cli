@@ -5,6 +5,7 @@ import tea "charm.land/bubbletea/v2"
 const (
 	ModuleMail       = "mail"
 	ModuleCalendar   = "calendar"
+	ModuleContacts   = "contacts"
 	ModuleDrive      = "drive"
 	ModuleNotes      = "notes"
 	ModuleHackerNews = "hackernews"
@@ -17,6 +18,18 @@ const (
 	GroupInbox    = "inbox"
 )
 
+func Modules() []string {
+	return []string{ModuleMail, ModuleCalendar, ModuleContacts, ModuleDrive, ModuleNotes, ModuleHackerNews, ModuleSettings, ModuleGlobal}
+}
+
+func ScopedModules() []string {
+	return []string{ModuleMail, ModuleCalendar, ModuleContacts, ModuleDrive, ModuleNotes, ModuleHackerNews, ModuleSettings}
+}
+
+func Groups() []string {
+	return []string{GroupDrafts, GroupMessages, GroupOutbox, GroupInbox}
+}
+
 type Command struct {
 	ID          string
 	Module      string
@@ -25,6 +38,7 @@ type Command struct {
 	Description string
 	Shortcut    string
 	Keywords    []string
+	Pinned      bool
 	Available   func(Context) bool
 	Describe    func(Context) string
 	OpensPage   string
@@ -33,6 +47,7 @@ type Command struct {
 
 type Context struct {
 	ActiveScreen string
+	ActiveModule string
 	Selection    *Selection
 }
 
@@ -51,6 +66,8 @@ func (c Command) IsAvailable(ctx Context) bool {
 	}
 	return c.Available(ctx)
 }
+
+func (c Command) HasCustomAvailability() bool { return c.Available != nil }
 
 func (c Command) DescriptionFor(ctx Context) string {
 	if c.Describe != nil {

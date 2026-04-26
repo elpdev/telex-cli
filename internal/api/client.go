@@ -55,6 +55,10 @@ func (c *Client) Post(ctx context.Context, path string, body any) ([]byte, int, 
 	return c.do(ctx, http.MethodPost, path, body)
 }
 
+func (c *Client) Put(ctx context.Context, path string, body any) ([]byte, int, error) {
+	return c.do(ctx, http.MethodPut, path, body)
+}
+
 func (c *Client) Patch(ctx context.Context, path string, body any) ([]byte, int, error) {
 	return c.do(ctx, http.MethodPatch, path, body)
 }
