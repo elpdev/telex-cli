@@ -19,7 +19,7 @@ import (
 	"github.com/elpdev/telex-cli/internal/components/filepicker"
 )
 
-type CalendarSyncFunc func(context.Context) (CalendarSyncResult, error)
+type CalendarSyncFunc func(context.Context, string, string) (CalendarSyncResult, error)
 type CreateCalendarFunc func(context.Context, calendar.CalendarInput) (*calendar.Calendar, error)
 type UpdateCalendarFunc func(context.Context, int64, calendar.CalendarInput) (*calendar.Calendar, error)
 type DeleteCalendarFunc func(context.Context, int64) error
@@ -70,6 +70,8 @@ type Calendar struct {
 	allItems       []calendarstore.OccurrenceMeta
 	items          []calendarstore.OccurrenceMeta
 	calendars      []calendarstore.CalendarMeta
+	rangeStart     time.Time
+	rangeEnd       time.Time
 	mode           calendarViewMode
 	index          int
 	calendarIndex  int
@@ -104,6 +106,8 @@ type CalendarKeyMap struct {
 	Refresh key.Binding
 	Sync    key.Binding
 	Today   key.Binding
+	Prev    key.Binding
+	Next    key.Binding
 	View    key.Binding
 	New     key.Binding
 	Edit    key.Binding
@@ -201,6 +205,8 @@ func DefaultCalendarKeyMap() CalendarKeyMap {
 		Refresh: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload cache")),
 		Sync:    key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "sync calendar")),
 		Today:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "today")),
+		Prev:    key.NewBinding(key.WithKeys("["), key.WithHelp("[", "previous range")),
+		Next:    key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "next range")),
 		View:    key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "agenda/calendars")),
 		New:     key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new event")),
 		Edit:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit event")),
@@ -297,6 +303,9 @@ func (c Calendar) View(width, height int) string {
 	if c.status != "" {
 		b.WriteString(c.status + "\n")
 	}
+	if c.mode == calendarViewAgenda {
+		b.WriteString("Range: " + c.rangeLabel() + "\n")
+	}
 	if c.syncing {
 		b.WriteString("Syncing remote Calendar...\n")
 	}
@@ -331,7 +340,7 @@ func (c Calendar) View(width, height int) string {
 		if i == c.index {
 			cursor = "> "
 		}
-		b.WriteString(fmt.Sprintf("%s%s  %s  %s\n", cursor, item.StartsAt.Format("Jan 02 15:04"), item.Title, item.Status))
+		b.WriteString(fmt.Sprintf("%s%s  %s  %s  %s\n", cursor, item.StartsAt.Format("Jan 02 15:04"), c.agendaCalendarMarker(item.CalendarID), item.Title, item.Status))
 	}
 	return style.Render(b.String())
 }
@@ -339,7 +348,7 @@ func (c Calendar) View(width, height int) string {
 func (c Calendar) Title() string { return "Calendar" }
 
 func (c Calendar) KeyBindings() []key.Binding {
-	return []key.Binding{c.keys.Up, c.keys.Down, c.keys.Open, c.keys.Back, c.keys.Refresh, c.keys.Sync, c.keys.Today, c.keys.View, c.keys.New, c.keys.Edit, c.keys.Delete, c.keys.Import, c.keys.Filter, c.keys.Clear}
+	return []key.Binding{c.keys.Up, c.keys.Down, c.keys.Open, c.keys.Back, c.keys.Refresh, c.keys.Sync, c.keys.Today, c.keys.Prev, c.keys.Next, c.keys.View, c.keys.New, c.keys.Edit, c.keys.Delete, c.keys.Import, c.keys.Filter, c.keys.Clear}
 }
 
 func (c Calendar) CapturesFocusKey(tea.KeyPressMsg) bool {
@@ -430,8 +439,20 @@ func (c Calendar) handleAction(action string) (Screen, tea.Cmd) {
 		}
 		return c.startEventForm(calendarFormEventEdit, cached)
 	case "today":
-		c.jumpToToday()
-		return c, nil
+		c.jumpToTodayRange()
+		c.loading = true
+		c.status = "Showing " + c.rangeLabel()
+		return c, c.loadCmd()
+	case "previous-range":
+		c.shiftRange(-1)
+		c.loading = true
+		c.status = "Showing " + c.rangeLabel()
+		return c, c.loadCmd()
+	case "next-range":
+		c.shiftRange(1)
+		c.loading = true
+		c.status = "Showing " + c.rangeLabel()
+		return c, c.loadCmd()
 	case "toggle-view":
 		c.toggleMode()
 		return c, nil
@@ -579,6 +600,12 @@ func (c Calendar) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	}
 	if key.Matches(msg, c.keys.Today) {
 		return c.handleAction("today")
+	}
+	if key.Matches(msg, c.keys.Prev) && c.mode == calendarViewAgenda && !c.detail {
+		return c.handleAction("previous-range")
+	}
+	if key.Matches(msg, c.keys.Next) && c.mode == calendarViewAgenda && !c.detail {
+		return c.handleAction("next-range")
 	}
 	if key.Matches(msg, c.keys.View) {
 		return c.handleAction("toggle-view")
@@ -905,14 +932,18 @@ func (c Calendar) detailView() string {
 	if !ok {
 		return "No event selected.\n"
 	}
+	cal, hasCalendar := c.calendarByID(item.CalendarID)
 	event, err := c.store.ReadEvent(item.EventID)
 	if err != nil {
-		lines := occurrenceDetailLines(item)
+		lines := occurrenceDetailLines(item, cal, hasCalendar)
 		lines = append(lines, "", "Cached event details: unavailable")
 		return strings.Join(lines, "\n") + "\n"
 	}
 	messageID := firstEventMessageID(event.Meta)
-	lines := cachedEventDetailLines(*event)
+	if !hasCalendar && event.Meta.CalendarID != item.CalendarID {
+		cal, hasCalendar = c.calendarByID(event.Meta.CalendarID)
+	}
+	lines := cachedEventDetailLines(*event, cal, hasCalendar)
 	if c.invitation != nil && c.invitation.MessageID == messageID {
 		lines = append(lines, "")
 		lines = append(lines, invitationView(*c.invitation)...)
@@ -920,12 +951,15 @@ func (c Calendar) detailView() string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-func occurrenceDetailLines(item calendarstore.OccurrenceMeta) []string {
+func occurrenceDetailLines(item calendarstore.OccurrenceMeta, cal calendarstore.CalendarMeta, hasCalendar bool) []string {
 	return []string{
 		item.Title,
 		"",
 		"Event ID: " + strconv.FormatInt(item.EventID, 10),
 		"Calendar ID: " + strconv.FormatInt(item.CalendarID, 10),
+		"Calendar: " + calendarDetailName(item.CalendarID, cal, hasCalendar),
+		"Calendar color: " + calendarDetailColor(cal, hasCalendar),
+		"Calendar time zone: " + calendarDetailTimeZone(cal, hasCalendar, ""),
 		"Starts: " + item.StartsAt.Format("2006-01-02 15:04"),
 		"Ends: " + item.EndsAt.Format("2006-01-02 15:04"),
 		"All day: " + strconv.FormatBool(item.AllDay),
@@ -934,16 +968,20 @@ func occurrenceDetailLines(item calendarstore.OccurrenceMeta) []string {
 	}
 }
 
-func cachedEventDetailLines(event calendarstore.CachedEvent) []string {
+func cachedEventDetailLines(event calendarstore.CachedEvent, cal calendarstore.CalendarMeta, hasCalendar bool) []string {
 	meta := event.Meta
 	lines := []string{
 		meta.Title,
 		"",
 		"Event ID: " + strconv.FormatInt(meta.RemoteID, 10),
 		"Calendar ID: " + strconv.FormatInt(meta.CalendarID, 10),
+		"Calendar: " + calendarDetailName(meta.CalendarID, cal, hasCalendar),
+		"Calendar color: " + calendarDetailColor(cal, hasCalendar),
+		"Calendar time zone: " + calendarDetailTimeZone(cal, hasCalendar, meta.TimeZone),
 		"Starts: " + meta.StartsAt.Format("2006-01-02 15:04"),
 		"Ends: " + meta.EndsAt.Format("2006-01-02 15:04"),
 		"All day: " + strconv.FormatBool(meta.AllDay),
+		"Event time zone: " + emptyDash(meta.TimeZone),
 		"Location: " + emptyDash(meta.Location),
 		"Status: " + emptyDash(meta.Status),
 	}
@@ -979,7 +1017,7 @@ func eventOrganizerView(event calendarstore.EventMeta) []string {
 }
 
 func recurrenceView(event calendarstore.EventMeta) []string {
-	if event.RecurrenceSummary == "" && event.RecurrenceRule == "" {
+	if event.RecurrenceSummary == "" && event.RecurrenceRule == "" && len(event.NextOccurrences) == 0 && len(event.RecurrenceExceptions) == 0 {
 		return nil
 	}
 	lines := []string{"", "Recurrence:"}
@@ -988,6 +1026,18 @@ func recurrenceView(event calendarstore.EventMeta) []string {
 	}
 	if event.RecurrenceRule != "" {
 		lines = append(lines, "Rule: "+event.RecurrenceRule)
+	}
+	if len(event.NextOccurrences) > 0 {
+		lines = append(lines, fmt.Sprintf("Next occurrences: %d", len(event.NextOccurrences)))
+		for _, occurrence := range event.NextOccurrences {
+			lines = append(lines, "- "+formatCalendarMessageTime(occurrence))
+		}
+	}
+	if len(event.RecurrenceExceptions) > 0 {
+		lines = append(lines, fmt.Sprintf("Exceptions: %d", len(event.RecurrenceExceptions)))
+		for _, exception := range event.RecurrenceExceptions {
+			lines = append(lines, "- "+emptyDash(exception))
+		}
 	}
 	return lines
 }
@@ -1120,6 +1170,68 @@ func (c Calendar) calendarListView() string {
 	return b.String()
 }
 
+func (c Calendar) agendaCalendarMarker(calendarID int64) string {
+	cal, ok := c.calendarByID(calendarID)
+	label := calendarRowLabel(calendarID, cal, ok)
+	color := strings.TrimSpace(cal.Color)
+	marker := "##"
+	if color != "" {
+		marker = lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(marker)
+	}
+	return marker + " " + label
+}
+
+func (c Calendar) calendarByID(calendarID int64) (calendarstore.CalendarMeta, bool) {
+	for _, cal := range c.calendars {
+		if cal.RemoteID == calendarID {
+			return cal, true
+		}
+	}
+	return calendarstore.CalendarMeta{}, false
+}
+
+func calendarRowLabel(calendarID int64, cal calendarstore.CalendarMeta, ok bool) string {
+	name := ""
+	if ok {
+		name = strings.TrimSpace(cal.Name)
+	}
+	if name != "" {
+		return name
+	}
+	if calendarID > 0 {
+		return "calendar:" + strconv.FormatInt(calendarID, 10)
+	}
+	return "calendar:-"
+}
+
+func calendarDetailName(calendarID int64, cal calendarstore.CalendarMeta, ok bool) string {
+	name := ""
+	if ok {
+		name = strings.TrimSpace(cal.Name)
+	}
+	if name != "" {
+		return name
+	}
+	if calendarID > 0 {
+		return "#" + strconv.FormatInt(calendarID, 10)
+	}
+	return "-"
+}
+
+func calendarDetailColor(cal calendarstore.CalendarMeta, ok bool) string {
+	if !ok {
+		return "-"
+	}
+	return emptyDash(cal.Color)
+}
+
+func calendarDetailTimeZone(cal calendarstore.CalendarMeta, ok bool, fallback string) string {
+	if ok && strings.TrimSpace(cal.TimeZone) != "" {
+		return strings.TrimSpace(cal.TimeZone)
+	}
+	return emptyDash(fallback)
+}
+
 func (c Calendar) modeTitle() string {
 	if c.mode == calendarViewCalendars {
 		return "Calendars"
@@ -1146,6 +1258,53 @@ func (c *Calendar) jumpToToday() {
 			return
 		}
 	}
+}
+
+func (c *Calendar) jumpToTodayRange() {
+	today := calendarRangeDate(time.Now())
+	c.rangeStart = today
+	c.rangeEnd = today.AddDate(0, 0, 30)
+	c.detail = false
+}
+
+func (c *Calendar) shiftRange(direction int) {
+	start, end := c.activeRange()
+	duration := end.Sub(start)
+	if duration <= 0 {
+		duration = 30 * 24 * time.Hour
+	}
+	shift := time.Duration(direction) * duration
+	c.rangeStart = start.Add(shift)
+	c.rangeEnd = end.Add(shift)
+	c.index = 0
+	c.detail = false
+}
+
+func (c Calendar) activeRange() (time.Time, time.Time) {
+	start := c.rangeStart
+	end := c.rangeEnd
+	if start.IsZero() {
+		start = calendarRangeDate(time.Now())
+	}
+	if end.IsZero() || !end.After(start) {
+		end = start.AddDate(0, 0, 30)
+	}
+	return start, end
+}
+
+func (c Calendar) rangeDates() (string, string) {
+	start, end := c.activeRange()
+	return start.Format("2006-01-02"), end.Format("2006-01-02")
+}
+
+func (c Calendar) rangeLabel() string {
+	start, end := c.activeRange()
+	return fmt.Sprintf("%s to %s", start.Format("Jan 02, 2006"), end.AddDate(0, 0, -1).Format("Jan 02, 2006"))
+}
+
+func calendarRangeDate(value time.Time) time.Time {
+	year, month, day := value.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, value.Location())
 }
 
 func (c *Calendar) applyAgendaFilter() {
@@ -1359,7 +1518,8 @@ func (c Calendar) loadCmd() tea.Cmd {
 }
 
 func (c Calendar) load() calendarLoadedMsg {
-	items, err := c.store.ListOccurrences()
+	start, end := c.activeRange()
+	items, err := c.store.ListOccurrencesRange(start, end)
 	if err != nil {
 		return calendarLoadedMsg{err: err}
 	}
@@ -1368,8 +1528,9 @@ func (c Calendar) load() calendarLoadedMsg {
 }
 
 func (c Calendar) syncCmd() tea.Cmd {
+	from, to := c.rangeDates()
 	return func() tea.Msg {
-		result, err := c.sync(context.Background())
+		result, err := c.sync(context.Background(), from, to)
 		loaded := calendarLoadedMsg{}
 		if err == nil {
 			loaded = c.load()

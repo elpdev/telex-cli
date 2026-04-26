@@ -95,6 +95,75 @@ func TestCalendarAgendaFilterModeAppliesAndRendersActiveFilters(t *testing.T) {
 	}
 }
 
+func TestCalendarAgendaRowsShowCalendarMarkerAndFallback(t *testing.T) {
+	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
+	screen := Calendar{
+		items: []calendarstore.OccurrenceMeta{
+			{EventID: 1, CalendarID: 10, Title: "Planning", StartsAt: startsAt, Status: "confirmed"},
+			{EventID: 2, CalendarID: 20, Title: "Lunch", StartsAt: startsAt.Add(time.Hour), Status: "tentative"},
+		},
+		calendars: []calendarstore.CalendarMeta{{RemoteID: 10, Name: "Work", Color: "#22c55e"}},
+		keys:      DefaultCalendarKeyMap(),
+	}
+
+	view := screen.View(100, 20)
+	for _, want := range []string{"Work", "Planning", "## calendar:20", "Lunch"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("agenda view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestCalendarRangeNavigationReloadsCachedWindow(t *testing.T) {
+	store := calendarstore.New(t.TempDir())
+	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
+	events := []calendar.CalendarOccurrence{
+		{StartsAt: startsAt, EndsAt: startsAt.Add(time.Hour), Event: calendar.CalendarEvent{ID: 1, CalendarID: 10, Title: "Current"}},
+		{StartsAt: startsAt.AddDate(0, 0, 30), EndsAt: startsAt.AddDate(0, 0, 30).Add(time.Hour), Event: calendar.CalendarEvent{ID: 2, CalendarID: 10, Title: "Next"}},
+	}
+	if err := store.StoreOccurrences(events, startsAt); err != nil {
+		t.Fatal(err)
+	}
+	screen := Calendar{store: store, rangeStart: time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC), rangeEnd: time.Date(2026, 5, 25, 0, 0, 0, 0, time.UTC), keys: DefaultCalendarKeyMap()}
+
+	updated, cmd := screen.Update(CalendarActionMsg{Action: "next-range"})
+	if cmd == nil {
+		t.Fatal("expected range change to reload cache")
+	}
+	updated, _ = updated.Update(cmd())
+	screen = updated.(Calendar)
+	if len(screen.items) != 1 || screen.items[0].Title != "Next" {
+		t.Fatalf("items = %#v", screen.items)
+	}
+	if got := screen.rangeLabel(); got != "May 25, 2026 to Jun 23, 2026" {
+		t.Fatalf("range label = %q", got)
+	}
+}
+
+func TestCalendarSyncUsesActiveRange(t *testing.T) {
+	var gotFrom, gotTo string
+	screen := Calendar{
+		sync: func(_ context.Context, from, to string) (CalendarSyncResult, error) {
+			gotFrom = from
+			gotTo = to
+			return CalendarSyncResult{}, nil
+		},
+		rangeStart: time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC),
+		rangeEnd:   time.Date(2026, 5, 25, 0, 0, 0, 0, time.UTC),
+		keys:       DefaultCalendarKeyMap(),
+	}
+
+	updated, cmd := screen.Update(CalendarActionMsg{Action: "sync"})
+	if cmd == nil {
+		t.Fatal("expected sync command")
+	}
+	updated, _ = updated.Update(cmd())
+	_ = updated.(Calendar)
+	if gotFrom != "2026-04-25" || gotTo != "2026-05-25" {
+		t.Fatalf("range = %q to %q", gotFrom, gotTo)
+	}
+}
+
 func TestCalendarAgendaClearFilterRestoresItems(t *testing.T) {
 	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
 	screen := Calendar{allItems: []calendarstore.OccurrenceMeta{{EventID: 1, Title: "Planning", StartsAt: startsAt}, {EventID: 2, Title: "Lunch", StartsAt: startsAt.Add(time.Hour)}}, keys: DefaultCalendarKeyMap()}
@@ -143,6 +212,48 @@ func TestCalendarDetailShowsLinkedMessages(t *testing.T) {
 	}
 }
 
+func TestCalendarDetailShowsCalendarMetadata(t *testing.T) {
+	store := calendarstore.New(t.TempDir())
+	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
+	cal := calendar.Calendar{ID: 10, Name: "Work", Color: "#22c55e", TimeZone: "America/New_York"}
+	event := calendar.CalendarEvent{ID: 9, CalendarID: cal.ID, Title: "Planning", StartsAt: startsAt, EndsAt: startsAt.Add(time.Hour), TimeZone: "UTC"}
+	if err := store.StoreCalendar(cal, startsAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreEvent(event, startsAt); err != nil {
+		t.Fatal(err)
+	}
+	calendars, err := store.ListCalendars()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	screen := Calendar{store: store, calendars: calendars, items: []calendarstore.OccurrenceMeta{{EventID: event.ID, CalendarID: event.CalendarID, Title: event.Title, StartsAt: event.StartsAt, EndsAt: event.EndsAt}}}
+	view := screen.detailView()
+	for _, want := range []string{"Calendar: Work", "Calendar color: #22c55e", "Calendar time zone: America/New_York", "Event time zone: UTC"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("detail view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestCalendarDetailCalendarMetadataFallbacks(t *testing.T) {
+	store := calendarstore.New(t.TempDir())
+	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
+	event := calendar.CalendarEvent{ID: 9, CalendarID: 10, Title: "Planning", StartsAt: startsAt, EndsAt: startsAt.Add(time.Hour), TimeZone: "UTC"}
+	if err := store.StoreEvent(event, startsAt); err != nil {
+		t.Fatal(err)
+	}
+
+	screen := Calendar{store: store, items: []calendarstore.OccurrenceMeta{{EventID: event.ID, CalendarID: event.CalendarID, Title: event.Title, StartsAt: event.StartsAt, EndsAt: event.EndsAt}}}
+	view := screen.detailView()
+	for _, want := range []string{"Calendar: #10", "Calendar color: -", "Calendar time zone: UTC"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("detail view missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestCalendarDetailUsesCachedFullEvent(t *testing.T) {
 	store := calendarstore.New(t.TempDir())
 	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
@@ -159,6 +270,13 @@ func TestCalendarDetailUsesCachedFullEvent(t *testing.T) {
 		OrganizerEmail:    "alex@example.com",
 		RecurrenceSummary: "Weekly on Friday",
 		RecurrenceRule:    "FREQ=WEEKLY;BYDAY=FR",
+		RecurrenceExceptions: []string{
+			"2026-05-01",
+		},
+		NextOccurrences: []time.Time{
+			startsAt.Add(7 * 24 * time.Hour),
+			startsAt.Add(14 * 24 * time.Hour),
+		},
 		Attendees: []calendar.CalendarEventAttendee{{
 			Email:               "leo@example.com",
 			Name:                "Leo",
@@ -183,10 +301,25 @@ func TestCalendarDetailUsesCachedFullEvent(t *testing.T) {
 
 	screen := Calendar{store: store, items: []calendarstore.OccurrenceMeta{{EventID: event.ID, CalendarID: event.CalendarID, Title: "Occurrence title", StartsAt: event.StartsAt, EndsAt: event.EndsAt}}}
 	view := screen.detailView()
-	for _, want := range []string{"Planning", "Description:", "Discuss roadmap", "Confirm launch date", "Organizer: Alex <alex@example.com>", "Recurrence:", "Summary: Weekly on Friday", "Rule: FREQ=WEEKLY;BYDAY=FR", "Attendees: 1", "Leo <leo@example.com> | role:required | status:accepted", "Links: 1", "message:42 | uid:uid-1 | method:REQUEST | sequence:3", "Messages: 1", "Planning invite", "Please RSVP"} {
+	for _, want := range []string{"Planning", "Description:", "Discuss roadmap", "Confirm launch date", "Organizer: Alex <alex@example.com>", "Recurrence:", "Summary: Weekly on Friday", "Rule: FREQ=WEEKLY;BYDAY=FR", "Next occurrences: 2", "2026-05-02 14:00", "2026-05-09 14:00", "Exceptions: 1", "2026-05-01", "Attendees: 1", "Leo <leo@example.com> | role:required | status:accepted", "Links: 1", "message:42 | uid:uid-1 | method:REQUEST | sequence:3", "Messages: 1", "Planning invite", "Please RSVP"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("detail view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestCalendarDetailOmitsRecurrenceForNonRecurringEvent(t *testing.T) {
+	store := calendarstore.New(t.TempDir())
+	startsAt := time.Date(2026, 4, 25, 14, 0, 0, 0, time.UTC)
+	event := calendar.CalendarEvent{ID: 9, CalendarID: 1, Title: "Planning", StartsAt: startsAt, EndsAt: startsAt.Add(time.Hour)}
+	if err := store.StoreEvent(event, startsAt); err != nil {
+		t.Fatal(err)
+	}
+
+	screen := Calendar{store: store, items: []calendarstore.OccurrenceMeta{{EventID: event.ID, CalendarID: event.CalendarID, Title: event.Title, StartsAt: event.StartsAt, EndsAt: event.EndsAt}}}
+	view := screen.detailView()
+	if strings.Contains(view, "Recurrence:") {
+		t.Fatalf("detail view should omit empty recurrence section:\n%s", view)
 	}
 }
 

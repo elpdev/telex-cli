@@ -889,12 +889,12 @@ func (m *Model) deleteNote(ctx context.Context, id int64) error {
 	return notestore.New(m.dataPath).DeleteNote(id)
 }
 
-func (m *Model) syncCalendar(ctx context.Context) (screens.CalendarSyncResult, error) {
+func (m *Model) syncCalendar(ctx context.Context, from, to string) (screens.CalendarSyncResult, error) {
 	service, err := m.calendarService()
 	if err != nil {
 		return screens.CalendarSyncResult{}, err
 	}
-	result, err := runCalendarSync(ctx, calendarstore.New(m.dataPath), service, calendarSyncOptions{})
+	result, err := runCalendarSync(ctx, calendarstore.New(m.dataPath), service, calendarSyncOptions{From: from, To: to})
 	return screens.CalendarSyncResult{Calendars: result.Calendars, Events: result.Events, Occurrences: result.Occurrences}, err
 }
 
@@ -1418,6 +1418,8 @@ func (m *Model) registerCommands() {
 	m.commands.Register(commands.Command{ID: "calendar-new", Module: commands.ModuleCalendar, Title: "New event", Description: "Create a calendar event", Shortcut: "n", Keywords: []string{"new", "create", "event"}, Available: onCalendar, Run: calendarAction("new", false)})
 	m.commands.Register(commands.Command{ID: "calendar-edit", Module: commands.ModuleCalendar, Title: "Edit selected event", Description: "Edit the highlighted calendar event", Shortcut: "e", Keywords: []string{"edit", "update", "event"}, Available: onCalendarItem, Run: calendarAction("edit", false)})
 	m.commands.Register(commands.Command{ID: "calendar-today", Module: commands.ModuleCalendar, Title: "Jump to today", Description: "Move selection to the next occurrence today or later", Shortcut: "t", Keywords: []string{"today", "agenda"}, Available: onCalendar, Run: calendarAction("today", false)})
+	m.commands.Register(commands.Command{ID: "calendar-previous-range", Module: commands.ModuleCalendar, Title: "Previous agenda range", Description: "Move the agenda to the previous cached date range", Shortcut: "[", Keywords: []string{"previous", "prev", "range", "agenda", "calendar"}, Available: onCalendar, Run: calendarAction("previous-range", false)})
+	m.commands.Register(commands.Command{ID: "calendar-next-range", Module: commands.ModuleCalendar, Title: "Next agenda range", Description: "Move the agenda to the next cached date range", Shortcut: "]", Keywords: []string{"next", "range", "agenda", "calendar"}, Available: onCalendar, Run: calendarAction("next-range", false)})
 	m.commands.Register(commands.Command{ID: "calendar-filter-agenda", Module: commands.ModuleCalendar, Title: "Filter agenda", Description: "Filter agenda by calendar, status, source, title, or location", Shortcut: "/", Keywords: []string{"filter", "search", "agenda", "calendar", "status", "source"}, Available: onCalendar, Run: calendarAction("filter", false)})
 	m.commands.Register(commands.Command{ID: "calendar-clear-agenda-filters", Module: commands.ModuleCalendar, Title: "Clear agenda filters", Description: "Show all cached agenda occurrences", Shortcut: "ctrl+l", Keywords: []string{"clear", "filter", "search", "agenda"}, Available: onCalendar, Run: calendarAction("clear-filter", false)})
 	m.commands.Register(commands.Command{ID: "calendar-delete", Module: commands.ModuleCalendar, Title: "Delete selected event", Description: "Delete the highlighted calendar event after confirmation", Shortcut: "x", Keywords: []string{"delete", "remove", "event"}, Available: onCalendarItem, Run: calendarAction("delete", false)})

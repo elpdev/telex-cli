@@ -34,29 +34,31 @@ type CalendarMeta struct {
 }
 
 type EventMeta struct {
-	SchemaVersion     int            `toml:"schema_version"`
-	RemoteID          int64          `toml:"remote_id"`
-	CalendarID        int64          `toml:"calendar_id"`
-	Title             string         `toml:"title"`
-	Location          string         `toml:"location"`
-	AllDay            bool           `toml:"all_day"`
-	StartsAt          time.Time      `toml:"starts_at"`
-	EndsAt            time.Time      `toml:"ends_at"`
-	TimeZone          string         `toml:"time_zone"`
-	Status            string         `toml:"status"`
-	Source            string         `toml:"source"`
-	UID               string         `toml:"uid"`
-	OrganizerName     string         `toml:"organizer_name"`
-	OrganizerEmail    string         `toml:"organizer_email"`
-	RecurrenceRule    string         `toml:"recurrence_rule"`
-	RecurrenceSummary string         `toml:"recurrence_summary"`
-	Invitation        bool           `toml:"invitation"`
-	Attendees         []AttendeeMeta `toml:"attendees"`
-	Links             []LinkMeta     `toml:"links"`
-	Messages          []MessageMeta  `toml:"messages"`
-	RemoteCreatedAt   time.Time      `toml:"remote_created_at"`
-	RemoteUpdatedAt   time.Time      `toml:"remote_updated_at"`
-	SyncedAt          time.Time      `toml:"synced_at"`
+	SchemaVersion        int            `toml:"schema_version"`
+	RemoteID             int64          `toml:"remote_id"`
+	CalendarID           int64          `toml:"calendar_id"`
+	Title                string         `toml:"title"`
+	Location             string         `toml:"location"`
+	AllDay               bool           `toml:"all_day"`
+	StartsAt             time.Time      `toml:"starts_at"`
+	EndsAt               time.Time      `toml:"ends_at"`
+	TimeZone             string         `toml:"time_zone"`
+	Status               string         `toml:"status"`
+	Source               string         `toml:"source"`
+	UID                  string         `toml:"uid"`
+	OrganizerName        string         `toml:"organizer_name"`
+	OrganizerEmail       string         `toml:"organizer_email"`
+	RecurrenceRule       string         `toml:"recurrence_rule"`
+	RecurrenceSummary    string         `toml:"recurrence_summary"`
+	RecurrenceExceptions []string       `toml:"recurrence_exceptions"`
+	NextOccurrences      []time.Time    `toml:"next_occurrences"`
+	Invitation           bool           `toml:"invitation"`
+	Attendees            []AttendeeMeta `toml:"attendees"`
+	Links                []LinkMeta     `toml:"links"`
+	Messages             []MessageMeta  `toml:"messages"`
+	RemoteCreatedAt      time.Time      `toml:"remote_created_at"`
+	RemoteUpdatedAt      time.Time      `toml:"remote_updated_at"`
+	SyncedAt             time.Time      `toml:"synced_at"`
 }
 
 type AttendeeMeta struct {
@@ -187,7 +189,7 @@ func (s Store) StoreEvent(value calendar.CalendarEvent, syncedAt time.Time) erro
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return err
 	}
-	meta := EventMeta{SchemaVersion: SchemaVersion, RemoteID: value.ID, CalendarID: value.CalendarID, Title: value.Title, Location: value.Location, AllDay: value.AllDay, StartsAt: value.StartsAt, EndsAt: value.EndsAt, TimeZone: value.TimeZone, Status: value.Status, Source: value.Source, UID: value.UID, OrganizerName: value.OrganizerName, OrganizerEmail: value.OrganizerEmail, RecurrenceRule: value.RecurrenceRule, RecurrenceSummary: value.RecurrenceSummary, Invitation: value.Invitation, Attendees: attendeeMetas(value.Attendees), Links: linkMetas(value.Links), Messages: messageMetas(value.Messages), RemoteCreatedAt: value.CreatedAt, RemoteUpdatedAt: value.UpdatedAt, SyncedAt: syncedAt}
+	meta := EventMeta{SchemaVersion: SchemaVersion, RemoteID: value.ID, CalendarID: value.CalendarID, Title: value.Title, Location: value.Location, AllDay: value.AllDay, StartsAt: value.StartsAt, EndsAt: value.EndsAt, TimeZone: value.TimeZone, Status: value.Status, Source: value.Source, UID: value.UID, OrganizerName: value.OrganizerName, OrganizerEmail: value.OrganizerEmail, RecurrenceRule: value.RecurrenceRule, RecurrenceSummary: value.RecurrenceSummary, RecurrenceExceptions: value.RecurrenceExceptions, NextOccurrences: value.NextOccurrences, Invitation: value.Invitation, Attendees: attendeeMetas(value.Attendees), Links: linkMetas(value.Links), Messages: messageMetas(value.Messages), RemoteCreatedAt: value.CreatedAt, RemoteUpdatedAt: value.UpdatedAt, SyncedAt: syncedAt}
 	if err := writeTOML(filepath.Join(path, "meta.toml"), meta); err != nil {
 		return err
 	}
@@ -285,6 +287,27 @@ func (s Store) ListOccurrences() ([]OccurrenceMeta, error) {
 		out = append(out, meta)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].StartsAt.Before(out[j].StartsAt) })
+	return out, nil
+}
+
+func (s Store) ListOccurrencesRange(from, to time.Time) ([]OccurrenceMeta, error) {
+	items, err := s.ListOccurrences()
+	if err != nil {
+		return nil, err
+	}
+	if from.IsZero() && to.IsZero() {
+		return items, nil
+	}
+	out := make([]OccurrenceMeta, 0, len(items))
+	for _, item := range items {
+		if !from.IsZero() && item.StartsAt.Before(from) {
+			continue
+		}
+		if !to.IsZero() && !item.StartsAt.Before(to) {
+			continue
+		}
+		out = append(out, item)
+	}
 	return out, nil
 }
 
