@@ -93,7 +93,7 @@ func TestMailScreenScrollsDetailView(t *testing.T) {
 	updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	screen = updated.(Mail)
 
-	detail := stripScreenANSI(screen.View(100, 9))
+	detail := stripScreenANSI(screen.View(100, 6))
 	if strings.Contains(detail, "line 1") || !strings.Contains(detail, "line 2") {
 		t.Fatalf("detail view = %q", detail)
 	}
@@ -174,7 +174,7 @@ func TestMailScreenShowsLinksFromDetail(t *testing.T) {
 	screen = updated.(Mail)
 
 	view := stripScreenANSI(screen.View(100, 20))
-	if !strings.Contains(view, "Links: Links") || !strings.Contains(view, "Read more") || !strings.Contains(view, "https://example.com/read") {
+	if !strings.Contains(view, "Mail / Links") || !strings.Contains(view, "Read more") || !strings.Contains(view, "https://example.com/read") {
 		t.Fatalf("view = %q", view)
 	}
 }
@@ -229,7 +229,7 @@ func TestMailScreenExtractsSelectedLinkToArticleReader(t *testing.T) {
 	screen = updated.(Mail)
 
 	view := stripScreenANSI(screen.View(100, 20))
-	if !strings.Contains(view, "Article reader") || !strings.Contains(view, "Extracted Article") || !strings.Contains(view, "Readable article body") {
+	if !strings.Contains(view, "Mail / Article") || !strings.Contains(view, "Extracted Article") || !strings.Contains(view, "Readable article body") {
 		t.Fatalf("view = %q", view)
 	}
 }
@@ -347,7 +347,7 @@ func TestMailScreenTogglesStarState(t *testing.T) {
 		t.Fatal("expected cached metadata to be starred")
 	}
 	view := stripScreenANSI(screen.View(100, 20))
-	if !strings.Contains(view, "!") {
+	if !strings.Contains(view, "★") {
 		t.Fatalf("expected starred marker in view, got %q", view)
 	}
 }
@@ -461,7 +461,7 @@ func TestMailScreenSwitchesMessageBoxes(t *testing.T) {
 	updated, _ = screen.Update(cmd())
 	screen = updated.(Mail)
 	view := stripScreenANSI(screen.View(100, 20))
-	if !strings.Contains(view, "Box 2/7: archive") || !strings.Contains(view, "Archived Subject") {
+	if !strings.Contains(view, "/ archive") || !strings.Contains(view, "Archived Subject") {
 		t.Fatalf("view = %q", view)
 	}
 }
@@ -512,7 +512,7 @@ func TestMailScreenShowsSentAndOutbox(t *testing.T) {
 		screen = updated.(Mail)
 	}
 	sentView := stripScreenANSI(screen.View(100, 20))
-	if !strings.Contains(sentView, "Box 4/7: sent") || !strings.Contains(sentView, "Sent Subject") {
+	if !strings.Contains(sentView, "/ sent") || !strings.Contains(sentView, "Sent Subject") {
 		t.Fatalf("sent view = %q", sentView)
 	}
 	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
@@ -523,7 +523,7 @@ func TestMailScreenShowsSentAndOutbox(t *testing.T) {
 	updated, _ = screen.Update(cmd())
 	screen = updated.(Mail)
 	outboxView := stripScreenANSI(screen.View(100, 20))
-	if !strings.Contains(outboxView, "Box 5/7: outbox") || !strings.Contains(outboxView, "Queued Subject") {
+	if !strings.Contains(outboxView, "/ outbox") || !strings.Contains(outboxView, "Queued Subject") {
 		t.Fatalf("outbox view = %q", outboxView)
 	}
 }

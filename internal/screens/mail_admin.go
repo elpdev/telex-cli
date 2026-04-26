@@ -192,23 +192,26 @@ func (m MailAdmin) View(width, height int) string {
 		return style.Render(m.form.WithWidth(max(40, width-4)).WithHeight(max(8, height-3)).View())
 	}
 	var b strings.Builder
-	b.WriteString("Mail Admin")
-	if m.status != "" {
-		b.WriteString(" · " + m.status)
-	}
+	b.WriteString(mailHeader("Mail Admin", m.status))
+	b.WriteByte('\n')
 	if m.err != nil {
-		b.WriteString(fmt.Sprintf("\nAPI error: %v", m.err))
+		b.WriteString(fmt.Sprintf("API error: %v\n", m.err))
 	}
-	b.WriteString("\n\n")
+	b.WriteString(mailSeparator(width))
+	b.WriteString("\n")
 	b.WriteString(m.listColumns(width))
+	b.WriteString(mailSeparator(width))
+	b.WriteByte('\n')
 	if m.confirm != "" {
-		b.WriteString("\n" + m.confirm + " [y/N]\n")
+		b.WriteString(m.confirm + " [y/N]\n")
 	}
 	if m.detail != "" {
-		b.WriteString("\n" + m.detail + "\n")
+		b.WriteString(m.detail + "\n")
 	} else {
-		b.WriteString("\n" + m.selectionDetails() + "\n")
+		b.WriteString(m.selectionDetails() + "\n")
 	}
+	b.WriteByte('\n')
+	b.WriteString(mailFooterHint("[esc] back", "[tab] focus", "[n] new", "[e] edit", "[x] delete", "[v] validate", "[p] pipeline", "[r] refresh"))
 	return style.Render(b.String())
 }
 

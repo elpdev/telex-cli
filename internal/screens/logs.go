@@ -5,73 +5,51 @@ import (
 	"strings"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"github.com/elpdev/telex-cli/internal/debug"
 )
 
 type Logs struct {
-	log    *debug.Log
-	offset int
+	log      *debug.Log
+	viewport viewport.Model
 }
 
-func NewLogs(log *debug.Log) Logs {
-	return Logs{log: log}
+func NewLogs(log *debug.Log) *Logs {
+	return &Logs{log: log, viewport: viewport.New()}
 }
 
-func (l Logs) Init() tea.Cmd { return nil }
+func (l *Logs) Init() tea.Cmd { return nil }
 
-func (l Logs) Update(msg tea.Msg) (Screen, tea.Cmd) {
+func (l *Logs) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	if msg, ok := msg.(tea.KeyPressMsg); ok {
 		switch msg.String() {
 		case "up", "k":
-			if l.offset > 0 {
-				l.offset--
-			}
+			l.viewport.ScrollUp(1)
 		case "down", "j":
-			if l.offset < max(0, len(l.log.Entries())-1) {
-				l.offset++
-			}
+			l.viewport.ScrollDown(1)
 		}
 	}
 	return l, nil
 }
 
-func (l Logs) View(width, height int) string {
-	lines := strings.Split(strings.TrimRight(l.content(), "\n"), "\n")
-	if len(lines) == 0 {
-		return ""
-	}
-	if l.offset > max(0, len(lines)-1) {
-		l.offset = max(0, len(lines)-1)
-	}
-	end := min(len(lines), l.offset+height)
-	return strings.Join(lines[l.offset:end], "\n")
+func (l *Logs) View(width, height int) string {
+	l.viewport.SetWidth(width)
+	l.viewport.SetHeight(height)
+	l.viewport.SetContent(strings.TrimRight(l.content(), "\n"))
+	return l.viewport.View()
 }
 
-func (l Logs) Title() string { return "Logs" }
+func (l *Logs) Title() string { return "Logs" }
 
-func (l Logs) KeyBindings() []key.Binding {
+func (l *Logs) KeyBindings() []key.Binding {
 	return []key.Binding{
 		key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "scroll up")),
 		key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "scroll down")),
 	}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func (l Logs) content() string {
+func (l *Logs) content() string {
 	entries := l.log.Entries()
 	if len(entries) == 0 {
 		return "No log entries yet."

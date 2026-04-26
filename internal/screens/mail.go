@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/elpdev/telex-cli/internal/articletext"
@@ -72,7 +73,7 @@ type Mail struct {
 	remoteSearchQuery     string
 	remoteSearchInput     string
 	remoteResults         bool
-	detailScroll          int
+	detailViewport        viewport.Model
 	links                 []emailtext.Link
 	linkIndex             int
 	attachmentIndex       int
@@ -84,12 +85,12 @@ type Mail struct {
 	forwardToInput        string
 	article               string
 	articleURL            string
-	articleScroll         int
+	articleViewport       viewport.Model
 	conversationID        int64
 	conversationItems     []ConversationEntry
 	conversationIndex     int
 	conversationBodyCache map[string]string
-	conversationScroll    int
+	conversationViewport  viewport.Model
 	previousMode          mailMode
 	mode                  mailMode
 	loading               bool
@@ -308,7 +309,7 @@ func NewMailWithActions(store mailstore.Store, toggleRead ToggleReadFunc, toggle
 	if len(remoteSearch) > 0 {
 		search = remoteSearch[0]
 	}
-	return Mail{store: store, toggleRead: toggleRead, toggleStar: toggleStar, archive: archive, trash: trash, restore: restore, sync: sync, sendDraft: sendDraft, updateDraft: updateDraft, deleteDraft: deleteDraft, forward: forward, download: download, remoteSearch: search, keys: DefaultMailKeyMap(), loading: true}
+	return Mail{store: store, toggleRead: toggleRead, toggleStar: toggleStar, archive: archive, trash: trash, restore: restore, sync: sync, sendDraft: sendDraft, updateDraft: updateDraft, deleteDraft: deleteDraft, forward: forward, download: download, remoteSearch: search, detailViewport: viewport.New(), articleViewport: viewport.New(), conversationViewport: viewport.New(), keys: DefaultMailKeyMap(), loading: true}
 }
 
 func (m Mail) WithConversationActions(conversation ConversationFunc, body ConversationBodyFunc) Mail {
@@ -423,7 +424,7 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		m.conversationID = msg.conversationID
 		m.conversationItems = msg.entries
 		m.conversationIndex = 0
-		m.conversationScroll = 0
+		m.resetConversationViewport()
 		m.conversationBodyCache = make(map[string]string)
 		m.mode = mailModeConversation
 		m.status = ""
@@ -468,7 +469,7 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		m.article = msg.article
 		m.articleURL = msg.url
-		m.articleScroll = 0
+		m.resetArticleViewport()
 		m.status = ""
 		m.mode = mailModeArticle
 		return m, nil
@@ -503,7 +504,7 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		m.removeMessageByPath(msg.path)
 		m.mode = mailModeList
-		m.detailScroll = 0
+		m.resetDetailViewport()
 		m.clampSelection()
 		switch msg.action {
 		case "archive":
@@ -743,7 +744,7 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if m.mode == mailModeDetail {
 		if key.Matches(msg, m.keys.Back) {
 			m.mode = mailModeList
-			m.detailScroll = 0
+			m.resetDetailViewport()
 			m.status = ""
 			return m, nil
 		}
@@ -808,16 +809,13 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		if key.Matches(msg, m.keys.Restore) {
 			return m.moveSelectedMessage("restore")
 		}
-		maxScroll := m.maxDetailScroll()
 		switch {
 		case key.Matches(msg, m.keys.Up):
-			if m.detailScroll > 0 {
-				m.detailScroll--
-			}
+			m.syncDetailViewport(mailReadWidth, 1)
+			m.detailViewport.ScrollUp(1)
 		case key.Matches(msg, m.keys.Down):
-			if m.detailScroll < maxScroll {
-				m.detailScroll++
-			}
+			m.syncDetailViewport(mailReadWidth, 1)
+			m.detailViewport.ScrollDown(1)
 		}
 		return m, nil
 	}
@@ -901,7 +899,7 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	case key.Matches(msg, m.keys.Open):
 		if len(m.messages) > 0 {
 			m.mode = mailModeDetail
-			m.detailScroll = 0
+			m.resetDetailViewport()
 			m.status = ""
 		}
 	case key.Matches(msg, m.keys.Thread):
@@ -1130,16 +1128,13 @@ func (m Mail) handleArticleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		m.mode = mailModeLinks
 		return m, nil
 	}
-	maxScroll := m.maxArticleScroll()
 	switch {
 	case key.Matches(msg, m.keys.Up):
-		if m.articleScroll > 0 {
-			m.articleScroll--
-		}
+		m.syncArticleViewport(mailReadWidth, 1)
+		m.articleViewport.ScrollUp(1)
 	case key.Matches(msg, m.keys.Down):
-		if m.articleScroll < maxScroll {
-			m.articleScroll++
-		}
+		m.syncArticleViewport(mailReadWidth, 1)
+		m.articleViewport.ScrollDown(1)
 	case key.Matches(msg, m.keys.Open):
 		return m.openArticleURL()
 	case key.Matches(msg, m.keys.Copy):
@@ -1251,7 +1246,7 @@ func (m Mail) handleConversationKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		} else {
 			m.mode = mailModeList
 		}
-		m.conversationScroll = 0
+		m.resetConversationViewport()
 		m.status = ""
 		return m, nil
 	}
@@ -1259,7 +1254,7 @@ func (m Mail) handleConversationKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	case "tab":
 		if m.conversationIndex < len(m.conversationItems)-1 {
 			m.conversationIndex++
-			m.conversationScroll = 0
+			m.resetConversationViewport()
 			m.status = ""
 			return m, m.loadConversationBodyCmd()
 		}
@@ -1267,22 +1262,19 @@ func (m Mail) handleConversationKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	case "shift+tab":
 		if m.conversationIndex > 0 {
 			m.conversationIndex--
-			m.conversationScroll = 0
+			m.resetConversationViewport()
 			m.status = ""
 			return m, m.loadConversationBodyCmd()
 		}
 		return m, nil
 	}
-	maxScroll := m.maxConversationScroll()
 	switch {
 	case key.Matches(msg, m.keys.Up):
-		if m.conversationScroll > 0 {
-			m.conversationScroll--
-		}
+		m.syncConversationViewport(mailReadWidth, 1)
+		m.conversationViewport.ScrollUp(1)
 	case key.Matches(msg, m.keys.Down):
-		if m.conversationScroll < maxScroll {
-			m.conversationScroll++
-		}
+		m.syncConversationViewport(mailReadWidth, 1)
+		m.conversationViewport.ScrollDown(1)
 	case key.Matches(msg, m.keys.Reply):
 		if id := m.currentConversationInboundID(); id > 0 {
 			return m.editReplyDraftForMessageID(id)
@@ -2269,7 +2261,7 @@ func (m *Mail) clampSelection() {
 	}
 	if len(m.messages) == 0 {
 		m.mode = mailModeList
-		m.detailScroll = 0
+		m.resetDetailViewport()
 	}
 }
 
@@ -2277,17 +2269,7 @@ func (m Mail) listView(width, height int) string {
 	var b strings.Builder
 	mailbox := m.mailboxes[m.mailboxIndex]
 	box := m.currentBox()
-	b.WriteString(fmt.Sprintf("Mailbox %d/%d: %s | Box %d/%d: %s\n", m.mailboxIndex+1, len(m.mailboxes), mailbox.Address, m.boxIndex+1, len(mailBoxes), box))
-	b.WriteString("Use h/l to switch mailboxes, [/] to switch boxes, / filter, ctrl+f remote search, c compose, enter to read, r reload.")
-	if box == "inbox" {
-		b.WriteString(" a archive, J junk, d trash.")
-	} else if box == "junk" {
-		b.WriteString(" U not junk.")
-	} else if box == "archive" || box == "trash" {
-		b.WriteString(" R restore.")
-	} else if box == "drafts" {
-		b.WriteString(" a attach, e edit, S send, x delete.")
-	}
+	b.WriteString(mailHeader("Mail / "+mailbox.Address+" / "+box, fmt.Sprintf("%d msg", len(m.messages))))
 	b.WriteByte('\n')
 	if m.status != "" {
 		b.WriteString(fmt.Sprintf("Status: %s\n", m.status))
@@ -2303,49 +2285,83 @@ func (m Mail) listView(width, height int) string {
 		b.WriteString(fmt.Sprintf("No cached %s messages for this mailbox. Run `telex sync`.\n", box))
 		return b.String()
 	}
-	limit := max(1, height-4)
+	headerLines := strings.Count(b.String(), "\n")
+	limit := max(1, height-headerLines-2)
 	start := 0
 	if m.messageIndex >= limit {
 		start = m.messageIndex - limit + 1
 	}
 	end := min(len(m.messages), start+limit)
+	layout := mailColumns(width)
 	for i := start; i < end; i++ {
-		message := m.messages[i]
-		cursor := "  "
-		if i == m.messageIndex {
-			cursor = "> "
-		}
-		read := " "
-		if !message.Meta.Read {
-			read = "*"
-		}
-		star := " "
-		if message.Meta.Starred {
-			star = "!"
-		}
-		labelSuffix := ""
-		if names := cachedLabelNames(message.Meta.Labels); len(names) > 0 {
-			labelSuffix = " [" + strings.Join(names, ",") + "]"
-		}
-		line := fmt.Sprintf("%s%s%s %-16s %-48s %s%s", cursor, read, star, truncate(message.Meta.FromAddress, 16), truncate(message.Meta.Subject, 48), message.Meta.ReceivedAt.Format("Jan 02 15:04"), labelSuffix)
-		b.WriteString(truncate(line, width))
+		b.WriteString(formatMailRow(m.messages[i], i == m.messageIndex, layout))
 		b.WriteByte('\n')
 	}
+	b.WriteByte('\n')
+	b.WriteString(mailListFooterHint(box))
 	return b.String()
+}
+
+func mailListFooterHint(box string) string {
+	switch box {
+	case "inbox":
+		return mailFooterHint("[enter] open", "[c] compose", "[/] filter", "[a] archive", "[J] junk", "[d] trash", "[h/l] mailbox", "[?] help")
+	case "junk":
+		return mailFooterHint("[enter] open", "[/] filter", "[U] not junk", "[h/l] mailbox", "[?] help")
+	case "archive", "trash":
+		return mailFooterHint("[enter] open", "[/] filter", "[R] restore", "[h/l] mailbox", "[?] help")
+	case "drafts":
+		return mailFooterHint("[enter] open", "[c] new", "[e] edit", "[S] send", "[x] delete", "[h/l] mailbox", "[?] help")
+	default:
+		return mailFooterHint("[enter] open", "[/] filter", "[h/l] mailbox", "[?] help")
+	}
 }
 
 func (m Mail) detailView(width, height int) string {
 	message := m.messages[m.messageIndex]
+	bodyWidth := min(width, mailReadWidth)
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Subject: %s\n", message.Meta.Subject))
-	b.WriteString(fmt.Sprintf("From: %s\n", message.Meta.FromAddress))
-	b.WriteString(fmt.Sprintf("To: %s\n", strings.Join(message.Meta.To, ", ")))
-	if len(message.Meta.CC) > 0 {
-		b.WriteString(fmt.Sprintf("CC: %s\n", strings.Join(message.Meta.CC, ", ")))
+	b.WriteString(message.Meta.Subject)
+	b.WriteByte('\n')
+
+	metaParts := []string{"from " + message.Meta.FromAddress}
+	if to := strings.Join(message.Meta.To, ", "); to != "" {
+		metaParts = append(metaParts, "to "+to)
 	}
-	b.WriteString(fmt.Sprintf("Box: %s\n", message.Meta.Mailbox))
+	if len(message.Meta.CC) > 0 {
+		metaParts = append(metaParts, "cc "+strings.Join(message.Meta.CC, ", "))
+	}
+	metaParts = append(metaParts, "in "+message.Meta.Mailbox, message.Meta.ReceivedAt.Format("2006-01-02 15:04"))
 	if message.Meta.RemoteID > 0 {
-		b.WriteString(fmt.Sprintf("Remote ID: %d\n", message.Meta.RemoteID))
+		metaParts = append(metaParts, fmt.Sprintf("#%d", message.Meta.RemoteID))
+	}
+	b.WriteString(strings.Join(metaParts, " · "))
+	b.WriteByte('\n')
+
+	var flags []string
+	if m.currentBoxSupportsMessageActions() {
+		if message.Meta.Starred {
+			flags = append(flags, "★ starred")
+		}
+		if message.Meta.SenderTrusted {
+			flags = append(flags, "✓ sender trusted")
+		}
+		if message.Meta.SenderBlocked {
+			flags = append(flags, "⛔ sender blocked")
+		}
+		if message.Meta.DomainBlocked {
+			flags = append(flags, "⛔ domain blocked")
+		}
+	}
+	if len(message.Meta.Attachments) > 0 {
+		flags = append(flags, fmt.Sprintf("Attachments: %d (A)", len(message.Meta.Attachments)))
+	}
+	if names := cachedLabelNames(message.Meta.Labels); len(names) > 0 {
+		flags = append(flags, "["+strings.Join(names, ", ")+"]")
+	}
+	if len(flags) > 0 {
+		b.WriteString(strings.Join(flags, " · "))
+		b.WriteByte('\n')
 	}
 	if message.Meta.Status != "" {
 		b.WriteString(fmt.Sprintf("Delivery status: %s\n", message.Meta.Status))
@@ -2353,55 +2369,61 @@ func (m Mail) detailView(width, height int) string {
 	if message.Meta.RemoteError != "" {
 		b.WriteString(fmt.Sprintf("Delivery error: %s\n", message.Meta.RemoteError))
 	}
-	if len(message.Meta.Attachments) > 0 {
-		b.WriteString(fmt.Sprintf("Attachments: %d (A to view)\n", len(message.Meta.Attachments)))
-	}
-	if names := cachedLabelNames(message.Meta.Labels); len(names) > 0 {
-		b.WriteString(fmt.Sprintf("Labels: %s\n", strings.Join(names, ", ")))
-	}
-	if m.currentBoxSupportsMessageActions() {
-		b.WriteString(fmt.Sprintf("Read: %t\n", message.Meta.Read))
-		b.WriteString(fmt.Sprintf("Starred: %t\n", message.Meta.Starred))
-		b.WriteString(fmt.Sprintf("Sender blocked: %t\n", message.Meta.SenderBlocked))
-		b.WriteString(fmt.Sprintf("Sender trusted: %t\n", message.Meta.SenderTrusted))
-		b.WriteString(fmt.Sprintf("Domain blocked: %t\n", message.Meta.DomainBlocked))
-	}
-	b.WriteString(fmt.Sprintf("Received: %s\n", message.Meta.ReceivedAt.Format("2006-01-02 15:04")))
 	if m.status != "" {
 		b.WriteString(fmt.Sprintf("Status: %s\n", m.status))
 	}
-	b.WriteString("\n")
-	bodyWidth := min(width, mailReadWidth)
+	b.WriteString(mailSeparator(bodyWidth))
+	b.WriteByte('\n')
+
 	body, err := emailtext.Render(message.BodyText, message.BodyHTML, bodyWidth)
 	if err != nil {
 		body = fmt.Sprintf("(could not render body: %v)", err)
 	}
-	lines := strings.Split(body, "\n")
-	limit := max(1, height-7)
-	maxScroll := max(0, len(lines)-limit)
-	if m.detailScroll > maxScroll {
-		m.detailScroll = maxScroll
-	}
-	end := min(len(lines), m.detailScroll+limit)
-	for i := m.detailScroll; i < end; i++ {
-		b.WriteString(lines[i])
+	headerLines := strings.Count(b.String(), "\n")
+	const reservedFooter = 2
+	limit := max(1, height-headerLines-reservedFooter)
+	m.syncViewport(&m.detailViewport, bodyWidth, limit, body)
+	bodyView := m.detailViewport.View()
+	if bodyView != "" {
+		b.WriteString(bodyView)
 		b.WriteByte('\n')
 	}
-	if len(lines) > limit {
-		b.WriteString(fmt.Sprintf("\n%d/%d lines", end, len(lines)))
+	b.WriteString(mailSeparator(bodyWidth))
+	b.WriteByte('\n')
+	hint := mailDetailFooterHint(m.currentBox())
+	if rangeHint := viewportRangeHint(m.detailViewport); rangeHint != "" {
+		hint = mailFooterHint(hint, rangeHint)
 	}
+	b.WriteString(hint)
 	return b.String()
+}
+
+func mailDetailFooterHint(box string) string {
+	switch box {
+	case "inbox":
+		return mailFooterHint("[esc] back", "[r] reply", "[a] archive", "[J] junk", "[d] trash", "[j/k] scroll")
+	case "junk":
+		return mailFooterHint("[esc] back", "[U] not junk", "[j/k] scroll")
+	case "archive", "trash":
+		return mailFooterHint("[esc] back", "[R] restore", "[j/k] scroll")
+	case "drafts":
+		return mailFooterHint("[esc] back", "[e] edit", "[S] send", "[x] delete", "[j/k] scroll")
+	default:
+		return mailFooterHint("[esc] back", "[j/k] scroll")
+	}
 }
 
 func (m Mail) conversationView(width, height int) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Conversation %d", m.conversationID))
+	bodyWidth := min(width, mailReadWidth)
+	title := fmt.Sprintf("Mail / Conversation %d", m.conversationID)
+	counter := ""
 	if len(m.conversationItems) > 0 {
-		entry := m.conversationItems[m.conversationIndex]
-		b.WriteString(fmt.Sprintf(" | %d/%d | %s", m.conversationIndex+1, len(m.conversationItems), entry.Subject))
+		title += " / " + m.conversationItems[m.conversationIndex].Subject
+		counter = fmt.Sprintf("%d/%d", m.conversationIndex+1, len(m.conversationItems))
 	}
+	b.WriteString(mailHeader(title, counter))
 	b.WriteByte('\n')
-	b.WriteString("tab next, shift+tab previous, j/k scroll, r reply, f forward, esc back.\n")
 	if m.status != "" {
 		b.WriteString(fmt.Sprintf("Status: %s\n", m.status))
 	}
@@ -2412,23 +2434,29 @@ func (m Mail) conversationView(width, height int) string {
 	}
 	stripLimit := min(len(m.conversationItems), 5)
 	start := max(0, min(m.conversationIndex-2, len(m.conversationItems)-stripLimit))
+	layout := mailColumns(width)
 	for i := start; i < start+stripLimit; i++ {
-		entry := m.conversationItems[i]
-		cursor := "  "
-		if i == m.conversationIndex {
-			cursor = "> "
-		}
-		line := fmt.Sprintf("%s%s %-18s %-36s %s", cursor, conversationKindLabel(entry.Kind), truncate(entry.Sender, 18), truncate(entry.Subject, 36), entry.OccurredAt.Format("Jan 02 15:04"))
-		b.WriteString(truncate(line, width))
+		b.WriteString(formatConversationRow(m.conversationItems[i], i == m.conversationIndex, layout))
 		b.WriteByte('\n')
 	}
+	b.WriteString(mailSeparator(bodyWidth))
 	b.WriteByte('\n')
 	entry := m.conversationItems[m.conversationIndex]
-	b.WriteString(fmt.Sprintf("%s from %s to %s\n", strings.ToUpper(entry.Kind), entry.Sender, strings.Join(entry.Recipients, ", ")))
-	if entry.Status != "" {
-		b.WriteString(fmt.Sprintf("Status: %s\n", entry.Status))
+	entryMeta := []string{
+		strings.ToUpper(entry.Kind),
+		"from " + entry.Sender,
 	}
-	b.WriteString(fmt.Sprintf("At: %s\n\n", entry.OccurredAt.Format("2006-01-02 15:04")))
+	if recipients := strings.Join(entry.Recipients, ", "); recipients != "" {
+		entryMeta = append(entryMeta, "to "+recipients)
+	}
+	entryMeta = append(entryMeta, entry.OccurredAt.Format("2006-01-02 15:04"))
+	if entry.Status != "" {
+		entryMeta = append(entryMeta, entry.Status)
+	}
+	b.WriteString(strings.Join(entryMeta, " · "))
+	b.WriteByte('\n')
+	b.WriteString(mailSeparator(bodyWidth))
+	b.WriteByte('\n')
 	body := m.conversationBodyCache[conversationEntryKey(entry)]
 	if strings.TrimSpace(body) == "" {
 		body = entry.Summary
@@ -2436,24 +2464,26 @@ func (m Mail) conversationView(width, height int) string {
 			body = "(loading body...)"
 		}
 	}
-	bodyWidth := min(width, mailReadWidth)
 	rendered, err := emailtext.Render(body, "", bodyWidth)
 	if err != nil {
 		rendered = fmt.Sprintf("(could not render body: %v)", err)
 	}
-	lines := strings.Split(rendered, "\n")
-	used := 10 + stripLimit
-	limit := max(1, height-used)
-	maxScroll := max(0, len(lines)-limit)
-	scroll := min(m.conversationScroll, maxScroll)
-	end := min(len(lines), scroll+limit)
-	for i := scroll; i < end; i++ {
-		b.WriteString(lines[i])
+	headerLines := strings.Count(b.String(), "\n")
+	const reservedFooter = 2
+	limit := max(1, height-headerLines-reservedFooter)
+	m.syncViewport(&m.conversationViewport, bodyWidth, limit, rendered)
+	bodyView := m.conversationViewport.View()
+	if bodyView != "" {
+		b.WriteString(bodyView)
 		b.WriteByte('\n')
 	}
-	if len(lines) > limit {
-		b.WriteString(fmt.Sprintf("\n%d/%d lines", end, len(lines)))
+	b.WriteString(mailSeparator(bodyWidth))
+	b.WriteByte('\n')
+	hint := mailFooterHint("[esc] back", "[tab/shift+tab] navigate", "[r] reply", "[f] forward", "[j/k] scroll")
+	if rangeHint := viewportRangeHint(m.conversationViewport); rangeHint != "" {
+		hint = mailFooterHint(hint, rangeHint)
 	}
+	b.WriteString(hint)
 	return b.String()
 }
 
@@ -2468,44 +2498,34 @@ func conversationEntryKey(entry ConversationEntry) string {
 	return fmt.Sprintf("%s:%d", entry.Kind, entry.RecordID)
 }
 
-func (m Mail) maxConversationScroll() int {
-	if len(m.conversationItems) == 0 || m.conversationIndex >= len(m.conversationItems) {
-		return 0
-	}
-	entry := m.conversationItems[m.conversationIndex]
-	body := m.conversationBodyCache[conversationEntryKey(entry)]
-	if body == "" {
-		body = entry.Summary
-	}
-	lines := strings.Split(body, "\n")
-	return max(0, len(lines)-1)
-}
-
 func (m *Mail) clampConversationSelection() {
 	if m.conversationIndex >= len(m.conversationItems) {
 		m.conversationIndex = max(0, len(m.conversationItems)-1)
 	}
 	if len(m.conversationItems) == 0 {
 		m.conversationIndex = 0
-		m.conversationScroll = 0
+		m.resetConversationViewport()
 	}
 }
 
 func (m Mail) attachmentsView(width, height int) string {
 	message := m.messages[m.messageIndex]
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Attachments: %s\n", message.Meta.Subject))
-	b.WriteString("enter opens/downloads to cache, S saves to directory, y copies URL, esc returns.\n")
+	attachments := message.Meta.Attachments
+	b.WriteString(mailHeader("Mail / Attachments / "+message.Meta.Subject, fmt.Sprintf("%d items", len(attachments))))
+	b.WriteByte('\n')
 	if m.status != "" {
 		b.WriteString(fmt.Sprintf("Status: %s\n", m.status))
 	}
 	b.WriteString("\n")
-	attachments := message.Meta.Attachments
 	if len(attachments) == 0 {
-		b.WriteString("No attachments on this message.\n")
+		b.WriteString("No attachments on this message.\n\n")
+		b.WriteString(mailFooterHint("[esc] back"))
 		return b.String()
 	}
-	limit := max(1, height-5)
+	headerLines := strings.Count(b.String(), "\n")
+	const reservedFooter = 2
+	limit := max(1, height-headerLines-reservedFooter)
 	start := 0
 	if m.attachmentIndex >= limit {
 		start = m.attachmentIndex - limit + 1
@@ -2521,23 +2541,28 @@ func (m Mail) attachmentsView(width, height int) string {
 		b.WriteString(truncate(line, width))
 		b.WriteByte('\n')
 	}
+	b.WriteByte('\n')
+	b.WriteString(mailFooterHint("[esc] back", "[enter] open", "[S] save…", "[y] copy URL"))
 	return b.String()
 }
 
 func (m Mail) linksView(width, height int) string {
 	message := m.messages[m.messageIndex]
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Links: %s\n", message.Meta.Subject))
-	b.WriteString("enter opens, e extracts, y copies, esc returns.\n")
+	b.WriteString(mailHeader("Mail / Links / "+message.Meta.Subject, fmt.Sprintf("%d links", len(m.links))))
+	b.WriteByte('\n')
 	if m.status != "" {
 		b.WriteString(fmt.Sprintf("Status: %s\n", m.status))
 	}
 	b.WriteString("\n")
 	if len(m.links) == 0 {
-		b.WriteString("No links found in this message.\n")
+		b.WriteString("No links found in this message.\n\n")
+		b.WriteString(mailFooterHint("[esc] back"))
 		return b.String()
 	}
-	limit := max(1, height-5)
+	headerLines := strings.Count(b.String(), "\n")
+	const reservedFooter = 2
+	limit := max(1, height-headerLines-reservedFooter)
 	start := 0
 	if m.linkIndex >= limit {
 		start = m.linkIndex - limit + 1
@@ -2553,72 +2578,121 @@ func (m Mail) linksView(width, height int) string {
 		b.WriteString(truncate(line, width))
 		b.WriteByte('\n')
 	}
+	b.WriteByte('\n')
+	b.WriteString(mailFooterHint("[esc] back", "[enter] open", "[e] extract", "[y] copy"))
 	return b.String()
 }
 
 func (m Mail) articleView(width, height int) string {
 	var b strings.Builder
-	b.WriteString("Article reader\n")
-	if m.articleURL != "" {
-		b.WriteString(fmt.Sprintf("URL: %s\n", m.articleURL))
-	}
-	b.WriteString("enter opens, y copies, esc returns.\n")
+	bodyWidth := min(width, mailReadWidth)
+	b.WriteString(mailHeader("Mail / Article", m.articleURL))
+	b.WriteByte('\n')
 	if m.status != "" {
 		b.WriteString(fmt.Sprintf("Status: %s\n", m.status))
 	}
-	b.WriteString("\n")
-	bodyWidth := min(width, mailReadWidth)
+	b.WriteString(mailSeparator(bodyWidth))
+	b.WriteByte('\n')
 	article, err := emailtext.RenderMarkdown(m.article, bodyWidth)
 	if err != nil {
 		article = m.article
 	}
-	lines := strings.Split(article, "\n")
-	limit := max(1, height-6)
-	maxScroll := max(0, len(lines)-limit)
-	if m.articleScroll > maxScroll {
-		m.articleScroll = maxScroll
-	}
-	end := min(len(lines), m.articleScroll+limit)
-	for i := m.articleScroll; i < end; i++ {
-		b.WriteString(lines[i])
+	headerLines := strings.Count(b.String(), "\n")
+	const reservedFooter = 2
+	limit := max(1, height-headerLines-reservedFooter)
+	m.syncViewport(&m.articleViewport, bodyWidth, limit, article)
+	bodyView := m.articleViewport.View()
+	if bodyView != "" {
+		b.WriteString(bodyView)
 		b.WriteByte('\n')
 	}
-	if len(lines) > limit {
-		b.WriteString(fmt.Sprintf("\n%d/%d lines", end, len(lines)))
+	b.WriteString(mailSeparator(bodyWidth))
+	b.WriteByte('\n')
+	hint := mailFooterHint("[esc] back", "[enter] open in browser", "[y] copy URL", "[j/k] scroll")
+	if rangeHint := viewportRangeHint(m.articleViewport); rangeHint != "" {
+		hint = mailFooterHint(hint, rangeHint)
 	}
+	b.WriteString(hint)
 	return b.String()
 }
 
-func (m Mail) maxDetailScroll() int {
-	if len(m.messages) == 0 {
-		return 0
-	}
-	body, err := emailtext.Render(m.messages[m.messageIndex].BodyText, m.messages[m.messageIndex].BodyHTML, mailReadWidth)
-	if err != nil || strings.TrimSpace(body) == "" {
-		return 0
-	}
-	return max(0, len(strings.Split(body, "\n"))-1)
+func (m *Mail) resetDetailViewport() {
+	m.detailViewport = viewport.New()
 }
 
-func (m Mail) maxArticleScroll() int {
-	if strings.TrimSpace(m.article) == "" {
-		return 0
+func (m *Mail) resetArticleViewport() {
+	m.articleViewport = viewport.New()
+}
+
+func (m *Mail) resetConversationViewport() {
+	m.conversationViewport = viewport.New()
+}
+
+func (m *Mail) syncDetailViewport(width, height int) {
+	if len(m.messages) == 0 {
+		m.syncViewport(&m.detailViewport, width, height, "")
+		return
 	}
-	article, err := emailtext.RenderMarkdown(m.article, mailReadWidth)
+	body, err := emailtext.Render(m.messages[m.messageIndex].BodyText, m.messages[m.messageIndex].BodyHTML, width)
+	if err != nil {
+		body = fmt.Sprintf("(could not render body: %v)", err)
+	}
+	m.syncViewport(&m.detailViewport, width, height, body)
+}
+
+func (m *Mail) syncArticleViewport(width, height int) {
+	article, err := emailtext.RenderMarkdown(m.article, width)
 	if err != nil {
 		article = m.article
 	}
-	return max(0, len(strings.Split(article, "\n"))-1)
+	m.syncViewport(&m.articleViewport, width, height, article)
+}
+
+func (m *Mail) syncConversationViewport(width, height int) {
+	if len(m.conversationItems) == 0 || m.conversationIndex >= len(m.conversationItems) {
+		m.syncViewport(&m.conversationViewport, width, height, "")
+		return
+	}
+	entry := m.conversationItems[m.conversationIndex]
+	body := m.conversationBodyCache[conversationEntryKey(entry)]
+	if strings.TrimSpace(body) == "" {
+		body = entry.Summary
+		if strings.TrimSpace(body) == "" {
+			body = "(loading body...)"
+		}
+	}
+	rendered, err := emailtext.Render(body, "", width)
+	if err != nil {
+		rendered = fmt.Sprintf("(could not render body: %v)", err)
+	}
+	m.syncViewport(&m.conversationViewport, width, height, rendered)
+}
+
+func (m *Mail) syncViewport(v *viewport.Model, width, height int, content string) {
+	v.SetWidth(width)
+	v.SetHeight(height)
+	v.SetContent(strings.TrimRight(content, "\n"))
+}
+
+func viewportRangeHint(v viewport.Model) string {
+	total := v.TotalLineCount()
+	visible := v.VisibleLineCount()
+	if total <= visible {
+		return ""
+	}
+	offset := v.YOffset()
+	end := min(total, offset+visible)
+	return fmt.Sprintf("%d-%d/%d", offset+1, end, total)
 }
 
 func truncate(value string, width int) string {
 	if width <= 0 || len(value) <= width {
 		return value
 	}
-	if width <= 1 {
+	if width < 3 {
 		return value[:width]
 	}
-	return value[:width-1] + "~"
+	return value[:width-1] + "…"
 }
 
 func formatBytes(size int64) string {
@@ -2632,6 +2706,110 @@ func formatBytes(size int64) string {
 	default:
 		return ""
 	}
+}
+
+func mailHeader(title string, segments ...string) string {
+	out := title
+	for _, seg := range segments {
+		if seg == "" {
+			continue
+		}
+		out += " · " + seg
+	}
+	return out
+}
+
+func mailFooterHint(parts ...string) string {
+	cleaned := parts[:0]
+	for _, p := range parts {
+		if p != "" {
+			cleaned = append(cleaned, p)
+		}
+	}
+	return strings.Join(cleaned, "  ")
+}
+
+func mailSeparator(width int) string {
+	if width <= 0 {
+		return ""
+	}
+	return strings.Repeat("─", width)
+}
+
+type mailColumnLayout struct {
+	sender, subject, date, label int
+}
+
+func mailColumns(width int) mailColumnLayout {
+	const (
+		cursorW = 2
+		glyphsW = 2
+		dateW   = 12
+		gaps    = 4
+	)
+	overhead := cursorW + glyphsW + dateW + gaps
+	switch {
+	case width <= 80:
+		sender := 14
+		subject := max(8, width-overhead-sender)
+		return mailColumnLayout{sender: sender, subject: subject, date: dateW, label: 0}
+	case width <= 120:
+		sender := 18
+		label := 14
+		subject := max(8, width-overhead-sender-1-label)
+		return mailColumnLayout{sender: sender, subject: subject, date: dateW, label: label}
+	default:
+		sender := 24
+		label := 30
+		subject := max(8, width-overhead-sender-1-label)
+		return mailColumnLayout{sender: sender, subject: subject, date: dateW, label: label}
+	}
+}
+
+func formatMailRow(message mailstore.CachedMessage, selected bool, layout mailColumnLayout) string {
+	cursor := "  "
+	if selected {
+		cursor = "> "
+	}
+	unread := " "
+	if !message.Meta.Read {
+		unread = "●"
+	}
+	star := " "
+	if message.Meta.Starred {
+		star = "★"
+	}
+	sender := truncate(message.Meta.FromAddress, layout.sender)
+	subject := truncate(message.Meta.Subject, layout.subject)
+	date := message.Meta.ReceivedAt.Format("Jan 02 15:04")
+	row := fmt.Sprintf("%s%s%s %-*s %-*s %*s",
+		cursor, unread, star,
+		layout.sender, sender,
+		layout.subject, subject,
+		layout.date, date,
+	)
+	if layout.label > 0 {
+		labels := strings.Join(cachedLabelNames(message.Meta.Labels), ",")
+		row += " " + fmt.Sprintf("%-*s", layout.label, truncate(labels, layout.label))
+	}
+	return row
+}
+
+func formatConversationRow(entry ConversationEntry, selected bool, layout mailColumnLayout) string {
+	cursor := "  "
+	if selected {
+		cursor = "> "
+	}
+	kind := conversationKindLabel(entry.Kind)
+	sender := truncate(entry.Sender, layout.sender)
+	subject := truncate(entry.Subject, layout.subject)
+	date := entry.OccurredAt.Format("Jan 02 15:04")
+	return fmt.Sprintf("%s%s %-*s %-*s %*s",
+		cursor, kind,
+		layout.sender, sender,
+		layout.subject, subject,
+		layout.date, date,
+	)
 }
 
 // MailActionMsg triggers a mail action equivalent to a key binding. Used by the
