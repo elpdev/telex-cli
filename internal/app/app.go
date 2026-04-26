@@ -30,7 +30,6 @@ import (
 	"github.com/elpdev/telex-cli/internal/notestore"
 	"github.com/elpdev/telex-cli/internal/screens"
 	"github.com/elpdev/telex-cli/internal/theme"
-	"github.com/elpdev/tuimod"
 )
 
 const defaultScreen = "home"
@@ -46,7 +45,7 @@ type Model struct {
 	height int
 
 	activeScreen string
-	screens      map[string]tuimod.Screen
+	screens      map[string]screens.Screen
 	screenOrder  []string
 	initialized  map[string]bool
 
@@ -104,7 +103,7 @@ func assembleModel(meta BuildInfo, configPath, dataPath, prefsPath string, prefs
 
 	m := Model{
 		activeScreen: defaultScreen,
-		screens:      make(map[string]tuimod.Screen),
+		screens:      make(map[string]screens.Screen),
 		initialized:  make(map[string]bool),
 		showSidebar:  sidebar,
 		focus:        FocusMain,

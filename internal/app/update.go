@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/bubbles/key"
 	hnscreens "github.com/elpdev/hackernews/pkg/screens"
 	"github.com/elpdev/telex-cli/internal/commands"
 	"github.com/elpdev/telex-cli/internal/config"
@@ -47,9 +47,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.switchScreen(screenID)
 		return m, m.initScreen(m.activeScreen)
 	case hnscreens.OpenCommentsMsg:
-		if existing, ok := m.screens["hn-comments"].(hnscreens.Comments); ok {
+		screen, ok := unwrapHackerNewsScreen(m.screens["hn-comments"])
+		if !ok {
+			m.logs.Warn("Hacker News comments screen unavailable")
+			return m, nil
+		}
+		if existing, ok := screen.(hnscreens.Comments); ok {
 			updated, cmd := existing.Open(msg.Story, msg.ReturnTo)
-			m.screens["hn-comments"] = updated
+			m.screens["hn-comments"] = wrapHackerNewsScreen(updated)
 			m.switchScreen("hn-comments")
 			return m, cmd
 		}

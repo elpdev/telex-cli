@@ -7,11 +7,10 @@ import (
 	"strconv"
 	"strings"
 
-	huhkey "charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/elpdev/telex-cli/internal/mail"
 )
 
@@ -721,12 +720,12 @@ func validatePipelineKey(value string) error {
 
 func mailAdminFormKeyMap() *huh.KeyMap {
 	keys := huh.NewDefaultKeyMap()
-	keys.Input.Prev = huhkey.NewBinding(huhkey.WithKeys("up", "k", "shift+tab"), huhkey.WithHelp("up/k", "previous"))
-	keys.Input.Next = huhkey.NewBinding(huhkey.WithKeys("down", "j", "tab", "enter"), huhkey.WithHelp("down/j", "next"))
-	keys.Confirm.Prev = huhkey.NewBinding(huhkey.WithKeys("up", "k", "shift+tab"), huhkey.WithHelp("up/k", "previous"))
-	keys.Confirm.Next = huhkey.NewBinding(huhkey.WithKeys("down", "j", "tab", "enter"), huhkey.WithHelp("down/j", "next"))
-	keys.Note.Prev = huhkey.NewBinding(huhkey.WithKeys("up", "k", "shift+tab"), huhkey.WithHelp("up/k", "previous"))
-	keys.Note.Next = huhkey.NewBinding(huhkey.WithKeys("down", "j", "tab", "enter"), huhkey.WithHelp("down/j", "next"))
+	keys.Input.Prev = key.NewBinding(key.WithKeys("up", "k", "shift+tab"), key.WithHelp("up/k", "previous"))
+	keys.Input.Next = key.NewBinding(key.WithKeys("down", "j", "tab", "enter"), key.WithHelp("down/j", "next"))
+	keys.Confirm.Prev = key.NewBinding(key.WithKeys("up", "k", "shift+tab"), key.WithHelp("up/k", "previous"))
+	keys.Confirm.Next = key.NewBinding(key.WithKeys("down", "j", "tab", "enter"), key.WithHelp("down/j", "next"))
+	keys.Note.Prev = key.NewBinding(key.WithKeys("up", "k", "shift+tab"), key.WithHelp("up/k", "previous"))
+	keys.Note.Next = key.NewBinding(key.WithKeys("down", "j", "tab", "enter"), key.WithHelp("down/j", "next"))
 	return keys
 }
 

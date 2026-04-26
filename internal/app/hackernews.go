@@ -3,7 +3,9 @@ package app
 import (
 	"fmt"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	legacykey "github.com/charmbracelet/bubbles/key"
 	hackernews "github.com/elpdev/hackernews"
 	hnconfig "github.com/elpdev/hackernews/pkg/config"
 	"github.com/elpdev/hackernews/pkg/history"
@@ -44,7 +46,7 @@ func (m *Model) initScreen(id string) tea.Cmd {
 func (m *Model) registerHackerNewsModule() {
 	module := m.newHackerNewsModule()
 	for _, spec := range module.ScreenSpecs() {
-		m.screens[hackerNewsScreenID(spec.ID)] = spec.Screen
+		m.screens[hackerNewsScreenID(spec.ID)] = wrapHackerNewsScreen(spec.Screen)
 	}
 }
 
@@ -119,22 +121,33 @@ func (m *Model) registerHackerNewsCommands() {
 }
 
 func (m Model) refreshHackerNewsSearchScreen() Model {
-	search, ok := m.screens["hn-search"].(hnscreens.Search)
+	searchScreen, ok := unwrapHackerNewsScreen(m.screens["hn-search"])
+	if !ok {
+		return m
+	}
+	search, ok := searchScreen.(hnscreens.Search)
 	if !ok {
 		return m
 	}
 	screens := make(map[string]tuimod.Screen)
 	for id, screen := range m.screens {
 		if isHackerNewsScreen(id) {
-			screens[id[len(hackerNewsPrefix):]] = screen
+			if unwrapped, ok := unwrapHackerNewsScreen(screen); ok {
+				screens[id[len(hackerNewsPrefix):]] = unwrapped
+			}
 		}
 	}
-	m.screens["hn-search"] = hackernews.RefreshSearchScreen(screens, search)
+	m.screens["hn-search"] = wrapHackerNewsScreen(hackernews.RefreshSearchScreen(screens, search))
 	return m
 }
 
 func (m Model) openHackerNewsDoctor() (Model, tea.Cmd) {
-	doctor, ok := m.screens["hn-doctor"].(hnscreens.Doctor)
+	doctorScreen, ok := unwrapHackerNewsScreen(m.screens["hn-doctor"])
+	if !ok {
+		m.logs.Warn("Hacker News doctor screen unavailable")
+		return m, nil
+	}
+	doctor, ok := doctorScreen.(hnscreens.Doctor)
 	if !ok {
 		m.logs.Warn("Hacker News doctor screen unavailable")
 		return m, nil
@@ -151,7 +164,7 @@ func (m Model) openHackerNewsDoctor() (Model, tea.Cmd) {
 		returnTo = m.activeScreen[len(hackerNewsPrefix):]
 	}
 	updated, cmd := doctor.Open(returnTo, m.loadHackerNewsSettings())
-	m.screens["hn-doctor"] = updated
+	m.screens["hn-doctor"] = wrapHackerNewsScreen(updated)
 	m.switchScreen("hn-doctor")
 	return m, cmd
 }
@@ -159,19 +172,70 @@ func (m Model) openHackerNewsDoctor() (Model, tea.Cmd) {
 func (m Model) applyHackerNewsSettings(settings hnconfig.Settings) Model {
 	m.saveHackerNewsSettings(settings)
 	for id, screen := range m.screens {
-		if stories, ok := screen.(hnscreens.Top); ok {
+		unwrapped, ok := unwrapHackerNewsScreen(screen)
+		if !ok {
+			continue
+		}
+		if stories, ok := unwrapped.(hnscreens.Top); ok {
 			stories.SetHideRead(settings.HideRead)
 			stories.SetSortMode(settings.SortMode)
-			m.screens[id] = stories
+			m.screens[id] = wrapHackerNewsScreen(stories)
 		}
-		if settingsScreen, ok := screen.(hnscreens.Settings); ok {
-			m.screens[id] = settingsScreen.WithSettings(settings)
+		if settingsScreen, ok := unwrapped.(hnscreens.Settings); ok {
+			m.screens[id] = wrapHackerNewsScreen(settingsScreen.WithSettings(settings))
 		}
-		if doctorScreen, ok := screen.(hnscreens.Doctor); ok {
-			m.screens[id] = doctorScreen.WithSettings(settings)
+		if doctorScreen, ok := unwrapped.(hnscreens.Doctor); ok {
+			m.screens[id] = wrapHackerNewsScreen(doctorScreen.WithSettings(settings))
 		}
 	}
 	return m
+}
+
+type hackerNewsScreen struct{ inner tuimod.Screen }
+
+func wrapHackerNewsScreen(screen tuimod.Screen) screens.Screen {
+	return hackerNewsScreen{inner: screen}
+}
+
+func unwrapHackerNewsScreen(screen screens.Screen) (tuimod.Screen, bool) {
+	wrapped, ok := screen.(hackerNewsScreen)
+	if !ok {
+		return nil, false
+	}
+	return wrapped.inner, true
+}
+
+func (s hackerNewsScreen) Init() tea.Cmd { return s.inner.Init() }
+
+func (s hackerNewsScreen) Update(msg tea.Msg) (screens.Screen, tea.Cmd) {
+	updated, cmd := s.inner.Update(msg)
+	return wrapHackerNewsScreen(updated), cmd
+}
+
+func (s hackerNewsScreen) View(width, height int) string { return s.inner.View(width, height) }
+
+func (s hackerNewsScreen) Title() string { return s.inner.Title() }
+
+func (s hackerNewsScreen) KeyBindings() []key.Binding {
+	return convertKeyBindings(s.inner.KeyBindings())
+}
+
+func (s hackerNewsScreen) CapturesKey(msg tea.KeyPressMsg) bool {
+	capturer, ok := s.inner.(tuimod.KeyCapturer)
+	return ok && capturer.CapturesKey(msg)
+}
+
+func convertKeyBindings(bindings []legacykey.Binding) []key.Binding {
+	converted := make([]key.Binding, 0, len(bindings))
+	for _, binding := range bindings {
+		help := binding.Help()
+		options := []key.BindingOpt{key.WithKeys(binding.Keys()...), key.WithHelp(help.Key, help.Desc)}
+		if !binding.Enabled() {
+			options = append(options, key.WithDisabled())
+		}
+		converted = append(converted, key.NewBinding(options...))
+	}
+	return converted
 }
 
 func (m Model) saveHackerNewsSettings(settings hnconfig.Settings) {

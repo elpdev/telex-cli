@@ -3,8 +3,8 @@ package footer
 import (
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	"github.com/elpdev/telex-cli/internal/theme"
-	"github.com/charmbracelet/bubbles/key"
 )
 
 func View(bindings []key.Binding, width, height int, t theme.Theme) string {

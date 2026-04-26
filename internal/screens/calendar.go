@@ -9,11 +9,10 @@ import (
 	"strings"
 	"time"
 
-	huhkey "charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/elpdev/telex-cli/internal/api"
 	"github.com/elpdev/telex-cli/internal/calendar"
 	"github.com/elpdev/telex-cli/internal/calendarstore"
@@ -1010,6 +1009,9 @@ func (c Calendar) saveCalendarFormCmd(kind calendarFormKind, id int64, data cale
 func (c Calendar) detailView() string {
 	item, ok := c.selected()
 	if !ok {
+		if c.invitation != nil {
+			return strings.Join(invitationView(*c.invitation), "\n") + "\n"
+		}
 		return "No event selected.\n"
 	}
 	cal, hasCalendar := c.calendarByID(item.CalendarID)
@@ -1632,7 +1634,9 @@ func (c *Calendar) clampIndex() {
 	}
 	if len(c.items) == 0 {
 		c.index = 0
-		c.detail = false
+		if c.invitation == nil {
+			c.detail = false
+		}
 	}
 	if c.calendarIndex < 0 {
 		c.calendarIndex = 0
@@ -1931,12 +1935,12 @@ func optionalTimeZoneString(value string) error {
 
 func calendarFormKeyMap() *huh.KeyMap {
 	keys := huh.NewDefaultKeyMap()
-	keys.Input.Prev = huhkey.NewBinding(huhkey.WithKeys("up", "k", "shift+tab"), huhkey.WithHelp("up/k", "previous"))
-	keys.Input.Next = huhkey.NewBinding(huhkey.WithKeys("down", "j", "tab", "enter"), huhkey.WithHelp("down/j", "next"))
-	keys.Confirm.Prev = huhkey.NewBinding(huhkey.WithKeys("up", "k", "shift+tab"), huhkey.WithHelp("up/k", "previous"))
-	keys.Confirm.Next = huhkey.NewBinding(huhkey.WithKeys("down", "j", "tab", "enter"), huhkey.WithHelp("down/j", "next"))
-	keys.Note.Prev = huhkey.NewBinding(huhkey.WithKeys("up", "k", "shift+tab"), huhkey.WithHelp("up/k", "previous"))
-	keys.Note.Next = huhkey.NewBinding(huhkey.WithKeys("down", "j", "tab", "enter"), huhkey.WithHelp("down/j", "next"))
+	keys.Input.Prev = key.NewBinding(key.WithKeys("up", "k", "shift+tab"), key.WithHelp("up/k", "previous"))
+	keys.Input.Next = key.NewBinding(key.WithKeys("down", "j", "tab", "enter"), key.WithHelp("down/j", "next"))
+	keys.Confirm.Prev = key.NewBinding(key.WithKeys("up", "k", "shift+tab"), key.WithHelp("up/k", "previous"))
+	keys.Confirm.Next = key.NewBinding(key.WithKeys("down", "j", "tab", "enter"), key.WithHelp("down/j", "next"))
+	keys.Note.Prev = key.NewBinding(key.WithKeys("up", "k", "shift+tab"), key.WithHelp("up/k", "previous"))
+	keys.Note.Next = key.NewBinding(key.WithKeys("down", "j", "tab", "enter"), key.WithHelp("down/j", "next"))
 	return keys
 }
 

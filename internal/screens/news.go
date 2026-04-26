@@ -3,9 +3,9 @@ package screens
 import (
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/elpdev/telex-cli/internal/theme"
 	"github.com/elpdev/tuimod"
 )
@@ -31,12 +31,12 @@ type News struct {
 	tabs      []NewsTab
 	activeIdx int
 	theme     theme.Theme
-	screens   map[string]tuimod.Screen
+	screens   map[string]Screen
 	initFn    func(id string) tea.Cmd
 	keys      NewsKeyMap
 }
 
-func NewNews(tabs []NewsTab, t theme.Theme, screens map[string]tuimod.Screen, initFn func(string) tea.Cmd) News {
+func NewNews(tabs []NewsTab, t theme.Theme, screens map[string]Screen, initFn func(string) tea.Cmd) News {
 	return News{
 		tabs:    tabs,
 		theme:   t,
