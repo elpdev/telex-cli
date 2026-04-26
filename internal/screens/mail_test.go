@@ -993,6 +993,8 @@ func TestMailScreenAttachPickerSelectionAddsAttachmentToDraft(t *testing.T) {
 		t.Fatal("expected attachment picker to be active")
 	}
 	screen.filePicker = filepicker.New("", sourceDir, filepicker.ModeOpenFile)
+	updated, _ = screen.Update(screen.filePicker.Init()())
+	screen = updated.(Mail)
 	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "enter"}))
 	screen = updated.(Mail)
 	if cmd == nil {

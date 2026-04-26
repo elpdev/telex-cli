@@ -228,9 +228,7 @@ func (c Calendar) Init() tea.Cmd { return c.loadCmd() }
 
 func (c Calendar) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	if c.filePickerOpen {
-		if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
-			return c.handleImportFileKey(keyMsg)
-		}
+		return c.handleImportFileMsg(msg)
 	}
 	if c.form != nil {
 		return c.updateForm(msg)
@@ -767,11 +765,11 @@ func (c Calendar) startImportICS() (Screen, tea.Cmd) {
 	c.filePickerOpen = true
 	c.importCalendar = item.RemoteID
 	c.status = fmt.Sprintf("Select .ics file for %s", item.Name)
-	return c, nil
+	return c, c.filePicker.Init()
 }
 
-func (c Calendar) handleImportFileKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
-	picker, action := c.filePicker.Update(msg)
+func (c Calendar) handleImportFileMsg(msg tea.Msg) (Screen, tea.Cmd) {
+	picker, action, cmd := c.filePicker.Update(msg)
 	c.filePicker = picker
 	switch action.Type {
 	case filepicker.ActionCancel:
@@ -784,12 +782,10 @@ func (c Calendar) handleImportFileKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	}
 	if c.filePicker.Err != nil {
 		c.status = fmt.Sprintf("File picker: %v", c.filePicker.Err)
-	} else if c.filePicker.Filtering {
-		c.status = "ICS file filter: " + c.filePicker.Filter
 	} else {
 		c.status = "Select .ics file"
 	}
-	return c, nil
+	return c, cmd
 }
 
 func (c Calendar) importSelectedICS(path string) (Screen, tea.Cmd) {

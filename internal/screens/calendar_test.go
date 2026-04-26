@@ -831,8 +831,8 @@ func TestCalendarImportICSUsesSelectedCalendarAndShowsResult(t *testing.T) {
 	}
 
 	updated, cmd := screen.Update(CalendarActionMsg{Action: "import-ics"})
-	if cmd != nil {
-		t.Fatal("expected no command")
+	if cmd == nil {
+		t.Fatal("expected file picker init command")
 	}
 	screen = updated.(Calendar)
 	if !screen.filePickerOpen || screen.importCalendar != 12 {

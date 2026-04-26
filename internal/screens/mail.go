@@ -370,6 +370,10 @@ func DefaultMailKeyMap() MailKeyMap {
 func (m Mail) Init() tea.Cmd { return m.loadCmd() }
 
 func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
+	if m.filePickerActive {
+		return m.handleAttachFileMsg(msg)
+	}
+
 	switch msg := msg.(type) {
 	case mailLoadedMsg:
 		m.loading = false
@@ -724,7 +728,7 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return m.handleAttachmentSaveKey(msg)
 	}
 	if m.filePickerActive {
-		return m.handleAttachFileKey(msg)
+		return m.handleAttachFileMsg(msg)
 	}
 	if m.forwarding {
 		return m.handleForwardKey(msg)
@@ -1026,8 +1030,8 @@ func (m Mail) handleAttachmentSaveKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return m, nil
 }
 
-func (m Mail) handleAttachFileKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
-	picker, action := m.filePicker.Update(msg)
+func (m Mail) handleAttachFileMsg(msg tea.Msg) (Screen, tea.Cmd) {
+	picker, action, cmd := m.filePicker.Update(msg)
 	m.filePicker = picker
 	switch action.Type {
 	case filepicker.ActionCancel:
@@ -1040,12 +1044,10 @@ func (m Mail) handleAttachFileKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	}
 	if m.filePicker.Err != nil {
 		m.status = fmt.Sprintf("File picker: %v", m.filePicker.Err)
-	} else if m.filePicker.Filtering {
-		m.status = "Attach file filter: " + m.filePicker.Filter
 	} else {
 		m.status = "Select file to attach"
 	}
-	return m, nil
+	return m, cmd
 }
 
 func (m Mail) handleForwardKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
@@ -1104,7 +1106,7 @@ func (m Mail) startAttachFile() (Screen, tea.Cmd) {
 	m.filePicker = filepicker.New("", cwd, filepicker.ModeOpenFile)
 	m.filePickerActive = true
 	m.status = "Select file to attach"
-	return m, nil
+	return m, m.filePicker.Init()
 }
 
 func (m Mail) attachFileToSelectedDraft(path string) (Screen, tea.Cmd) {

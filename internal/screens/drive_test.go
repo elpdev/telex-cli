@@ -153,6 +153,8 @@ func TestDriveScreenUploadPickerSelectionInvokesUpload(t *testing.T) {
 		t.Fatal("expected picker")
 	}
 	screen.picker = filepicker.New("", filepath.Dir(source), filepicker.ModeOpenFile)
+	updated, _ = screen.Update(screen.picker.Init()())
+	screen = updated.(Drive)
 	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "enter"}))
 	screen = updated.(Drive)
 	if cmd == nil {

@@ -140,6 +140,10 @@ func DefaultDriveKeyMap() DriveKeyMap {
 func (d Drive) Init() tea.Cmd { return d.loadCmd(d.path) }
 
 func (d Drive) Update(msg tea.Msg) (Screen, tea.Cmd) {
+	if d.pickerOpen {
+		return d.handlePickerMsg(msg)
+	}
+
 	switch msg := msg.(type) {
 	case driveLoadedMsg:
 		d.loading = false
@@ -210,6 +214,7 @@ func (d Drive) handleAction(action string) (Screen, tea.Cmd) {
 		d.picker = filepicker.New("", cwd, filepicker.ModeOpenFile)
 		d.pickerOpen = true
 		d.status = "Select file to upload"
+		return d, d.picker.Init()
 	case "new-folder":
 		d.prompt = drivePromptNewFolder
 		d.promptInput = ""
@@ -294,7 +299,7 @@ func (d Drive) KeyBindings() []key.Binding {
 
 func (d Drive) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if d.pickerOpen {
-		return d.handlePickerKey(msg)
+		return d.handlePickerMsg(msg)
 	}
 	if d.confirm != "" {
 		return d.handleConfirmKey(msg)
@@ -352,6 +357,7 @@ func (d Drive) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		d.picker = filepicker.New("", cwd, filepicker.ModeOpenFile)
 		d.pickerOpen = true
 		d.status = "Select file to upload"
+		return d, d.picker.Init()
 	case key.Matches(msg, d.keys.NewDir):
 		d.prompt = drivePromptNewFolder
 		d.promptInput = ""
@@ -461,8 +467,8 @@ func (d Drive) handleConfirmKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return d, nil
 }
 
-func (d Drive) handlePickerKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
-	picker, action := d.picker.Update(msg)
+func (d Drive) handlePickerMsg(msg tea.Msg) (Screen, tea.Cmd) {
+	picker, action, cmd := d.picker.Update(msg)
 	d.picker = picker
 	switch action.Type {
 	case filepicker.ActionCancel:
@@ -473,7 +479,7 @@ func (d Drive) handlePickerKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		d.pickerOpen = false
 		return d, d.uploadCmd(action.Path)
 	}
-	return d, nil
+	return d, cmd
 }
 
 func (d Drive) openSelectedFile(entry drivestore.Entry) (Screen, tea.Cmd) {
