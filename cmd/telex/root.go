@@ -10,7 +10,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/elpdev/telex-cli/internal/api"
 	"github.com/elpdev/telex-cli/internal/app"
+	"github.com/elpdev/telex-cli/internal/calendarstore"
 	"github.com/elpdev/telex-cli/internal/config"
+	"github.com/elpdev/telex-cli/internal/contactstore"
+	"github.com/elpdev/telex-cli/internal/drivestore"
+	"github.com/elpdev/telex-cli/internal/drivesync"
+	"github.com/elpdev/telex-cli/internal/notestore"
+	"github.com/elpdev/telex-cli/internal/taskstore"
 	"github.com/spf13/cobra"
 )
 
@@ -63,13 +69,79 @@ func newSyncCommand(rt *runtime) *cobra.Command {
 	var mailboxAddress string
 	cmd := &cobra.Command{
 		Use:   "sync",
-		Short: "Sync local Telex data",
+		Short: "Sync all local Telex data",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runMailSync(cmd, rt, mailboxAddress)
+			return runFullSync(cmd, rt, mailboxAddress)
 		},
 	}
 	cmd.Flags().StringVar(&mailboxAddress, "mailbox", "", "limit mail sync to one synced mailbox address")
 	return cmd
+}
+
+func runFullSync(cmd *cobra.Command, rt *runtime, mailboxAddress string) error {
+	if err := runMailSync(cmd, rt, mailboxAddress); err != nil {
+		return fmt.Errorf("mail sync: %w", err)
+	}
+
+	service, cfg, err := driveService(rt)
+	if err != nil {
+		return fmt.Errorf("drive sync: %w", err)
+	}
+	driveResult, err := drivesync.Run(rt.context(), drivestore.New(rt.dataPath), service, cfg.DriveSyncMode())
+	if err != nil {
+		return fmt.Errorf("drive sync: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Synced %d Drive folder(s), %d file(s).\n", driveResult.Folders, driveResult.Files)
+	if cfg.DriveSyncMode() == config.DriveSyncFull {
+		fmt.Fprintf(cmd.OutOrStdout(), "Downloaded %d Drive file content(s).\n", driveResult.DownloadedFiles)
+	} else {
+		fmt.Fprintln(cmd.OutOrStdout(), "Drive metadata-only mode: file contents were not downloaded.")
+	}
+	if driveResult.DownloadFailures > 0 {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Skipped %d Drive file download(s) due to remote errors; metadata was still cached.\n", driveResult.DownloadFailures)
+	}
+
+	noteSvc, err := notesService(rt)
+	if err != nil {
+		return fmt.Errorf("notes sync: %w", err)
+	}
+	notesResult, err := runNotesSync(rt, noteSvc, notestore.New(rt.dataPath))
+	if err != nil {
+		return fmt.Errorf("notes sync: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Synced %d Notes folder(s), %d note(s).\n", notesResult.Folders, notesResult.Notes)
+
+	taskSvc, err := tasksService(rt)
+	if err != nil {
+		return fmt.Errorf("tasks sync: %w", err)
+	}
+	tasksResult, err := runTasksSync(rt.context(), taskstore.New(rt.dataPath), taskSvc)
+	if err != nil {
+		return fmt.Errorf("tasks sync: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Synced %d task project(s), %d board(s), %d card(s).\n", tasksResult.Projects, tasksResult.Boards, tasksResult.Cards)
+
+	calendarSvc, err := calendarService(rt)
+	if err != nil {
+		return fmt.Errorf("calendar sync: %w", err)
+	}
+	calendarResult, err := runCalendarSync(rt, calendarSvc, calendarstore.New(rt.dataPath), calendarSyncOptions{})
+	if err != nil {
+		return fmt.Errorf("calendar sync: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Synced %d calendar(s), %d event(s), %d occurrence(s).\n", calendarResult.Calendars, calendarResult.Events, calendarResult.Occurrences)
+
+	contactSvc, err := contactsService(rt)
+	if err != nil {
+		return fmt.Errorf("contacts sync: %w", err)
+	}
+	contactsResult, err := runContactsSync(rt, contactSvc, contactstore.New(rt.dataPath))
+	if err != nil {
+		return fmt.Errorf("contacts sync: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Synced %d contact(s), %d contact note(s).\n", contactsResult.Contacts, contactsResult.Notes)
+
+	return nil
 }
 
 func newTUICommand(rt *runtime) *cobra.Command {
