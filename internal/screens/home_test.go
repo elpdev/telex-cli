@@ -6,27 +6,32 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/elpdev/telex-cli/internal/calendarstore"
+	"github.com/elpdev/telex-cli/internal/contactstore"
 	"github.com/elpdev/telex-cli/internal/drivestore"
 	"github.com/elpdev/telex-cli/internal/mailstore"
 	"github.com/elpdev/telex-cli/internal/notestore"
+	"github.com/elpdev/telex-cli/internal/taskstore"
 	"github.com/elpdev/telex-cli/internal/theme"
 )
 
-func TestHomeViewRendersAllFourModuleCards(t *testing.T) {
+func TestHomeViewRendersAllModuleCards(t *testing.T) {
 	root := t.TempDir()
 	home := NewHome(
 		mailstore.New(root),
 		calendarstore.New(root),
 		notestore.New(root),
 		drivestore.New(root),
+		taskstore.New(root),
+		contactstore.New(root),
+		nil,
 		theme.Phosphor(),
 		nil,
 	)
 
-	loaded, _ := home.Update(homeLoadedMsg{summary: collectHomeSummary(home.mail, home.calendar, home.notes, home.drive)})
-	out := loaded.View(120, 40)
+	loaded, _ := home.Update(homeLoadedMsg{summary: collectHomeSummary(home.mail, home.calendar, home.notes, home.drive, home.tasks, home.contacts)})
+	out := loaded.View(120, 60)
 
-	for _, label := range []string{"MAIL", "CALENDAR", "NOTES", "DRIVE"} {
+	for _, label := range []string{"MAIL", "CALENDAR", "CONTACTS", "NOTES", "TASKS", "DRIVE", "NEWS"} {
 		if !strings.Contains(out, label) {
 			t.Errorf("dashboard view missing module label %q", label)
 		}
@@ -43,15 +48,18 @@ func TestHomeViewHandlesVariousWidths(t *testing.T) {
 		calendarstore.New(root),
 		notestore.New(root),
 		drivestore.New(root),
+		taskstore.New(root),
+		contactstore.New(root),
+		nil,
 		theme.Phosphor(),
 		nil,
 	)
-	loaded, _ := home.Update(homeLoadedMsg{summary: collectHomeSummary(home.mail, home.calendar, home.notes, home.drive)})
+	loaded, _ := home.Update(homeLoadedMsg{summary: collectHomeSummary(home.mail, home.calendar, home.notes, home.drive, home.tasks, home.contacts)})
 
 	for _, w := range []int{40, 80, 99, 100, 120, 200} {
-		out := loaded.View(w, 40)
+		out := loaded.View(w, 60)
 		if out == "" {
-			t.Errorf("View(%d, 40) returned empty string", w)
+			t.Errorf("View(%d, 60) returned empty string", w)
 		}
 	}
 }
@@ -69,17 +77,20 @@ func TestLoadedHomeFitsInsideThemeMainWrapper(t *testing.T) {
 		calendarstore.New(root),
 		notestore.New(root),
 		drivestore.New(root),
+		taskstore.New(root),
+		contactstore.New(root),
+		nil,
 		theme.Phosphor(),
 		nil,
 	)
-	loaded, _ := home.Update(homeLoadedMsg{summary: collectHomeSummary(home.mail, home.calendar, home.notes, home.drive)})
+	loaded, _ := home.Update(homeLoadedMsg{summary: collectHomeSummary(home.mail, home.calendar, home.notes, home.drive, home.tasks, home.contacts)})
 
 	th := theme.Phosphor()
 	frameW, frameH := th.Main.GetFrameSize()
 
 	for _, totalW := range []int{120, 160, 200} {
 		innerW := totalW - frameW
-		innerH := 30
+		innerH := 60
 
 		body := loaded.View(innerW, innerH)
 		wrapped := th.Main.Width(totalW).Height(innerH + frameH).Render(body)
@@ -102,6 +113,9 @@ func TestHomeViewWhileLoading(t *testing.T) {
 		calendarstore.New(t.TempDir()),
 		notestore.New(t.TempDir()),
 		drivestore.New(t.TempDir()),
+		taskstore.New(t.TempDir()),
+		contactstore.New(t.TempDir()),
+		nil,
 		theme.Phosphor(),
 		nil,
 	)

@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -9,19 +10,28 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/elpdev/hackernews/pkg/hn"
 	"github.com/elpdev/telex-cli/internal/calendarstore"
 	"github.com/elpdev/telex-cli/internal/components/card"
+	"github.com/elpdev/telex-cli/internal/contactstore"
 	"github.com/elpdev/telex-cli/internal/drivestore"
 	"github.com/elpdev/telex-cli/internal/mailstore"
 	"github.com/elpdev/telex-cli/internal/notestore"
+	"github.com/elpdev/telex-cli/internal/taskstore"
 	"github.com/elpdev/telex-cli/internal/theme"
 )
 
 type HomeNavigateFunc func(screenID string) tea.Cmd
 
+// NewsFetcher returns up to limit top stories. Implementations typically wrap
+// hn.Client.TopStories. May be nil — the news card then renders an empty state.
+type NewsFetcher func(ctx context.Context, limit int) ([]hn.Item, error)
+
 const (
 	homeGridCols     = 2
 	homeStackedBelow = 100
+	homeNewsLimit    = 3
+	homeNewsTimeout  = 4 * time.Second
 )
 
 type Home struct {
@@ -29,6 +39,9 @@ type Home struct {
 	calendar calendarstore.Store
 	notes    notestore.Store
 	drive    drivestore.Store
+	tasks    taskstore.Store
+	contacts contactstore.Store
+	news     NewsFetcher
 	theme    theme.Theme
 	navigate HomeNavigateFunc
 
@@ -50,6 +63,9 @@ type HomeKeyMap struct {
 	Calendar   key.Binding
 	Notes      key.Binding
 	Drive      key.Binding
+	Contacts   key.Binding
+	Tasks      key.Binding
+	News       key.Binding
 }
 
 type homeSummary struct {
@@ -57,6 +73,9 @@ type homeSummary struct {
 	calendar calendarCardData
 	notes    notesCardData
 	drive    driveCardData
+	tasks    tasksCardData
+	contacts contactsCardData
+	news     newsCardData
 	lastSync time.Time
 }
 
@@ -111,8 +130,54 @@ type driveRecent struct {
 	updated time.Time
 }
 
+type tasksCardData struct {
+	projects int
+	cards    int
+	recent   []tasksRecent
+	syncedAt time.Time
+	err      error
+}
+
+type tasksRecent struct {
+	title   string
+	project string
+	updated time.Time
+}
+
+type contactsCardData struct {
+	total    int
+	comms    int
+	recent   []contactsRecent
+	syncedAt time.Time
+	err      error
+}
+
+type contactsRecent struct {
+	who     string
+	subject string
+	when    time.Time
+}
+
+type newsCardData struct {
+	loaded  bool
+	recent  []newsRecent
+	fetched time.Time
+	err     error
+}
+
+type newsRecent struct {
+	title    string
+	score    int
+	comments int
+	posted   time.Time
+}
+
 type homeLoadedMsg struct {
 	summary homeSummary
+}
+
+type homeNewsLoadedMsg struct {
+	news newsCardData
 }
 
 func DefaultHomeKeyMap() HomeKeyMap {
@@ -124,17 +189,33 @@ func DefaultHomeKeyMap() HomeKeyMap {
 		ClearFocus: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear focus")),
 		Mail:       key.NewBinding(key.WithKeys("m", "1"), key.WithHelp("m/1", "open mail")),
 		Calendar:   key.NewBinding(key.WithKeys("c", "2"), key.WithHelp("c/2", "open calendar")),
-		Notes:      key.NewBinding(key.WithKeys("n", "3"), key.WithHelp("n/3", "open notes")),
-		Drive:      key.NewBinding(key.WithKeys("d", "4"), key.WithHelp("d/4", "open drive")),
+		Contacts:   key.NewBinding(key.WithKeys("o", "3"), key.WithHelp("o/3", "open contacts")),
+		Notes:      key.NewBinding(key.WithKeys("n", "4"), key.WithHelp("n/4", "open notes")),
+		Tasks:      key.NewBinding(key.WithKeys("t", "5"), key.WithHelp("t/5", "open tasks")),
+		Drive:      key.NewBinding(key.WithKeys("d", "6"), key.WithHelp("d/6", "open drive")),
+		News:       key.NewBinding(key.WithKeys("w", "7"), key.WithHelp("w/7", "open news")),
 	}
 }
 
-func NewHome(mail mailstore.Store, calendar calendarstore.Store, notes notestore.Store, drive drivestore.Store, t theme.Theme, navigate HomeNavigateFunc) Home {
+func NewHome(
+	mail mailstore.Store,
+	calendar calendarstore.Store,
+	notes notestore.Store,
+	drive drivestore.Store,
+	tasks taskstore.Store,
+	contacts contactstore.Store,
+	news NewsFetcher,
+	t theme.Theme,
+	navigate HomeNavigateFunc,
+) Home {
 	h := Home{
 		mail:       mail,
 		calendar:   calendar,
 		notes:      notes,
 		drive:      drive,
+		tasks:      tasks,
+		contacts:   contacts,
+		news:       news,
 		theme:      t,
 		navigate:   navigate,
 		focusedIdx: -1,
@@ -155,8 +236,18 @@ func (h Home) Init() tea.Cmd { return h.loadCmd() }
 func (h Home) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	switch msg := msg.(type) {
 	case homeLoadedMsg:
+		// Preserve any already-loaded news data so a refresh of the main
+		// summary doesn't clobber a successful news fetch from earlier.
+		news := h.summary.news
 		h.summary = msg.summary
+		if news.loaded {
+			h.summary.news = news
+		}
 		h.loaded = true
+		h.cards, h.cardIDs = h.buildCards()
+		return h, nil
+	case homeNewsLoadedMsg:
+		h.summary.news = msg.news
 		h.cards, h.cardIDs = h.buildCards()
 		return h, nil
 	case tea.KeyPressMsg:
@@ -173,10 +264,16 @@ func (h Home) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return h.routeTo("mail")
 	case key.Matches(msg, h.keys.Calendar):
 		return h.routeTo("calendar")
+	case key.Matches(msg, h.keys.Contacts):
+		return h.routeTo("contacts")
 	case key.Matches(msg, h.keys.Notes):
 		return h.routeTo("notes")
+	case key.Matches(msg, h.keys.Tasks):
+		return h.routeTo("tasks")
 	case key.Matches(msg, h.keys.Drive):
 		return h.routeTo("drive")
+	case key.Matches(msg, h.keys.News):
+		return h.routeTo("news")
 	case key.Matches(msg, h.keys.NextCard):
 		return h.moveFocus(1), nil
 	case key.Matches(msg, h.keys.PrevCard):
@@ -236,7 +333,7 @@ func (h Home) setFocus(idx int) Home {
 func (h Home) Title() string { return "Home" }
 
 func (h Home) KeyBindings() []key.Binding {
-	return []key.Binding{h.keys.Mail, h.keys.Calendar, h.keys.Notes, h.keys.Drive, h.keys.NextCard, h.keys.OpenCard, h.keys.Refresh}
+	return []key.Binding{h.keys.Mail, h.keys.Calendar, h.keys.Contacts, h.keys.Notes, h.keys.Tasks, h.keys.Drive, h.keys.News, h.keys.NextCard, h.keys.OpenCard, h.keys.Refresh}
 }
 
 func (h Home) View(width, height int) string {
@@ -257,8 +354,13 @@ func (h Home) View(width, height int) string {
 	}
 
 	sized := make([]card.Model, len(h.cards))
+	orphan := !stacked && len(h.cards)%homeGridCols == 1
 	for i, c := range h.cards {
-		sized[i] = c.WithWidth(cardWidth)
+		w := cardWidth
+		if orphan && i == len(h.cards)-1 {
+			w = width
+		}
+		sized[i] = c.WithWidth(w)
 	}
 
 	var grid string
@@ -305,7 +407,7 @@ func (h Home) renderFooter() string {
 		h.theme.HeaderAccent.Render("?") + h.theme.Muted.Render(" help"),
 		h.theme.HeaderAccent.Render("tab") + h.theme.Muted.Render(" focus"),
 		h.theme.HeaderAccent.Render("enter") + h.theme.Muted.Render(" open"),
-		h.theme.HeaderAccent.Render("m c n d") + h.theme.Muted.Render(" jump"),
+		h.theme.HeaderAccent.Render("m c o n t d w") + h.theme.Muted.Render(" jump"),
 		h.theme.HeaderAccent.Render("r") + h.theme.Muted.Render(" refresh"),
 	}
 	return strings.Join(parts, h.theme.Muted.Render("  •  "))
@@ -315,10 +417,13 @@ func (h Home) buildCards() ([]card.Model, []string) {
 	cards := []card.Model{
 		h.makeMailCard(),
 		h.makeCalendarCard(),
+		h.makeContactsCard(),
 		h.makeNotesCard(),
+		h.makeTasksCard(),
 		h.makeDriveCard(),
+		h.makeNewsCard(),
 	}
-	ids := []string{"mail", "calendar", "notes", "drive"}
+	ids := []string{"mail", "calendar", "contacts", "notes", "tasks", "drive", "news"}
 	for i := range cards {
 		if i == h.focusedIdx {
 			cards[i] = cards[i].Focus()
@@ -398,7 +503,7 @@ func (h Home) makeCalendarCard() card.Model {
 
 func (h Home) makeNotesCard() card.Model {
 	d := h.summary.notes
-	c := card.New(h.theme).WithTitle("NOTES").WithKeyHint("n / 3")
+	c := card.New(h.theme).WithTitle("NOTES").WithKeyHint("n / 4")
 	switch {
 	case d.err != nil:
 		c = c.WithError("notes cache error — see Logs")
@@ -428,7 +533,7 @@ func (h Home) makeNotesCard() card.Model {
 
 func (h Home) makeDriveCard() card.Model {
 	d := h.summary.drive
-	c := card.New(h.theme).WithTitle("DRIVE").WithKeyHint("d / 4")
+	c := card.New(h.theme).WithTitle("DRIVE").WithKeyHint("d / 6")
 	switch {
 	case d.err != nil:
 		c = c.WithError("drive cache error — see Logs")
@@ -448,6 +553,102 @@ func (h Home) makeDriveCard() card.Model {
 			}
 			c = c.WithRows(rows)
 		}
+	}
+	return c
+}
+
+func (h Home) makeContactsCard() card.Model {
+	d := h.summary.contacts
+	c := card.New(h.theme).WithTitle("CONTACTS").WithKeyHint("o / 3")
+	switch {
+	case d.err != nil:
+		c = c.WithError("contacts cache error — see Logs")
+	case d.syncedAt.IsZero() && d.total == 0:
+		c = c.WithEmpty("No contacts yet — sync from Contacts.")
+	default:
+		c = c.WithCounts(fmt.Sprintf("%d contacts", d.total), fmt.Sprintf("%d comms", d.comms))
+		if len(d.recent) == 0 {
+			c = c.WithEmpty("No recent activity.")
+		} else {
+			rows := make([]card.Row, 0, len(d.recent))
+			for _, r := range d.recent {
+				who := r.who
+				if who == "" {
+					who = "(unknown)"
+				}
+				left := who
+				if r.subject != "" {
+					left = who + " — " + r.subject
+				}
+				rows = append(rows, card.Row{
+					Left:  left,
+					Right: humanAgo(time.Since(r.when)) + " ago",
+				})
+			}
+			c = c.WithRows(rows)
+		}
+	}
+	return c
+}
+
+func (h Home) makeTasksCard() card.Model {
+	d := h.summary.tasks
+	c := card.New(h.theme).WithTitle("TASKS").WithKeyHint("t / 5")
+	switch {
+	case d.err != nil:
+		c = c.WithError("tasks cache error — see Logs")
+	case d.syncedAt.IsZero() && d.projects == 0:
+		c = c.WithEmpty("No tasks yet — sync from Tasks.")
+	default:
+		c = c.WithCounts(fmt.Sprintf("%d projects", d.projects), fmt.Sprintf("%d cards", d.cards))
+		if len(d.recent) == 0 {
+			c = c.WithEmpty("No recent updates.")
+		} else {
+			rows := make([]card.Row, 0, len(d.recent))
+			for _, r := range d.recent {
+				title := r.title
+				if title == "" {
+					title = "(untitled)"
+				}
+				left := title
+				if r.project != "" {
+					left = r.project + " — " + title
+				}
+				rows = append(rows, card.Row{
+					Left:  left,
+					Right: humanAgo(time.Since(r.updated)) + " ago",
+				})
+			}
+			c = c.WithRows(rows)
+		}
+	}
+	return c
+}
+
+func (h Home) makeNewsCard() card.Model {
+	d := h.summary.news
+	c := card.New(h.theme).WithTitle("NEWS").WithKeyHint("w / 7")
+	switch {
+	case d.err != nil:
+		c = c.WithError("news fetch failed — check connection")
+	case !d.loaded:
+		c = c.WithEmpty("Loading top stories…")
+	case len(d.recent) == 0:
+		c = c.WithEmpty("No top stories.")
+	default:
+		c = c.WithCounts("Top stories", "fetched "+humanAgo(time.Since(d.fetched))+" ago")
+		rows := make([]card.Row, 0, len(d.recent))
+		for _, r := range d.recent {
+			title := r.title
+			if title == "" {
+				title = "(untitled)"
+			}
+			rows = append(rows, card.Row{
+				Left:  title,
+				Right: fmt.Sprintf("↑%d", r.score),
+			})
+		}
+		c = c.WithRows(rows)
 	}
 	return c
 }
@@ -516,19 +717,45 @@ func (h Home) loadCmd() tea.Cmd {
 	cal := h.calendar
 	notes := h.notes
 	drive := h.drive
+	tasks := h.tasks
+	contacts := h.contacts
+	summaryCmd := func() tea.Msg {
+		return homeLoadedMsg{summary: collectHomeSummary(mail, cal, notes, drive, tasks, contacts)}
+	}
+	return tea.Batch(summaryCmd, h.newsLoadCmd())
+}
+
+func (h Home) newsLoadCmd() tea.Cmd {
+	fetcher := h.news
 	return func() tea.Msg {
-		return homeLoadedMsg{summary: collectHomeSummary(mail, cal, notes, drive)}
+		return homeNewsLoadedMsg{news: collectNewsCard(fetcher)}
 	}
 }
 
-func collectHomeSummary(mail mailstore.Store, cal calendarstore.Store, notes notestore.Store, drive drivestore.Store) homeSummary {
+func collectHomeSummary(
+	mail mailstore.Store,
+	cal calendarstore.Store,
+	notes notestore.Store,
+	drive drivestore.Store,
+	tasks taskstore.Store,
+	contacts contactstore.Store,
+) homeSummary {
 	s := homeSummary{
 		mail:     collectMailCard(mail),
 		calendar: collectCalendarCard(cal),
 		notes:    collectNotesCard(notes),
 		drive:    collectDriveCard(drive),
+		tasks:    collectTasksCard(tasks),
+		contacts: collectContactsCard(contacts),
 	}
-	for _, t := range []time.Time{s.mail.syncedAt, s.calendar.syncedAt, s.notes.syncedAt, s.drive.syncedAt} {
+	for _, t := range []time.Time{
+		s.mail.syncedAt,
+		s.calendar.syncedAt,
+		s.notes.syncedAt,
+		s.drive.syncedAt,
+		s.tasks.syncedAt,
+		s.contacts.syncedAt,
+	} {
 		if t.After(s.lastSync) {
 			s.lastSync = t
 		}
@@ -664,6 +891,105 @@ func collectDriveCard(store drivestore.Store) driveCardData {
 	}
 	for _, f := range files[:limit] {
 		data.recent = append(data.recent, driveRecent{name: f.Filename, updated: f.RemoteUpdatedAt})
+	}
+	return data
+}
+
+func collectTasksCard(store taskstore.Store) tasksCardData {
+	projects, err := store.ListProjects()
+	if err != nil {
+		return tasksCardData{err: err}
+	}
+	data := tasksCardData{projects: len(projects)}
+	type recent struct {
+		title   string
+		project string
+		updated time.Time
+	}
+	var all []recent
+	for _, p := range projects {
+		if p.Meta.SyncedAt.After(data.syncedAt) {
+			data.syncedAt = p.Meta.SyncedAt
+		}
+		cards, _ := store.ListCards(p.Meta.RemoteID)
+		data.cards += len(cards)
+		for _, c := range cards {
+			all = append(all, recent{title: c.Meta.Title, project: p.Meta.Name, updated: c.Meta.RemoteUpdatedAt})
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].updated.After(all[j].updated) })
+	limit := 3
+	if len(all) < limit {
+		limit = len(all)
+	}
+	for _, r := range all[:limit] {
+		data.recent = append(data.recent, tasksRecent{title: r.title, project: r.project, updated: r.updated})
+	}
+	return data
+}
+
+func collectContactsCard(store contactstore.Store) contactsCardData {
+	contacts, err := store.ListContacts()
+	if err != nil {
+		return contactsCardData{err: err}
+	}
+	data := contactsCardData{total: len(contacts)}
+	type recent struct {
+		who     string
+		subject string
+		when    time.Time
+	}
+	var all []recent
+	for _, ct := range contacts {
+		if ct.Meta.SyncedAt.After(data.syncedAt) {
+			data.syncedAt = ct.Meta.SyncedAt
+		}
+		data.comms += len(ct.Communications)
+		for _, comm := range ct.Communications {
+			all = append(all, recent{who: ct.Meta.DisplayName, subject: comm.Subject, when: comm.OccurredAt})
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].when.After(all[j].when) })
+	if len(all) == 0 && len(contacts) > 0 {
+		sorted := append([]contactstore.CachedContact(nil), contacts...)
+		sort.Slice(sorted, func(i, j int) bool {
+			return sorted[i].Meta.RemoteUpdatedAt.After(sorted[j].Meta.RemoteUpdatedAt)
+		})
+		for i, ct := range sorted {
+			if i >= 3 {
+				break
+			}
+			all = append(all, recent{who: ct.Meta.DisplayName, subject: "added", when: ct.Meta.RemoteUpdatedAt})
+		}
+	}
+	limit := 3
+	if len(all) < limit {
+		limit = len(all)
+	}
+	for _, r := range all[:limit] {
+		data.recent = append(data.recent, contactsRecent{who: r.who, subject: r.subject, when: r.when})
+	}
+	return data
+}
+
+func collectNewsCard(fetcher NewsFetcher) newsCardData {
+	if fetcher == nil {
+		return newsCardData{loaded: true, fetched: time.Now()}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), homeNewsTimeout)
+	defer cancel()
+	items, err := fetcher(ctx, homeNewsLimit)
+	if err != nil {
+		return newsCardData{loaded: true, fetched: time.Now(), err: err}
+	}
+	data := newsCardData{loaded: true, fetched: time.Now()}
+	for _, item := range items {
+		data.recent = append(data.recent, newsRecent{
+			title:    item.Title,
+			score:    item.Score,
+			comments: item.Descendants,
+			posted:   item.CreatedAt(),
+		})
 	}
 	return data
 }
