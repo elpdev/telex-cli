@@ -24,6 +24,7 @@ type CreateTaskProjectFunc func(context.Context, tasks.ProjectInput) (*tasks.Pro
 type CreateTaskCardFunc func(context.Context, int64, tasks.CardInput) (*tasks.Card, error)
 type UpdateTaskCardFunc func(context.Context, int64, int64, tasks.CardInput) (*tasks.Card, error)
 type DeleteTaskCardFunc func(context.Context, int64, int64) error
+type MoveTaskCardFunc func(ctx context.Context, projectID int64, cardFilename, targetColumn string) error
 
 type TasksSyncResult struct {
 	Projects int
@@ -38,6 +39,7 @@ type Tasks struct {
 	createCard    CreateTaskCardFunc
 	updateCard    UpdateTaskCardFunc
 	deleteCard    DeleteTaskCardFunc
+	moveCard      MoveTaskCardFunc
 	projects      []taskstore.CachedProject
 	project       *taskstore.CachedProject
 	board         *taskstore.CachedBoard
@@ -49,6 +51,8 @@ type Tasks struct {
 	detailScroll  int
 	filter        string
 	filtering     bool
+	picker        string
+	picking       bool
 	confirm       string
 	loading       bool
 	syncing       bool
@@ -58,17 +62,20 @@ type Tasks struct {
 }
 
 type TasksKeyMap struct {
-	Up      key.Binding
-	Down    key.Binding
-	Open    key.Binding
-	Back    key.Binding
-	Refresh key.Binding
-	Sync    key.Binding
-	Search  key.Binding
-	Project key.Binding
-	New     key.Binding
-	Edit    key.Binding
-	Delete  key.Binding
+	Up       key.Binding
+	Down     key.Binding
+	Open     key.Binding
+	Back     key.Binding
+	Refresh  key.Binding
+	Sync     key.Binding
+	Search   key.Binding
+	Project  key.Binding
+	New      key.Binding
+	Edit     key.Binding
+	Delete   key.Binding
+	MoveNext key.Binding
+	MovePrev key.Binding
+	MoveTo   key.Binding
 }
 
 type taskRow struct {
@@ -110,27 +117,31 @@ func NewTasks(store taskstore.Store, sync TasksSyncFunc) Tasks {
 	return Tasks{store: store, sync: sync, loading: true, keys: DefaultTasksKeyMap(), rowList: newTaskList(nil, 0, 0, 0)}
 }
 
-func (t Tasks) WithActions(createProject CreateTaskProjectFunc, createCard CreateTaskCardFunc, updateCard UpdateTaskCardFunc, deleteCard DeleteTaskCardFunc) Tasks {
+func (t Tasks) WithActions(createProject CreateTaskProjectFunc, createCard CreateTaskCardFunc, updateCard UpdateTaskCardFunc, deleteCard DeleteTaskCardFunc, moveCard MoveTaskCardFunc) Tasks {
 	t.createProject = createProject
 	t.createCard = createCard
 	t.updateCard = updateCard
 	t.deleteCard = deleteCard
+	t.moveCard = moveCard
 	return t
 }
 
 func DefaultTasksKeyMap() TasksKeyMap {
 	return TasksKeyMap{
-		Up:      key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "item up")),
-		Down:    key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "item down")),
-		Open:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
-		Back:    key.NewBinding(key.WithKeys("esc", "backspace"), key.WithHelp("esc", "back")),
-		Refresh: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload cache")),
-		Sync:    key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "sync tasks")),
-		Search:  key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
-		Project: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "projects")),
-		New:     key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new card/project")),
-		Edit:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit card")),
-		Delete:  key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "delete card")),
+		Up:       key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("up/k", "item up")),
+		Down:     key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("down/j", "item down")),
+		Open:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "open")),
+		Back:     key.NewBinding(key.WithKeys("esc", "backspace"), key.WithHelp("esc", "back")),
+		Refresh:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload cache")),
+		Sync:     key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "sync tasks")),
+		Search:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		Project:  key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "projects")),
+		New:      key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new card/project")),
+		Edit:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit card")),
+		Delete:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "delete card")),
+		MoveNext: key.NewBinding(key.WithKeys(">", "L"), key.WithHelp(">/L", "move to next column")),
+		MovePrev: key.NewBinding(key.WithKeys("<", "H"), key.WithHelp("</H", "move to previous column")),
+		MoveTo:   key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "move to column…")),
 	}
 }
 
@@ -200,11 +211,23 @@ func (t Tasks) View(width, height int) string {
 		return style.Render(fmt.Sprintf("Tasks cache error: %v\n\nRun `telex tasks sync` or press S to populate Tasks.", t.err))
 	}
 	var b strings.Builder
-	b.WriteString("Tasks")
+	titleStyle := lipgloss.NewStyle().Bold(true)
+	hintStyle := lipgloss.NewStyle().Faint(true)
 	if t.project != nil {
-		b.WriteString(" / " + t.project.Meta.Name)
+		b.WriteString(titleStyle.Render(t.project.Meta.Name))
+		b.WriteString("\n")
+		b.WriteString(hintStyle.Render("Tasks › " + t.project.Meta.Name + "   esc/p: back to projects"))
+		b.WriteString("\n")
+	} else {
+		b.WriteString(titleStyle.Render("Tasks"))
+		b.WriteString("\n")
+		b.WriteString(hintStyle.Render("All projects   n: new project · S: sync"))
+		b.WriteString("\n")
 	}
-	b.WriteString("\n")
+	if legend := t.actionLegend(); legend != "" {
+		b.WriteString(hintStyle.Render(legend))
+		b.WriteString("\n")
+	}
 	if t.status != "" {
 		b.WriteString(t.status + "\n")
 	}
@@ -213,6 +236,13 @@ func (t Tasks) View(width, height int) string {
 	}
 	if t.filtering {
 		b.WriteString("Filter: " + t.filter + "\n")
+	}
+	if t.picking {
+		line := "Move to column: " + t.picker
+		if cols := t.columnNamesString(); cols != "" {
+			line += "   (" + cols + ")"
+		}
+		b.WriteString(line + "\n")
 	}
 	if t.confirm != "" {
 		b.WriteString(t.confirm + " [y/N]\n")
@@ -237,9 +267,22 @@ func (t Tasks) View(width, height int) string {
 		return style.Render(b.String())
 	}
 	previewCol := t.renderPreview(rows, previewWidth)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(listWidth).Render(listCol), "  ", lipgloss.NewStyle().Width(previewWidth).Render(previewCol))
+	separator := tasksPaneSeparator(bodyHeight)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(listWidth).Render(listCol), separator, lipgloss.NewStyle().Width(previewWidth).Render(previewCol))
 	b.WriteString(body)
 	return style.Render(b.String())
+}
+
+func tasksPaneSeparator(height int) string {
+	if height < 1 {
+		height = 1
+	}
+	bar := lipgloss.NewStyle().Faint(true).Render("│")
+	lines := make([]string, height)
+	for i := range lines {
+		lines[i] = " " + bar + " "
+	}
+	return strings.Join(lines, "\n")
 }
 
 func tasksPaneWidths(width int) (int, int) {
@@ -276,14 +319,22 @@ func (t Tasks) renderPreview(rows []taskRow, width int) string {
 	case row.Project != nil:
 		b.WriteString(row.Project.Meta.Name + "\n")
 		b.WriteString(fmt.Sprintf("Project %d\n", row.Project.Meta.RemoteID))
-	case row.Column != nil:
-		b.WriteString(row.Column.Name + "\n")
-		b.WriteString(fmt.Sprintf("%d linked card(s)\n", len(row.Column.Cards)))
 	case row.Card != nil:
 		b.WriteString(row.Card.Meta.Title + "\n")
+		meta := ""
 		if updated := formatNotesRelative(row.Card.Meta.RemoteUpdatedAt); updated != "" {
-			b.WriteString("Updated " + updated + "\n")
+			meta = "Updated " + updated
 		}
+		columnName := "Unlinked"
+		if row.Column != nil {
+			columnName = row.Column.Name
+		}
+		if meta != "" {
+			meta += " · in " + columnName
+		} else {
+			meta = "in " + columnName
+		}
+		b.WriteString(meta + "\n")
 		b.WriteString(strings.Repeat("─", width) + "\n")
 		rendered, err := emailtext.RenderMarkdown(row.Card.Body, width)
 		if err != nil {
@@ -291,6 +342,9 @@ func (t Tasks) renderPreview(rows []taskRow, width int) string {
 		} else {
 			b.WriteString(rendered)
 		}
+	case row.Column != nil:
+		b.WriteString(row.Column.Name + "\n")
+		b.WriteString(fmt.Sprintf("%d linked card(s)\n", len(row.Column.Cards)))
 	case row.Missing:
 		b.WriteString(row.Name + "\nMissing linked card\n")
 	}
@@ -300,7 +354,7 @@ func (t Tasks) renderPreview(rows []taskRow, width int) string {
 func (t Tasks) Title() string { return "Tasks" }
 
 func (t Tasks) KeyBindings() []key.Binding {
-	return []key.Binding{t.keys.Up, t.keys.Down, t.keys.Open, t.keys.Back, t.keys.Refresh, t.keys.Sync, t.keys.Search, t.keys.Project, t.keys.New, t.keys.Edit, t.keys.Delete}
+	return []key.Binding{t.keys.Up, t.keys.Down, t.keys.Open, t.keys.Back, t.keys.Refresh, t.keys.Sync, t.keys.Search, t.keys.Project, t.keys.New, t.keys.Edit, t.keys.Delete, t.keys.MovePrev, t.keys.MoveNext, t.keys.MoveTo}
 }
 
 func (t Tasks) Selection() TasksSelection {
@@ -318,7 +372,7 @@ type TasksSelection struct {
 }
 
 func (t Tasks) handleAction(action string) (Screen, tea.Cmd) {
-	if t.confirm != "" || t.filtering {
+	if t.confirm != "" || t.filtering || t.picking {
 		return t, nil
 	}
 	switch action {
@@ -339,6 +393,19 @@ func (t Tasks) handleAction(action string) (Screen, tea.Cmd) {
 		if row, ok := t.selectedRow(); ok && row.Card != nil {
 			t.confirm = "Delete " + row.Card.Meta.Title + "?"
 		}
+	case "move-card-next":
+		return t.moveCardNeighbor(1)
+	case "move-card-prev":
+		return t.moveCardNeighbor(-1)
+	case "move-card-to":
+		row, ok := t.selectedRow()
+		if !ok || row.Card == nil || t.board == nil || len(t.board.Columns) == 0 {
+			t.status = "Open a card in a project to move it"
+			return t, nil
+		}
+		t.picking = true
+		t.picker = ""
+		return t, nil
 	case "search":
 		t.filtering = true
 		t.filter = ""
@@ -355,12 +422,96 @@ func (t Tasks) handleAction(action string) (Screen, tea.Cmd) {
 	return t, nil
 }
 
+func (t Tasks) moveCardNeighbor(delta int) (Screen, tea.Cmd) {
+	row, ok := t.selectedRow()
+	if !ok || row.Card == nil {
+		t.status = "Select a card to move"
+		return t, nil
+	}
+	if t.board == nil || len(t.board.Columns) == 0 {
+		t.status = "No columns to move between"
+		return t, nil
+	}
+	target := t.neighborColumn(row, delta)
+	if target == "" {
+		t.status = "Already at edge column"
+		return t, nil
+	}
+	return t, t.moveCardCmd(*row.Card, target)
+}
+
+func (t Tasks) neighborColumn(row taskRow, delta int) string {
+	cols := t.board.Columns
+	current := -1
+	if row.Column != nil {
+		for i := range cols {
+			if strings.EqualFold(cols[i].Name, row.Column.Name) {
+				current = i
+				break
+			}
+		}
+	}
+	if current == -1 {
+		if delta > 0 {
+			return cols[0].Name
+		}
+		return cols[len(cols)-1].Name
+	}
+	next := current + delta
+	if next < 0 || next >= len(cols) {
+		return ""
+	}
+	return cols[next].Name
+}
+
+func (t Tasks) resolvePickerColumn() string {
+	needle := strings.ToLower(strings.TrimSpace(t.picker))
+	if needle == "" || t.board == nil {
+		return ""
+	}
+	for _, col := range t.board.Columns {
+		if strings.EqualFold(col.Name, needle) {
+			return col.Name
+		}
+	}
+	match := ""
+	count := 0
+	for _, col := range t.board.Columns {
+		if strings.HasPrefix(strings.ToLower(col.Name), needle) {
+			match = col.Name
+			count++
+		}
+	}
+	if count == 1 {
+		return match
+	}
+	return ""
+}
+
+func (t Tasks) moveCardCmd(card taskstore.CachedCard, target string) tea.Cmd {
+	if t.moveCard == nil {
+		t.status = "Move card is not configured"
+		return nil
+	}
+	projectID := card.Meta.ProjectID
+	return func() tea.Msg {
+		if err := t.moveCard(context.Background(), projectID, card.Meta.Filename, target); err != nil {
+			return taskActionFinishedMsg{err: err}
+		}
+		loaded := t.load(projectID)
+		return taskActionFinishedMsg{status: "Moved " + card.Meta.Title + " to " + target, loaded: loaded, err: loaded.err}
+	}
+}
+
 func (t Tasks) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if t.confirm != "" {
 		return t.handleConfirmKey(msg)
 	}
 	if t.filtering {
 		return t.handleFilterKey(msg)
+	}
+	if t.picking {
+		return t.handlePickerKey(msg)
 	}
 	if t.detail != nil {
 		if key.Matches(msg, t.keys.Back) {
@@ -410,6 +561,12 @@ func (t Tasks) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return t.handleAction("edit-card")
 	case key.Matches(msg, t.keys.Delete):
 		return t.handleAction("delete-card")
+	case key.Matches(msg, t.keys.MoveNext):
+		return t.handleAction("move-card-next")
+	case key.Matches(msg, t.keys.MovePrev):
+		return t.handleAction("move-card-prev")
+	case key.Matches(msg, t.keys.MoveTo):
+		return t.handleAction("move-card-to")
 	default:
 		t.ensureList(rows)
 		updated, cmd := t.rowList.Update(msg)
@@ -587,6 +744,39 @@ func (t Tasks) handleConfirmKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	return t, nil
 }
 
+func (t Tasks) handlePickerKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		t.picking = false
+		t.picker = ""
+		return t, nil
+	case "enter":
+		picked := t.picker
+		target := t.resolvePickerColumn()
+		t.picking = false
+		t.picker = ""
+		if target == "" {
+			t.status = fmt.Sprintf("Unknown column: %q", picked)
+			return t, nil
+		}
+		row, ok := t.selectedRow()
+		if !ok || row.Card == nil {
+			return t, nil
+		}
+		return t, t.moveCardCmd(*row.Card, target)
+	case "backspace":
+		if len(t.picker) > 0 {
+			t.picker = t.picker[:len(t.picker)-1]
+		}
+		return t, nil
+	default:
+		if msg.Text != "" {
+			t.picker += msg.Text
+		}
+		return t, nil
+	}
+}
+
 func (t Tasks) buildRows() []taskRow {
 	if t.project == nil {
 		rows := make([]taskRow, 0, len(t.projects))
@@ -610,11 +800,11 @@ func (t Tasks) buildRows() []taskRow {
 				if link.Card != nil {
 					if card := byID[link.Card.ID]; card != nil {
 						linked[card.Meta.RemoteID] = true
-						rows = append(rows, taskRow{Kind: "card", Name: card.Meta.Title, Card: card})
+						rows = append(rows, taskRow{Kind: "card", Name: card.Meta.Title, Card: card, Column: column})
 						continue
 					}
 				}
-				rows = append(rows, taskRow{Kind: "missing", Name: link.Title, Missing: true})
+				rows = append(rows, taskRow{Kind: "missing", Name: link.Title, Missing: true, Column: column})
 			}
 		}
 	}
@@ -745,7 +935,11 @@ func formatTaskRow(row taskRow, selected bool, width int) string {
 	case "missing":
 		glyph = "! "
 	}
-	return cursor + glyph + truncate(row.Name, max(0, width-4))
+	line := cursor + glyph + truncate(row.Name, max(0, width-4))
+	if selected {
+		line = lipgloss.NewStyle().Bold(true).Render(line)
+	}
+	return line
 }
 
 func (t Tasks) selectedRow() (taskRow, bool) {
@@ -761,6 +955,36 @@ func (t Tasks) currentProjectID() int64 {
 		return 0
 	}
 	return t.project.Meta.RemoteID
+}
+
+func (t Tasks) actionLegend() string {
+	row, ok := t.selectedRow()
+	if !ok {
+		if t.project == nil {
+			return "enter: open · n: new project · S: sync"
+		}
+		return "n: new card · S: sync · /: filter"
+	}
+	switch {
+	case row.Project != nil:
+		return "enter: open · n: new project · S: sync"
+	case row.Card != nil:
+		return "enter: open · e: edit · x: delete · </>: move column · m: move to…"
+	case row.Column != nil:
+		return "n: new card · S: sync · /: filter"
+	}
+	return ""
+}
+
+func (t Tasks) columnNamesString() string {
+	if t.board == nil {
+		return ""
+	}
+	names := make([]string, 0, len(t.board.Columns))
+	for _, col := range t.board.Columns {
+		names = append(names, col.Name)
+	}
+	return strings.Join(names, " · ")
 }
 
 func (t Tasks) detailView(width, height int) string {

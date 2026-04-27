@@ -165,7 +165,7 @@ func (m *Model) registerScreens() {
 	m.screens["contacts"] = screens.NewContacts(contactstore.New(m.dataPath), m.syncContacts).WithActions(m.deleteContact, m.loadContactNote, m.updateContactNote, m.loadContactCommunications)
 	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive).WithActions(m.downloadDriveFile, m.openDriveFile, m.uploadDriveFile, m.createDriveFolder, m.renameDriveFile, m.renameDriveFolder, m.deleteDriveFile, m.deleteDriveFolder)
 	m.screens["notes"] = screens.NewNotes(notestore.New(m.dataPath), m.syncNotes).WithActions(m.createNote, m.updateNote, m.deleteNote)
-	m.screens["tasks"] = screens.NewTasks(taskstore.New(m.dataPath), m.syncTasks).WithActions(m.createTaskProject, m.createTaskCard, m.updateTaskCard, m.deleteTaskCard)
+	m.screens["tasks"] = screens.NewTasks(taskstore.New(m.dataPath), m.syncTasks).WithActions(m.createTaskProject, m.createTaskCard, m.updateTaskCard, m.deleteTaskCard, m.moveTaskCard)
 	m.screens["settings"] = m.buildSettings()
 	if m.devBuild() {
 		m.screens["logs"] = screens.NewLogs(m.logs)
@@ -1095,6 +1095,14 @@ func (m *Model) deleteTaskCard(ctx context.Context, projectID, id int64) error {
 	return taskstore.New(m.dataPath).DeleteCard(projectID, id)
 }
 
+func (m *Model) moveTaskCard(ctx context.Context, projectID int64, cardFilename, targetColumn string) error {
+	service, err := m.tasksService()
+	if err != nil {
+		return err
+	}
+	return moveTaskCardToColumn(ctx, taskstore.New(m.dataPath), service, projectID, cardFilename, targetColumn)
+}
+
 func (m *Model) syncCalendar(ctx context.Context, from, to string) (screens.CalendarSyncResult, error) {
 	service, err := m.calendarService()
 	if err != nil {
@@ -1458,6 +1466,25 @@ func replaceTaskCardBoardLink(ctx context.Context, store taskstore.Store, servic
 	updatedBody := tasks.ReplaceCardPath(board.Body, "cards/"+oldFilename, "cards/"+card.Filename)
 	if updatedBody == board.Body {
 		return nil
+	}
+	updated, err := service.UpdateBoard(ctx, projectID, tasks.BoardInput{Body: updatedBody})
+	if err != nil {
+		return err
+	}
+	return store.StoreBoard(projectID, *updated, time.Now())
+}
+
+func moveTaskCardToColumn(ctx context.Context, store taskstore.Store, service *tasks.Service, projectID int64, cardFilename, targetColumn string) error {
+	if cardFilename == "" || targetColumn == "" {
+		return fmt.Errorf("card filename and target column are required")
+	}
+	board, err := service.ShowBoard(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	updatedBody := tasks.MoveCardToColumn(board.Body, "cards/"+cardFilename, targetColumn)
+	if updatedBody == board.Body {
+		return store.StoreBoard(projectID, *board, time.Now())
 	}
 	updated, err := service.UpdateBoard(ctx, projectID, tasks.BoardInput{Body: updatedBody})
 	if err != nil {
@@ -1882,6 +1909,9 @@ func (m *Model) registerCommands() {
 	m.commands.Register(commands.Command{ID: "tasks-new-card", Module: commands.ModuleTasks, Title: "New task card", Description: "Create a card in the current task project", Shortcut: "n", Keywords: []string{"new", "create", "card"}, Available: onTasks, Run: tasksAction("new-card", false)})
 	m.commands.Register(commands.Command{ID: "tasks-edit-card", Module: commands.ModuleTasks, Title: "Edit selected task card", Description: "Open the highlighted task card in TELEX_TASKS_EDITOR, VISUAL, or EDITOR", Shortcut: "e", Keywords: []string{"edit", "write", "card"}, Available: onTaskCard, Run: tasksAction("edit-card", false)})
 	m.commands.Register(commands.Command{ID: "tasks-delete-card", Module: commands.ModuleTasks, Title: "Delete selected task card", Description: "Delete the highlighted task card after confirmation", Shortcut: "x", Keywords: []string{"delete", "remove", "card"}, Available: onTaskCard, Run: tasksAction("delete-card", false)})
+	m.commands.Register(commands.Command{ID: "tasks-move-card-next", Module: commands.ModuleTasks, Title: "Move card to next column", Description: "Move the selected card one column to the right", Shortcut: ">", Keywords: []string{"move", "next", "column", "kanban"}, Available: onTaskCard, Run: tasksAction("move-card-next", false)})
+	m.commands.Register(commands.Command{ID: "tasks-move-card-prev", Module: commands.ModuleTasks, Title: "Move card to previous column", Description: "Move the selected card one column to the left", Shortcut: "<", Keywords: []string{"move", "previous", "column", "kanban"}, Available: onTaskCard, Run: tasksAction("move-card-prev", false)})
+	m.commands.Register(commands.Command{ID: "tasks-move-card-to", Module: commands.ModuleTasks, Title: "Move card to column…", Description: "Pick a column to move the selected card to", Shortcut: "m", Keywords: []string{"move", "column", "kanban", "todo", "doing", "done"}, Available: onTaskCard, Run: tasksAction("move-card-to", false)})
 	m.commands.Register(commands.Command{ID: "tasks-search", Module: commands.ModuleTasks, Title: "Search Tasks", Description: "Filter cached task projects and cards", Shortcut: "/", Keywords: []string{"search", "filter"}, Available: onTasks, Run: tasksAction("search", false)})
 
 	// Contacts — module-level

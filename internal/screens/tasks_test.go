@@ -1,6 +1,7 @@
 package screens
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +40,85 @@ func TestTasksScreenShowsUnlinkedCards(t *testing.T) {
 	view := screen.View(80, 20)
 	if !strings.Contains(view, "Unlinked") || !strings.Contains(view, "Unplanned") {
 		t.Fatalf("view = %q", view)
+	}
+}
+
+func TestTasksScreenMoveCardNextInvokesMoveCard(t *testing.T) {
+	store := testTasksStore(t)
+	syncedAt := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	if err := store.StoreBoard(4, tasks.Board{TaskFile: tasks.TaskFile{ID: 5, Title: "Board", Filename: "board.md", UpdatedAt: syncedAt}, Body: "# Website\n\n## Todo\n- [[cards/Homepage.md]]\n\n## Doing\n\n## Done\n"}, syncedAt); err != nil {
+		t.Fatal(err)
+	}
+	var calledFilename, calledColumn string
+	move := func(_ context.Context, _ int64, filename, column string) error {
+		calledFilename = filename
+		calledColumn = column
+		return nil
+	}
+	screen := NewTasks(store, nil).WithActions(nil, nil, nil, nil, move)
+	updated, _ := screen.Update(screen.load(4))
+	screen = updated.(Tasks)
+	screen.index = 1
+	updated2, cmd := screen.Update(TasksActionMsg{Action: "move-card-next"})
+	screen = updated2.(Tasks)
+	if cmd == nil {
+		t.Fatalf("expected a command, got nil; status=%q", screen.status)
+	}
+	cmd()
+	if calledFilename != "Homepage.md" || calledColumn != "Doing" {
+		t.Fatalf("move called with filename=%q column=%q", calledFilename, calledColumn)
+	}
+}
+
+func TestTasksScreenMoveCardToPicker(t *testing.T) {
+	store := testTasksStore(t)
+	syncedAt := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	if err := store.StoreBoard(4, tasks.Board{TaskFile: tasks.TaskFile{ID: 5, Title: "Board", Filename: "board.md", UpdatedAt: syncedAt}, Body: "# Website\n\n## Todo\n- [[cards/Homepage.md]]\n\n## Doing\n\n## Done\n"}, syncedAt); err != nil {
+		t.Fatal(err)
+	}
+	var calledColumn string
+	move := func(_ context.Context, _ int64, _, column string) error {
+		calledColumn = column
+		return nil
+	}
+	screen := NewTasks(store, nil).WithActions(nil, nil, nil, nil, move)
+	updated, _ := screen.Update(screen.load(4))
+	screen = updated.(Tasks)
+	screen.index = 1
+	updated, _ = screen.Update(TasksActionMsg{Action: "move-card-to"})
+	screen = updated.(Tasks)
+	if !screen.picking {
+		t.Fatalf("expected picker open")
+	}
+	if !strings.Contains(screen.View(80, 20), "Move to column") {
+		t.Fatalf("picker prompt missing from view")
+	}
+	for _, ch := range "doi" {
+		updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Code: rune(ch), Text: string(ch)}))
+		screen = updated.(Tasks)
+	}
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	screen = updated.(Tasks)
+	if cmd == nil {
+		t.Fatalf("enter did not trigger move command; status=%q", screen.status)
+	}
+	cmd()
+	if calledColumn != "Doing" {
+		t.Fatalf("expected 'Doing', got %q", calledColumn)
+	}
+}
+
+func TestTasksScreenHeaderShowsProjectAndHints(t *testing.T) {
+	store := testTasksStore(t)
+	screen := NewTasks(store, nil)
+	updated, _ := screen.Update(screen.load(4))
+	screen = updated.(Tasks)
+	view := screen.View(80, 20)
+	if !strings.Contains(view, "Website") {
+		t.Fatalf("expected project name 'Website' in header, got %q", view)
+	}
+	if !strings.Contains(view, "esc/p") {
+		t.Fatalf("expected back hint, got %q", view)
 	}
 }
 

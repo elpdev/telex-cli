@@ -234,6 +234,7 @@ func newTasksCardCommand(rt *runtime) *cobra.Command {
 	}})
 	cmd.AddCommand(newTasksCardCreateCommand(rt))
 	cmd.AddCommand(newTasksCardEditCommand(rt))
+	cmd.AddCommand(newTasksCardMoveCommand(rt))
 	cmd.AddCommand(&cobra.Command{Use: "delete <project-id> <card-id>", Short: "Delete a remote task card and local cache", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
 		projectID, id, err := parseTwoIDs(args)
 		if err != nil {
@@ -336,6 +337,35 @@ func newTasksCardEditCommand(rt *runtime) *cobra.Command {
 	cmd.Flags().StringVar(&title, "title", "", "card title")
 	cmd.Flags().StringVar(&body, "body", "", "Markdown body")
 	cmd.Flags().StringVar(&filePath, "file", "", "read Markdown body from file")
+	return cmd
+}
+
+func newTasksCardMoveCommand(rt *runtime) *cobra.Command {
+	var column string
+	cmd := &cobra.Command{Use: "move <project-id> <card-id>", Short: "Move a task card to a column", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		projectID, id, err := parseTwoIDs(args)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(column) == "" {
+			return fmt.Errorf("--column is required")
+		}
+		store := taskstore.New(rt.dataPath)
+		service, err := tasksService(rt)
+		if err != nil {
+			return err
+		}
+		card, err := taskCardForEdit(rt, projectID, id)
+		if err != nil {
+			return err
+		}
+		if err := moveTaskCardToColumn(rt.context(), store, service, projectID, card.Filename, column); err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Moved card %d to %s.\n", id, column)
+		return nil
+	}}
+	cmd.Flags().StringVar(&column, "column", "", "target column name (e.g. Todo, Doing, Done)")
 	return cmd
 }
 
@@ -459,6 +489,25 @@ func addTaskCardToTodo(ctx context.Context, store taskstore.Store, service *task
 		return err
 	}
 	updatedBody := tasks.AddCardToColumn(board.Body, "Todo", "cards/"+card.Filename)
+	if updatedBody == board.Body {
+		return store.StoreBoard(projectID, *board, time.Now())
+	}
+	updated, err := service.UpdateBoard(ctx, projectID, tasks.BoardInput{Body: updatedBody})
+	if err != nil {
+		return err
+	}
+	return store.StoreBoard(projectID, *updated, time.Now())
+}
+
+func moveTaskCardToColumn(ctx context.Context, store taskstore.Store, service *tasks.Service, projectID int64, cardFilename, targetColumn string) error {
+	if cardFilename == "" || targetColumn == "" {
+		return fmt.Errorf("card filename and target column are required")
+	}
+	board, err := service.ShowBoard(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	updatedBody := tasks.MoveCardToColumn(board.Body, "cards/"+cardFilename, targetColumn)
 	if updatedBody == board.Body {
 		return store.StoreBoard(projectID, *board, time.Now())
 	}
