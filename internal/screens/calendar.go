@@ -376,10 +376,7 @@ func (c Calendar) View(width, height int) string {
 		return style.Render(b.String())
 	}
 	for i, item := range c.items {
-		cursor := "  "
-		if i == c.index {
-			cursor = "> "
-		}
+		cursor := listCursor(i == c.index)
 		b.WriteString(fmt.Sprintf("%s%s  %s  %s  %s\n", cursor, item.StartsAt.Format("Jan 02 15:04"), c.agendaCalendarMarker(item.CalendarID), item.Title, item.Status))
 	}
 	return style.Render(b.String())
@@ -1345,32 +1342,10 @@ func newCalendarList(calendars []calendarstore.CalendarMeta, selected, width, he
 	for _, cal := range calendars {
 		items = append(items, calendarListItem{meta: cal})
 	}
-	m := list.New(items, calendarListDelegate{}, width, height)
-	m.SetShowTitle(false)
-	m.SetShowFilter(false)
-	m.SetFilteringEnabled(false)
-	m.SetShowStatusBar(false)
-	m.SetShowHelp(false)
-	m.DisableQuitKeybindings()
-	if len(items) > 0 {
-		if selected < 0 {
-			selected = 0
-		}
-		if selected >= len(items) {
-			selected = len(items) - 1
-		}
-		m.Select(selected)
-	}
-	return m
+	return newSimpleList(items, calendarListDelegate{}, selected, width, height)
 }
 
-type calendarListDelegate struct{}
-
-func (d calendarListDelegate) Height() int  { return 1 }
-func (d calendarListDelegate) Spacing() int { return 0 }
-func (d calendarListDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
-	return nil
-}
+type calendarListDelegate struct{ simpleDelegate }
 
 func (d calendarListDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	calendarItem, ok := item.(calendarListItem)
@@ -1378,10 +1353,7 @@ func (d calendarListDelegate) Render(w io.Writer, m list.Model, index int, item 
 		return
 	}
 	cal := calendarItem.meta
-	cursor := "  "
-	if index == m.Index() {
-		cursor = "> "
-	}
+	cursor := listCursor(index == m.Index())
 	line := fmt.Sprintf("%s%s  %s  %s  pos:%d  %s", cursor, cal.Name, cal.Color, cal.TimeZone, cal.Position, cal.Source)
 	_, _ = io.WriteString(w, padRight(line, m.Width()))
 }

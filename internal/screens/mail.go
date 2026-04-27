@@ -2606,10 +2606,7 @@ func (m Mail) composeFromView(width, height int) string {
 	}
 	end := min(len(m.mailboxes), start+limit)
 	for i := start; i < end; i++ {
-		cursor := "  "
-		if i == m.composeFromIndex {
-			cursor = "> "
-		}
+		cursor := listCursor(i == m.composeFromIndex)
 		b.WriteString(cursor)
 		b.WriteString(truncate(m.mailboxes[i].Address, max(8, width-2)))
 		b.WriteByte('\n')
@@ -2754,10 +2751,7 @@ func (m Mail) attachmentsView(width, height int) string {
 	end := min(len(attachments), start+limit)
 	for i := start; i < end; i++ {
 		attachment := attachments[i]
-		cursor := "  "
-		if i == m.attachmentIndex {
-			cursor = "> "
-		}
+		cursor := listCursor(i == m.attachmentIndex)
 		line := fmt.Sprintf("%s%d. %s %s %s", cursor, i+1, attachment.Filename, attachment.ContentType, formatBytes(attachment.ByteSize))
 		b.WriteString(truncate(line, width))
 		b.WriteByte('\n')
@@ -2791,10 +2785,7 @@ func (m Mail) linksView(width, height int) string {
 	end := min(len(m.links), start+limit)
 	for i := start; i < end; i++ {
 		link := m.links[i]
-		cursor := "  "
-		if i == m.linkIndex {
-			cursor = "> "
-		}
+		cursor := listCursor(i == m.linkIndex)
 		line := fmt.Sprintf("%s%s (%s)", cursor, link.Text, link.URL)
 		b.WriteString(truncate(line, width))
 		b.WriteByte('\n')
@@ -2988,10 +2979,7 @@ func mailColumns(width int) mailColumnLayout {
 }
 
 func formatMailRow(message mailstore.CachedMessage, selected bool, layout mailColumnLayout) string {
-	cursor := "  "
-	if selected {
-		cursor = "> "
-	}
+	cursor := listCursor(selected)
 	unread := " "
 	if !message.Meta.Read {
 		unread = "●"
@@ -3017,10 +3005,7 @@ func formatMailRow(message mailstore.CachedMessage, selected bool, layout mailCo
 }
 
 func formatConversationRow(entry ConversationEntry, selected bool, layout mailColumnLayout) string {
-	cursor := "  "
-	if selected {
-		cursor = "> "
-	}
+	cursor := listCursor(selected)
 	kind := conversationKindLabel(entry.Kind)
 	sender := truncate(entry.Sender, layout.sender)
 	subject := truncate(entry.Subject, layout.subject)

@@ -23,15 +23,7 @@ type Service struct {
 func NewService(client Client) *Service { return &Service{client: client} }
 
 func (s *Service) ListContacts(ctx context.Context, params ListContactsParams) ([]Contact, *api.Pagination, error) {
-	body, _, err := s.client.Get(ctx, "/api/v1/contacts", contactsQuery(params))
-	if err != nil {
-		return nil, nil, err
-	}
-	envelope, err := api.DecodeEnvelope[[]Contact](body)
-	if err != nil {
-		return nil, nil, err
-	}
-	return envelope.Data, api.DecodePagination(envelope.Meta), nil
+	return api.List[Contact](s.client, ctx, "/api/v1/contacts", contactsQuery(params))
 }
 
 func (s *Service) ShowContact(ctx context.Context, id int64, includeNote bool) (*Contact, error) {
@@ -104,29 +96,21 @@ func (s *Service) UpdateContactNote(ctx context.Context, id int64, input Contact
 }
 
 func (s *Service) ContactCommunications(ctx context.Context, id int64, params ListParams) ([]ContactCommunication, *api.Pagination, error) {
-	body, _, err := s.client.Get(ctx, fmt.Sprintf("/api/v1/contacts/%d/communications", id), listQuery(params))
-	if err != nil {
-		return nil, nil, err
-	}
-	envelope, err := api.DecodeEnvelope[[]ContactCommunication](body)
-	if err != nil {
-		return nil, nil, err
-	}
-	return envelope.Data, api.DecodePagination(envelope.Meta), nil
+	return api.List[ContactCommunication](s.client, ctx, fmt.Sprintf("/api/v1/contacts/%d/communications", id), listQuery(params))
 }
 
 func contactsQuery(params ListContactsParams) url.Values {
 	query := listQuery(params.ListParams)
-	setString(query, "contact_type", params.ContactType)
-	setString(query, "q", params.Query)
-	setString(query, "sort", params.Sort)
+	api.SetString(query, "contact_type", params.ContactType)
+	api.SetString(query, "q", params.Query)
+	api.SetString(query, "sort", params.Sort)
 	return query
 }
 
 func listQuery(params ListParams) url.Values {
 	query := url.Values{}
-	setInt(query, "page", params.Page)
-	setInt(query, "per_page", params.PerPage)
+	api.SetInt(query, "page", params.Page)
+	api.SetInt(query, "per_page", params.PerPage)
 	return query
 }
 
@@ -152,18 +136,6 @@ func contactNoteInputMap(input ContactNoteInput) map[string]any {
 	setPayloadString(payload, "title", input.Title)
 	payload["body"] = input.Body
 	return payload
-}
-
-func setString(query url.Values, key, value string) {
-	if value != "" {
-		query.Set(key, value)
-	}
-}
-
-func setInt(query url.Values, key string, value int) {
-	if value > 0 {
-		query.Set(key, fmt.Sprintf("%d", value))
-	}
 }
 
 func setPayloadString(payload map[string]any, key, value string) {

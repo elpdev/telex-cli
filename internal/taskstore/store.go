@@ -73,10 +73,7 @@ type CachedCard struct {
 }
 
 func New(root string) Store {
-	if root == "" {
-		root = mailstore.DefaultRoot()
-	}
-	return Store{Root: root}
+	return Store{Root: mailstore.RootOrDefault(root)}
 }
 
 func (s Store) TasksRoot() string { return filepath.Join(s.Root, "tasks") }

@@ -662,32 +662,10 @@ func newDriveList(entries []drivestore.Entry, selected, width, height int) list.
 	for _, entry := range entries {
 		items = append(items, driveListItem{entry: entry})
 	}
-	m := list.New(items, driveListDelegate{}, width, height)
-	m.SetShowTitle(false)
-	m.SetShowFilter(false)
-	m.SetFilteringEnabled(false)
-	m.SetShowStatusBar(false)
-	m.SetShowHelp(false)
-	m.DisableQuitKeybindings()
-	if len(items) > 0 {
-		if selected < 0 {
-			selected = 0
-		}
-		if selected >= len(items) {
-			selected = len(items) - 1
-		}
-		m.Select(selected)
-	}
-	return m
+	return newSimpleList(items, driveListDelegate{}, selected, width, height)
 }
 
-type driveListDelegate struct{}
-
-func (d driveListDelegate) Height() int  { return 1 }
-func (d driveListDelegate) Spacing() int { return 0 }
-func (d driveListDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
-	return nil
-}
+type driveListDelegate struct{ simpleDelegate }
 
 func (d driveListDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	driveItem, ok := item.(driveListItem)
@@ -695,10 +673,7 @@ func (d driveListDelegate) Render(w io.Writer, m list.Model, index int, item lis
 		return
 	}
 	entry := driveItem.entry
-	cursor := "  "
-	if index == m.Index() {
-		cursor = "> "
-	}
+	cursor := listCursor(index == m.Index())
 	kind := "file"
 	status := ""
 	if entry.Kind == "folder" {

@@ -9,15 +9,12 @@ import (
 	"time"
 
 	"github.com/elpdev/telex-cli/internal/tasks"
+	"github.com/elpdev/telex-cli/internal/taskssync"
 	"github.com/elpdev/telex-cli/internal/taskstore"
 	"github.com/spf13/cobra"
 )
 
-type tasksSyncResult struct {
-	Projects int
-	Boards   int
-	Cards    int
-}
+type tasksSyncResult = taskssync.Result
 
 func newTasksCommand(rt *runtime) *cobra.Command {
 	cmd := &cobra.Command{Use: "tasks", Short: "Tasks commands"}
@@ -378,96 +375,11 @@ func tasksService(rt *runtime) (*tasks.Service, error) {
 }
 
 func runTasksSync(ctx context.Context, store taskstore.Store, service *tasks.Service) (tasksSyncResult, error) {
-	syncedAt := time.Now()
-	workspace, err := service.Workspace(ctx)
-	if err != nil {
-		return tasksSyncResult{}, err
-	}
-	if err := store.StoreWorkspace(workspace, syncedAt); err != nil {
-		return tasksSyncResult{}, err
-	}
-	projects, err := listAllTaskProjects(ctx, service)
-	if err != nil {
-		return tasksSyncResult{}, err
-	}
-	result := tasksSyncResult{}
-	for _, summary := range projects {
-		project, err := service.ShowProject(ctx, summary.ID)
-		if err != nil {
-			return result, err
-		}
-		if err := storeTaskProject(store, *project, syncedAt); err != nil {
-			return result, err
-		}
-		result.Projects++
-		board, err := service.ShowBoard(ctx, project.ID)
-		if err != nil {
-			return result, err
-		}
-		if err := store.StoreBoard(project.ID, *board, syncedAt); err != nil {
-			return result, err
-		}
-		result.Boards++
-		cards, err := listAllTaskCards(ctx, service, project.ID)
-		if err != nil {
-			return result, err
-		}
-		for _, card := range cards {
-			if err := store.StoreCard(project.ID, card, syncedAt); err != nil {
-				return result, err
-			}
-			result.Cards++
-		}
-	}
-	return result, nil
-}
-
-func listAllTaskProjects(ctx context.Context, service *tasks.Service) ([]tasks.Project, error) {
-	page := 1
-	all := []tasks.Project{}
-	for {
-		projects, pagination, err := service.ListProjects(ctx, tasks.ListParams{Page: page, PerPage: 100})
-		if err != nil {
-			return all, err
-		}
-		all = append(all, projects...)
-		if pagination == nil || page*pagination.PerPage >= pagination.TotalCount || len(projects) == 0 {
-			return all, nil
-		}
-		page++
-	}
-}
-
-func listAllTaskCards(ctx context.Context, service *tasks.Service, projectID int64) ([]tasks.Card, error) {
-	page := 1
-	all := []tasks.Card{}
-	for {
-		cards, pagination, err := service.ListCards(ctx, projectID, tasks.ListParams{Page: page, PerPage: 100})
-		if err != nil {
-			return all, err
-		}
-		all = append(all, cards...)
-		if pagination == nil || page*pagination.PerPage >= pagination.TotalCount || len(cards) == 0 {
-			return all, nil
-		}
-		page++
-	}
+	return taskssync.Run(ctx, store, service)
 }
 
 func storeTaskProject(store taskstore.Store, project tasks.Project, syncedAt time.Time) error {
-	if err := store.StoreProject(project, syncedAt); err != nil {
-		return err
-	}
-	if project.Board != nil {
-		board := tasks.Board{TaskFile: *project.Board}
-		_ = store.StoreBoard(project.ID, board, syncedAt)
-	}
-	for _, card := range project.Cards {
-		if err := store.StoreCard(project.ID, card, syncedAt); err != nil {
-			return err
-		}
-	}
-	return nil
+	return taskssync.StoreProject(store, project, syncedAt)
 }
 
 func taskCardForEdit(rt *runtime, projectID, id int64) (*tasks.Card, error) {

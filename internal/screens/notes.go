@@ -312,10 +312,7 @@ func (n Notes) renderNotesPreview(rows []noteRow, width int) string {
 }
 
 func formatNotesRow(row noteRow, selected bool, width int) string {
-	cursor := "  "
-	if selected {
-		cursor = "> "
-	}
+	cursor := listCursor(selected)
 	glyph := "  "
 	trailing := ""
 	if row.Kind == "folder" {
@@ -546,7 +543,7 @@ func (n Notes) createCmd() tea.Cmd {
 	}
 	folderID := n.currentFolderID()
 	return func() tea.Msg {
-		input, err := editNoteTemplate("Untitled", "")
+		input, err := editNoteTemplate(defaultTitle, "")
 		if err != nil {
 			return noteActionFinishedMsg{err: err}
 		}
@@ -776,32 +773,10 @@ func newNotesList(rows []noteRow, selected, width, height int) list.Model {
 	for _, row := range rows {
 		items = append(items, noteListItem{row: row})
 	}
-	m := list.New(items, noteListDelegate{}, width, height)
-	m.SetShowTitle(false)
-	m.SetShowFilter(false)
-	m.SetFilteringEnabled(false)
-	m.SetShowStatusBar(false)
-	m.SetShowHelp(false)
-	m.DisableQuitKeybindings()
-	if len(items) > 0 {
-		if selected < 0 {
-			selected = 0
-		}
-		if selected >= len(items) {
-			selected = len(items) - 1
-		}
-		m.Select(selected)
-	}
-	return m
+	return newSimpleList(items, noteListDelegate{}, selected, width, height)
 }
 
-type noteListDelegate struct{}
-
-func (d noteListDelegate) Height() int  { return 1 }
-func (d noteListDelegate) Spacing() int { return 0 }
-func (d noteListDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
-	return nil
-}
+type noteListDelegate struct{ simpleDelegate }
 
 func (d noteListDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	noteItem, ok := item.(noteListItem)
@@ -1007,7 +982,7 @@ func notesEditorCommand() string {
 
 func parseNoteTemplate(content string) notes.NoteInput {
 	lines := strings.Split(content, "\n")
-	title := "Untitled"
+	title := defaultTitle
 	start := 0
 	if len(lines) > 0 && strings.HasPrefix(strings.ToLower(lines[0]), "title:") {
 		if parsed := strings.TrimSpace(lines[0][len("Title:"):]); parsed != "" {

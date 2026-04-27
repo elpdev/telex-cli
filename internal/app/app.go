@@ -14,9 +14,11 @@ import (
 
 	helpbubble "charm.land/bubbles/v2/help"
 	tea "charm.land/bubbletea/v2"
+	"github.com/elpdev/hackernews/pkg/hn"
 	"github.com/elpdev/telex-cli/internal/api"
 	"github.com/elpdev/telex-cli/internal/calendar"
 	"github.com/elpdev/telex-cli/internal/calendarstore"
+	"github.com/elpdev/telex-cli/internal/calendarsync"
 	"github.com/elpdev/telex-cli/internal/commands"
 	"github.com/elpdev/telex-cli/internal/config"
 	"github.com/elpdev/telex-cli/internal/contacts"
@@ -30,9 +32,11 @@ import (
 	"github.com/elpdev/telex-cli/internal/mailstore"
 	"github.com/elpdev/telex-cli/internal/mailsync"
 	"github.com/elpdev/telex-cli/internal/notes"
+	"github.com/elpdev/telex-cli/internal/notessync"
 	"github.com/elpdev/telex-cli/internal/notestore"
 	"github.com/elpdev/telex-cli/internal/screens"
 	"github.com/elpdev/telex-cli/internal/tasks"
+	"github.com/elpdev/telex-cli/internal/taskssync"
 	"github.com/elpdev/telex-cli/internal/taskstore"
 	"github.com/elpdev/telex-cli/internal/theme"
 )
@@ -210,11 +214,18 @@ func (m *Model) buildHome() screens.Home {
 	navigate := func(id string) tea.Cmd {
 		return func() tea.Msg { return routeMsg{ScreenID: id} }
 	}
+	hnClient := hn.NewClient(nil)
+	newsFetcher := func(ctx context.Context, limit int) ([]hn.Item, error) {
+		return hnClient.TopStories(ctx, limit)
+	}
 	return screens.NewHome(
 		mailstore.New(m.dataPath),
 		calendarstore.New(m.dataPath),
 		notestore.New(m.dataPath),
 		drivestore.New(m.dataPath),
+		taskstore.New(m.dataPath),
+		contactstore.New(m.dataPath),
+		newsFetcher,
 		m.theme,
 		navigate,
 	)
@@ -1263,180 +1274,28 @@ func (m *Model) deleteCalendarEvent(ctx context.Context, id int64) error {
 	return calendarstore.New(m.dataPath).DeleteEvent(id)
 }
 
-type calendarSyncResult struct {
-	Calendars   int
-	Events      int
-	Occurrences int
-}
+type calendarSyncResult = calendarsync.Result
 
-type calendarSyncOptions struct {
-	From       string
-	To         string
-	CalendarID int64
-}
+type calendarSyncOptions = calendarsync.Options
 
 func runCalendarSync(ctx context.Context, store calendarstore.Store, service *calendar.Service, opts calendarSyncOptions) (calendarSyncResult, error) {
-	syncedAt := time.Now()
-	calendars, _, err := service.ListCalendars(ctx, calendar.ListParams{Page: 1, PerPage: 100})
-	if err != nil {
-		return calendarSyncResult{}, err
-	}
-	var result calendarSyncResult
-	for _, item := range calendars {
-		if opts.CalendarID > 0 && item.ID != opts.CalendarID {
-			continue
-		}
-		if err := store.StoreCalendar(item, syncedAt); err != nil {
-			return calendarSyncResult{}, err
-		}
-		result.Calendars++
-		page := 1
-		for {
-			events, pagination, err := service.ListEvents(ctx, calendar.EventListParams{ListParams: calendar.ListParams{Page: page, PerPage: 100}, CalendarID: item.ID, Sort: "starts_at"})
-			if err != nil {
-				return calendarSyncResult{}, err
-			}
-			for _, event := range events {
-				messages, err := service.EventMessages(ctx, event.ID)
-				if err != nil {
-					return calendarSyncResult{}, err
-				}
-				event.Messages = messages
-				if err := store.StoreEvent(event, syncedAt); err != nil {
-					return calendarSyncResult{}, err
-				}
-				result.Events++
-			}
-			if pagination == nil || page*pagination.PerPage >= pagination.TotalCount {
-				break
-			}
-			page++
-		}
-	}
-	from, to := calendarDefaultRange(opts.From, opts.To)
-	occurrences, err := service.ListOccurrences(ctx, calendar.OccurrenceListParams{CalendarID: opts.CalendarID, StartsFrom: from, EndsTo: to})
-	if err != nil {
-		return calendarSyncResult{}, err
-	}
-	if err := store.StoreOccurrences(occurrences, syncedAt); err != nil {
-		return calendarSyncResult{}, err
-	}
-	result.Occurrences = len(occurrences)
-	return result, nil
+	return calendarsync.Run(ctx, store, service, opts)
 }
 
 func calendarDefaultRange(from, to string) (string, string) {
-	now := time.Now()
-	if from == "" {
-		from = now.Format("2006-01-02")
-	}
-	if to == "" {
-		to = now.AddDate(0, 0, 30).Format("2006-01-02")
-	}
-	return from, to
+	return calendarsync.DefaultRange(from, to)
 }
 
-type notesSyncResult struct {
-	Folders int
-	Notes   int
-}
+type notesSyncResult = notessync.Result
 
-type tasksSyncResult struct {
-	Projects int
-	Boards   int
-	Cards    int
-}
+type tasksSyncResult = taskssync.Result
 
 func runTasksSync(ctx context.Context, store taskstore.Store, service *tasks.Service) (tasksSyncResult, error) {
-	syncedAt := time.Now()
-	workspace, err := service.Workspace(ctx)
-	if err != nil {
-		return tasksSyncResult{}, err
-	}
-	if err := store.StoreWorkspace(workspace, syncedAt); err != nil {
-		return tasksSyncResult{}, err
-	}
-	projects, err := listAllTaskProjects(ctx, service)
-	if err != nil {
-		return tasksSyncResult{}, err
-	}
-	result := tasksSyncResult{}
-	for _, summary := range projects {
-		project, err := service.ShowProject(ctx, summary.ID)
-		if err != nil {
-			return result, err
-		}
-		if err := storeTaskProject(store, *project, syncedAt); err != nil {
-			return result, err
-		}
-		result.Projects++
-		board, err := service.ShowBoard(ctx, project.ID)
-		if err != nil {
-			return result, err
-		}
-		if err := store.StoreBoard(project.ID, *board, syncedAt); err != nil {
-			return result, err
-		}
-		result.Boards++
-		cards, err := listAllTaskCards(ctx, service, project.ID)
-		if err != nil {
-			return result, err
-		}
-		for _, card := range cards {
-			if err := store.StoreCard(project.ID, card, syncedAt); err != nil {
-				return result, err
-			}
-			result.Cards++
-		}
-	}
-	return result, nil
-}
-
-func listAllTaskProjects(ctx context.Context, service *tasks.Service) ([]tasks.Project, error) {
-	page := 1
-	all := []tasks.Project{}
-	for {
-		projects, pagination, err := service.ListProjects(ctx, tasks.ListParams{Page: page, PerPage: 100})
-		if err != nil {
-			return all, err
-		}
-		all = append(all, projects...)
-		if pagination == nil || page*pagination.PerPage >= pagination.TotalCount || len(projects) == 0 {
-			return all, nil
-		}
-		page++
-	}
-}
-
-func listAllTaskCards(ctx context.Context, service *tasks.Service, projectID int64) ([]tasks.Card, error) {
-	page := 1
-	all := []tasks.Card{}
-	for {
-		cards, pagination, err := service.ListCards(ctx, projectID, tasks.ListParams{Page: page, PerPage: 100})
-		if err != nil {
-			return all, err
-		}
-		all = append(all, cards...)
-		if pagination == nil || page*pagination.PerPage >= pagination.TotalCount || len(cards) == 0 {
-			return all, nil
-		}
-		page++
-	}
+	return taskssync.Run(ctx, store, service)
 }
 
 func storeTaskProject(store taskstore.Store, project tasks.Project, syncedAt time.Time) error {
-	if err := store.StoreProject(project, syncedAt); err != nil {
-		return err
-	}
-	if project.Board != nil {
-		_ = store.StoreBoard(project.ID, tasks.Board{TaskFile: *project.Board}, syncedAt)
-	}
-	for _, card := range project.Cards {
-		if err := store.StoreCard(project.ID, card, syncedAt); err != nil {
-			return err
-		}
-	}
-	return nil
+	return taskssync.StoreProject(store, project, syncedAt)
 }
 
 func addTaskCardToTodo(ctx context.Context, store taskstore.Store, service *tasks.Service, projectID int64, card tasks.Card) error {
@@ -1494,46 +1353,7 @@ func moveTaskCardToColumn(ctx context.Context, store taskstore.Store, service *t
 }
 
 func runNotesSync(ctx context.Context, store notestore.Store, service *notes.Service) (notesSyncResult, error) {
-	tree, err := service.NotesTree(ctx)
-	if err != nil {
-		return notesSyncResult{}, err
-	}
-	syncedAt := time.Now()
-	if err := store.StoreTree(tree, syncedAt); err != nil {
-		return notesSyncResult{}, err
-	}
-	var result notesSyncResult
-	if err := syncNotesFolder(ctx, store, service, *tree, syncedAt, &result); err != nil {
-		return notesSyncResult{}, err
-	}
-	return result, nil
-}
-
-func syncNotesFolder(ctx context.Context, store notestore.Store, service *notes.Service, folder notes.FolderTree, syncedAt time.Time, result *notesSyncResult) error {
-	result.Folders++
-	page := 1
-	for {
-		cached, pagination, err := service.ListNotes(ctx, notes.ListNotesParams{ListParams: notes.ListParams{Page: page, PerPage: 100}, FolderID: &folder.ID, Sort: "filename"})
-		if err != nil {
-			return err
-		}
-		for _, note := range cached {
-			if err := store.StoreNote(note, syncedAt); err != nil {
-				return err
-			}
-			result.Notes++
-		}
-		if pagination == nil || page*pagination.PerPage >= pagination.TotalCount {
-			break
-		}
-		page++
-	}
-	for _, child := range folder.Children {
-		if err := syncNotesFolder(ctx, store, service, child, syncedAt, result); err != nil {
-			return err
-		}
-	}
-	return nil
+	return notessync.Run(ctx, store, service)
 }
 
 func cachedRemoteMessage(message mail.Message) mailstore.CachedMessage {

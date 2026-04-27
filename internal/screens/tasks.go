@@ -625,7 +625,7 @@ func (t Tasks) createProjectCmd() tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		input, err := editTaskProjectTemplate("Untitled")
+		input, err := editTaskProjectTemplate(defaultTitle)
 		if err != nil {
 			return taskActionFinishedMsg{err: err}
 		}
@@ -649,7 +649,7 @@ func (t Tasks) createCardCmd() tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		input, err := editTaskCardTemplate("Untitled", "")
+		input, err := editTaskCardTemplate(defaultTitle, "")
 		if err != nil {
 			return taskActionFinishedMsg{err: err}
 		}
@@ -887,30 +887,11 @@ func newTaskList(rows []taskRow, selected, width, height int) list.Model {
 	for _, row := range rows {
 		items = append(items, taskListItem{row: row})
 	}
-	m := list.New(items, taskListDelegate{}, width, height)
-	m.SetShowTitle(false)
-	m.SetShowFilter(false)
-	m.SetFilteringEnabled(false)
-	m.SetShowStatusBar(false)
-	m.SetShowHelp(false)
-	m.DisableQuitKeybindings()
-	if len(items) > 0 {
-		if selected < 0 {
-			selected = 0
-		}
-		if selected >= len(items) {
-			selected = len(items) - 1
-		}
-		m.Select(selected)
-	}
-	return m
+	return newSimpleList(items, taskListDelegate{}, selected, width, height)
 }
 
-type taskListDelegate struct{}
+type taskListDelegate struct{ simpleDelegate }
 
-func (d taskListDelegate) Height() int                         { return 1 }
-func (d taskListDelegate) Spacing() int                        { return 0 }
-func (d taskListDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
 func (d taskListDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	taskItem, ok := item.(taskListItem)
 	if !ok {
@@ -920,10 +901,7 @@ func (d taskListDelegate) Render(w io.Writer, m list.Model, index int, item list
 }
 
 func formatTaskRow(row taskRow, selected bool, width int) string {
-	cursor := "  "
-	if selected {
-		cursor = "> "
-	}
+	cursor := listCursor(selected)
 	glyph := "  "
 	switch row.Kind {
 	case "project":
@@ -1046,7 +1024,7 @@ func editTaskProjectTemplate(name string) (tasks.ProjectInput, error) {
 			}
 		}
 	}
-	return tasks.ProjectInput{Name: "Untitled"}, nil
+	return tasks.ProjectInput{Name: defaultTitle}, nil
 }
 
 func editTaskCardTemplate(title, body string) (tasks.CardInput, error) {
@@ -1067,7 +1045,7 @@ func editTaskCardTemplate(title, body string) (tasks.CardInput, error) {
 
 func parseTaskCardTemplate(content string) tasks.CardInput {
 	lines := strings.Split(content, "\n")
-	title := "Untitled"
+	title := defaultTitle
 	start := 0
 	if len(lines) > 0 && strings.HasPrefix(strings.ToLower(lines[0]), "title:") {
 		if parsed := strings.TrimSpace(lines[0][len("Title:"):]); parsed != "" {

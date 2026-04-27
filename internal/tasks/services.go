@@ -34,15 +34,7 @@ func (s *Service) Workspace(ctx context.Context) (*Workspace, error) {
 }
 
 func (s *Service) ListProjects(ctx context.Context, params ListParams) ([]Project, *api.Pagination, error) {
-	body, _, err := s.client.Get(ctx, "/api/v1/tasks/projects", listQuery(params))
-	if err != nil {
-		return nil, nil, err
-	}
-	envelope, err := api.DecodeEnvelope[[]Project](body)
-	if err != nil {
-		return nil, nil, err
-	}
-	return envelope.Data, api.DecodePagination(envelope.Meta), nil
+	return api.List[Project](s.client, ctx, "/api/v1/tasks/projects", listQuery(params))
 }
 
 func (s *Service) ShowProject(ctx context.Context, id int64) (*Project, error) {
@@ -111,15 +103,7 @@ func (s *Service) UpdateBoard(ctx context.Context, projectID int64, input BoardI
 }
 
 func (s *Service) ListCards(ctx context.Context, projectID int64, params ListParams) ([]Card, *api.Pagination, error) {
-	body, _, err := s.client.Get(ctx, fmt.Sprintf("/api/v1/tasks/projects/%d/cards", projectID), listQuery(params))
-	if err != nil {
-		return nil, nil, err
-	}
-	envelope, err := api.DecodeEnvelope[[]Card](body)
-	if err != nil {
-		return nil, nil, err
-	}
-	return envelope.Data, api.DecodePagination(envelope.Meta), nil
+	return api.List[Card](s.client, ctx, fmt.Sprintf("/api/v1/tasks/projects/%d/cards", projectID), listQuery(params))
 }
 
 func (s *Service) ShowCard(ctx context.Context, projectID, id int64) (*Card, error) {
@@ -165,12 +149,8 @@ func (s *Service) DeleteCard(ctx context.Context, projectID, id int64) error {
 
 func listQuery(params ListParams) url.Values {
 	query := url.Values{}
-	if params.Page > 0 {
-		query.Set("page", fmt.Sprintf("%d", params.Page))
-	}
-	if params.PerPage > 0 {
-		query.Set("per_page", fmt.Sprintf("%d", params.PerPage))
-	}
+	api.SetInt(query, "page", params.Page)
+	api.SetInt(query, "per_page", params.PerPage)
 	return query
 }
 

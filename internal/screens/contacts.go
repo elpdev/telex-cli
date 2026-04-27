@@ -400,7 +400,7 @@ func (c Contacts) editNoteCmd(id int64) tea.Cmd {
 	if c.detail != nil {
 		selected = c.detail
 	}
-	title := "Untitled"
+	title := defaultTitle
 	body := ""
 	if selected != nil {
 		title = selected.Meta.DisplayName
@@ -517,32 +517,10 @@ func newContactsList(contacts []contactstore.CachedContact, selected, width, hei
 	for _, contact := range contacts {
 		items = append(items, contactListItem{contact: contact})
 	}
-	m := list.New(items, contactListDelegate{}, width, height)
-	m.SetShowTitle(false)
-	m.SetShowFilter(false)
-	m.SetFilteringEnabled(false)
-	m.SetShowStatusBar(false)
-	m.SetShowHelp(false)
-	m.DisableQuitKeybindings()
-	if len(items) > 0 {
-		if selected < 0 {
-			selected = 0
-		}
-		if selected >= len(items) {
-			selected = len(items) - 1
-		}
-		m.Select(selected)
-	}
-	return m
+	return newSimpleList(items, contactListDelegate{}, selected, width, height)
 }
 
-type contactListDelegate struct{}
-
-func (d contactListDelegate) Height() int  { return 1 }
-func (d contactListDelegate) Spacing() int { return 0 }
-func (d contactListDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
-	return nil
-}
+type contactListDelegate struct{ simpleDelegate }
 
 func (d contactListDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	contactItem, ok := item.(contactListItem)
@@ -553,10 +531,7 @@ func (d contactListDelegate) Render(w io.Writer, m list.Model, index int, item l
 }
 
 func formatContactRow(contact contactstore.CachedContact, selected bool, width int) string {
-	cursor := "  "
-	if selected {
-		cursor = "> "
-	}
+	cursor := listCursor(selected)
 	name := contact.Meta.DisplayName
 	if name == "" {
 		name = "Unnamed contact"
@@ -669,7 +644,7 @@ func contactsEditorCommand() string {
 
 func parseContactNoteTemplate(content string) contacts.ContactNoteInput {
 	lines := strings.Split(content, "\n")
-	title := "Untitled"
+	title := defaultTitle
 	start := 0
 	if len(lines) > 0 && strings.HasPrefix(strings.ToLower(lines[0]), "title:") {
 		if parsed := strings.TrimSpace(lines[0][len("Title:"):]); parsed != "" {

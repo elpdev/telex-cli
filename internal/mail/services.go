@@ -24,15 +24,7 @@ type Service struct {
 func NewService(client Client) *Service { return &Service{client: client} }
 
 func (s *Service) ListDomains(ctx context.Context, params DomainListParams) ([]Domain, *api.Pagination, error) {
-	body, _, err := s.client.Get(ctx, "/api/v1/domains", domainQuery(params))
-	if err != nil {
-		return nil, nil, err
-	}
-	envelope, err := api.DecodeEnvelope[[]Domain](body)
-	if err != nil {
-		return nil, nil, err
-	}
-	return envelope.Data, api.DecodePagination(envelope.Meta), nil
+	return api.List[Domain](s.client, ctx, "/api/v1/domains", domainQuery(params))
 }
 
 func (s *Service) ShowDomain(ctx context.Context, id int64) (*Domain, error) {
@@ -105,15 +97,7 @@ func (s *Service) ValidateDomainOutbound(ctx context.Context, id int64, input *D
 }
 
 func (s *Service) ListInboxes(ctx context.Context, params InboxListParams) ([]Inbox, *api.Pagination, error) {
-	body, _, err := s.client.Get(ctx, "/api/v1/inboxes", inboxQuery(params))
-	if err != nil {
-		return nil, nil, err
-	}
-	envelope, err := api.DecodeEnvelope[[]Inbox](body)
-	if err != nil {
-		return nil, nil, err
-	}
-	return envelope.Data, api.DecodePagination(envelope.Meta), nil
+	return api.List[Inbox](s.client, ctx, "/api/v1/inboxes", inboxQuery(params))
 }
 
 func (s *Service) ShowInbox(ctx context.Context, id int64) (*Inbox, error) {
@@ -206,15 +190,7 @@ func (s *Service) Labels(ctx context.Context) ([]Label, error) {
 }
 
 func (s *Service) ListMessages(ctx context.Context, params MessageListParams) ([]Message, *api.Pagination, error) {
-	body, _, err := s.client.Get(ctx, "/api/v1/messages", messageQuery(params))
-	if err != nil {
-		return nil, nil, err
-	}
-	envelope, err := api.DecodeEnvelope[[]Message](body)
-	if err != nil {
-		return nil, nil, err
-	}
-	return envelope.Data, api.DecodePagination(envelope.Meta), nil
+	return api.List[Message](s.client, ctx, "/api/v1/messages", messageQuery(params))
 }
 
 func (s *Service) ShowMessage(ctx context.Context, id int64) (*Message, error) {
@@ -338,15 +314,7 @@ func (s *Service) Forward(ctx context.Context, id int64, targetAddresses []strin
 }
 
 func (s *Service) ListOutboundMessages(ctx context.Context, params OutboundMessageListParams) ([]OutboundMessage, *api.Pagination, error) {
-	body, _, err := s.client.Get(ctx, "/api/v1/outbound_messages", outboundMessageQuery(params))
-	if err != nil {
-		return nil, nil, err
-	}
-	envelope, err := api.DecodeEnvelope[[]OutboundMessage](body)
-	if err != nil {
-		return nil, nil, err
-	}
-	return envelope.Data, api.DecodePagination(envelope.Meta), nil
+	return api.List[OutboundMessage](s.client, ctx, "/api/v1/outbound_messages", outboundMessageQuery(params))
 }
 
 func (s *Service) CreateOutboundMessage(ctx context.Context, input *OutboundMessageInput, queue bool) (*OutboundMessage, error) {
@@ -453,76 +421,54 @@ func (s *Service) outboundAction(ctx context.Context, id int64, action string, p
 
 func messageQuery(params MessageListParams) url.Values {
 	query := url.Values{}
-	setInt(query, "page", params.Page)
-	setInt(query, "per_page", params.PerPage)
-	setInt64(query, "inbox_id", params.InboxID)
-	setInt64(query, "conversation_id", params.ConversationID)
-	setString(query, "mailbox", params.Mailbox)
-	setInt64(query, "label_id", params.LabelID)
-	setString(query, "q", params.Query)
-	setString(query, "sender", params.Sender)
-	setString(query, "recipient", params.Recipient)
-	setString(query, "status", params.Status)
-	setString(query, "subaddress", params.Subaddress)
-	setString(query, "received_from", params.ReceivedFrom)
-	setString(query, "received_to", params.ReceivedTo)
-	setString(query, "sort", params.Sort)
+	api.SetInt(query, "page", params.Page)
+	api.SetInt(query, "per_page", params.PerPage)
+	api.SetInt64(query, "inbox_id", params.InboxID)
+	api.SetInt64(query, "conversation_id", params.ConversationID)
+	api.SetString(query, "mailbox", params.Mailbox)
+	api.SetInt64(query, "label_id", params.LabelID)
+	api.SetString(query, "q", params.Query)
+	api.SetString(query, "sender", params.Sender)
+	api.SetString(query, "recipient", params.Recipient)
+	api.SetString(query, "status", params.Status)
+	api.SetString(query, "subaddress", params.Subaddress)
+	api.SetString(query, "received_from", params.ReceivedFrom)
+	api.SetString(query, "received_to", params.ReceivedTo)
+	api.SetString(query, "sort", params.Sort)
 	return query
 }
 
 func outboundMessageQuery(params OutboundMessageListParams) url.Values {
 	query := url.Values{}
-	setInt(query, "page", params.Page)
-	setInt(query, "per_page", params.PerPage)
-	setInt64(query, "domain_id", params.DomainID)
-	setInt64(query, "conversation_id", params.ConversationID)
-	setInt64(query, "source_message_id", params.SourceMessageID)
-	setString(query, "status", params.Status)
-	setString(query, "sort", params.Sort)
+	api.SetInt(query, "page", params.Page)
+	api.SetInt(query, "per_page", params.PerPage)
+	api.SetInt64(query, "domain_id", params.DomainID)
+	api.SetInt64(query, "conversation_id", params.ConversationID)
+	api.SetInt64(query, "source_message_id", params.SourceMessageID)
+	api.SetString(query, "status", params.Status)
+	api.SetString(query, "sort", params.Sort)
 	return query
 }
 
 func domainQuery(params DomainListParams) url.Values {
 	query := url.Values{}
-	setInt(query, "page", params.Page)
-	setInt(query, "per_page", params.PerPage)
-	if params.Active != nil {
-		query.Set("active", fmt.Sprintf("%t", *params.Active))
-	}
-	setString(query, "sort", params.Sort)
+	api.SetInt(query, "page", params.Page)
+	api.SetInt(query, "per_page", params.PerPage)
+	api.SetBool(query, "active", params.Active)
+	api.SetString(query, "sort", params.Sort)
 	return query
 }
 
 func inboxQuery(params InboxListParams) url.Values {
 	query := url.Values{}
-	setInt(query, "page", params.Page)
-	setInt(query, "per_page", params.PerPage)
-	setInt64(query, "domain_id", params.DomainID)
-	if params.Active != nil {
-		query.Set("active", fmt.Sprintf("%t", *params.Active))
-	}
-	setString(query, "pipeline_key", params.PipelineKey)
-	setString(query, "count", params.Count)
-	setString(query, "sort", params.Sort)
+	api.SetInt(query, "page", params.Page)
+	api.SetInt(query, "per_page", params.PerPage)
+	api.SetInt64(query, "domain_id", params.DomainID)
+	api.SetBool(query, "active", params.Active)
+	api.SetString(query, "pipeline_key", params.PipelineKey)
+	api.SetString(query, "count", params.Count)
+	api.SetString(query, "sort", params.Sort)
 	return query
-}
-
-func setString(query url.Values, key, value string) {
-	if value != "" {
-		query.Set(key, value)
-	}
-}
-
-func setInt(query url.Values, key string, value int) {
-	if value > 0 {
-		query.Set(key, fmt.Sprintf("%d", value))
-	}
-}
-
-func setInt64(query url.Values, key string, value int64) {
-	if value > 0 {
-		query.Set(key, fmt.Sprintf("%d", value))
-	}
 }
 
 func outboundInputMap(input *OutboundMessageInput) map[string]any {

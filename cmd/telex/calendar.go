@@ -8,14 +8,11 @@ import (
 
 	"github.com/elpdev/telex-cli/internal/calendar"
 	"github.com/elpdev/telex-cli/internal/calendarstore"
+	"github.com/elpdev/telex-cli/internal/calendarsync"
 	"github.com/spf13/cobra"
 )
 
-type calendarSyncResult struct {
-	Calendars   int
-	Events      int
-	Occurrences int
-}
+type calendarSyncResult = calendarsync.Result
 
 func newCalendarCommand(rt *runtime) *cobra.Command {
 	cmd := &cobra.Command{Use: "calendar", Short: "Calendar commands"}
@@ -393,60 +390,14 @@ func calendarInvitationCommand(use, short string, run func(*calendar.Service, in
 	}
 }
 
-type calendarSyncOptions struct {
-	From       string
-	To         string
-	CalendarID int64
-}
+type calendarSyncOptions = calendarsync.Options
 
 func runCalendarSync(rt *runtime, service *calendar.Service, store calendarstore.Store, opts calendarSyncOptions) (*calendarSyncResult, error) {
-	syncedAt := time.Now()
-	calendars, _, err := service.ListCalendars(rt.context(), calendar.ListParams{Page: 1, PerPage: 100})
+	result, err := calendarsync.Run(rt.context(), store, service, opts)
 	if err != nil {
 		return nil, err
 	}
-	result := &calendarSyncResult{}
-	for _, item := range calendars {
-		if opts.CalendarID > 0 && item.ID != opts.CalendarID {
-			continue
-		}
-		if err := store.StoreCalendar(item, syncedAt); err != nil {
-			return nil, err
-		}
-		result.Calendars++
-		page := 1
-		for {
-			events, pagination, err := service.ListEvents(rt.context(), calendar.EventListParams{ListParams: calendar.ListParams{Page: page, PerPage: 100}, CalendarID: item.ID, Sort: "starts_at"})
-			if err != nil {
-				return nil, err
-			}
-			for _, event := range events {
-				messages, err := service.EventMessages(rt.context(), event.ID)
-				if err != nil {
-					return nil, err
-				}
-				event.Messages = messages
-				if err := store.StoreEvent(event, syncedAt); err != nil {
-					return nil, err
-				}
-				result.Events++
-			}
-			if pagination == nil || page*pagination.PerPage >= pagination.TotalCount {
-				break
-			}
-			page++
-		}
-	}
-	from, to := defaultCalendarRange(opts.From, opts.To)
-	occurrences, err := service.ListOccurrences(rt.context(), calendar.OccurrenceListParams{CalendarID: opts.CalendarID, StartsFrom: from, EndsTo: to})
-	if err != nil {
-		return nil, err
-	}
-	if err := store.StoreOccurrences(occurrences, syncedAt); err != nil {
-		return nil, err
-	}
-	result.Occurrences = len(occurrences)
-	return result, nil
+	return &result, nil
 }
 
 func calendarService(rt *runtime) (*calendar.Service, error) {
@@ -491,14 +442,7 @@ func addCalendarInputFlags(cmd *cobra.Command, input *calendar.CalendarInput) {
 }
 
 func defaultCalendarRange(from, to string) (string, string) {
-	now := time.Now()
-	if from == "" {
-		from = now.Format("2006-01-02")
-	}
-	if to == "" {
-		to = now.AddDate(0, 0, 30).Format("2006-01-02")
-	}
-	return from, to
+	return calendarsync.DefaultRange(from, to)
 }
 
 func cachedEventRow(event calendarstore.CachedEvent) []string {

@@ -8,13 +8,11 @@ import (
 
 	"github.com/elpdev/telex-cli/internal/contacts"
 	"github.com/elpdev/telex-cli/internal/contactstore"
+	"github.com/elpdev/telex-cli/internal/contactsync"
 	"github.com/spf13/cobra"
 )
 
-type contactsSyncResult struct {
-	Contacts int
-	Notes    int
-}
+type contactsSyncResult = contactsync.Result
 
 func newContactsCommand(rt *runtime) *cobra.Command {
 	cmd := &cobra.Command{Use: "contacts", Short: "Contacts commands"}
@@ -299,36 +297,7 @@ func addContactInputFlags(cmd *cobra.Command, input *contacts.ContactInput) {
 }
 
 func runContactsSync(rt *runtime, service *contacts.Service, store contactstore.Store) (*contactsSyncResult, error) {
-	syncedAt := time.Now()
-	result := &contactsSyncResult{}
-	page := 1
-	for {
-		items, pagination, err := service.ListContacts(rt.context(), contacts.ListContactsParams{ListParams: contacts.ListParams{Page: page, PerPage: 100}, Sort: "name"})
-		if err != nil {
-			return nil, err
-		}
-		for _, item := range items {
-			full, err := service.ShowContact(rt.context(), item.ID, true)
-			if err != nil {
-				return nil, err
-			}
-			if err := store.StoreContact(*full, syncedAt); err != nil {
-				return nil, err
-			}
-			result.Contacts++
-			if full.Note != nil {
-				result.Notes++
-			}
-		}
-		if pagination == nil || page*pagination.PerPage >= pagination.TotalCount {
-			break
-		}
-		page++
-	}
-	if err := store.StoreSyncMeta(syncedAt); err != nil {
-		return nil, err
-	}
-	return result, nil
+	return contactsync.Run(rt.context(), store, service)
 }
 
 func contactsService(rt *runtime) (*contacts.Service, error) {

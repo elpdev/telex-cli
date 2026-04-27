@@ -1,0 +1,82 @@
+package calendarsync
+
+import (
+	"context"
+	"time"
+
+	"github.com/elpdev/telex-cli/internal/calendar"
+	"github.com/elpdev/telex-cli/internal/calendarstore"
+)
+
+type Result struct {
+	Calendars   int
+	Events      int
+	Occurrences int
+}
+
+type Options struct {
+	From       string
+	To         string
+	CalendarID int64
+}
+
+func Run(ctx context.Context, store calendarstore.Store, service *calendar.Service, opts Options) (Result, error) {
+	syncedAt := time.Now()
+	calendars, _, err := service.ListCalendars(ctx, calendar.ListParams{Page: 1, PerPage: 100})
+	if err != nil {
+		return Result{}, err
+	}
+	var result Result
+	for _, item := range calendars {
+		if opts.CalendarID > 0 && item.ID != opts.CalendarID {
+			continue
+		}
+		if err := store.StoreCalendar(item, syncedAt); err != nil {
+			return Result{}, err
+		}
+		result.Calendars++
+		page := 1
+		for {
+			events, pagination, err := service.ListEvents(ctx, calendar.EventListParams{ListParams: calendar.ListParams{Page: page, PerPage: 100}, CalendarID: item.ID, Sort: "starts_at"})
+			if err != nil {
+				return Result{}, err
+			}
+			for _, event := range events {
+				messages, err := service.EventMessages(ctx, event.ID)
+				if err != nil {
+					return Result{}, err
+				}
+				event.Messages = messages
+				if err := store.StoreEvent(event, syncedAt); err != nil {
+					return Result{}, err
+				}
+				result.Events++
+			}
+			if pagination == nil || page*pagination.PerPage >= pagination.TotalCount {
+				break
+			}
+			page++
+		}
+	}
+	from, to := DefaultRange(opts.From, opts.To)
+	occurrences, err := service.ListOccurrences(ctx, calendar.OccurrenceListParams{CalendarID: opts.CalendarID, StartsFrom: from, EndsTo: to})
+	if err != nil {
+		return Result{}, err
+	}
+	if err := store.StoreOccurrences(occurrences, syncedAt); err != nil {
+		return Result{}, err
+	}
+	result.Occurrences = len(occurrences)
+	return result, nil
+}
+
+func DefaultRange(from, to string) (string, string) {
+	now := time.Now()
+	if from == "" {
+		from = now.Format("2006-01-02")
+	}
+	if to == "" {
+		to = now.AddDate(0, 0, 30).Format("2006-01-02")
+	}
+	return from, to
+}

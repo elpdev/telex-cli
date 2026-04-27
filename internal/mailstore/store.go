@@ -44,11 +44,15 @@ func DefaultRoot() string {
 	return filepath.Join(home, ".local", "share", "telex")
 }
 
-func New(root string) Store {
+func RootOrDefault(root string) string {
 	if root == "" {
-		root = DefaultRoot()
+		return DefaultRoot()
 	}
-	return Store{Root: root}
+	return root
+}
+
+func New(root string) Store {
+	return Store{Root: RootOrDefault(root)}
 }
 
 func (s Store) MailRoot() string { return filepath.Join(s.Root, "mail") }

@@ -25,15 +25,7 @@ type Service struct {
 func NewService(client Client) *Service { return &Service{client: client} }
 
 func (s *Service) ListCalendars(ctx context.Context, params ListParams) ([]Calendar, *api.Pagination, error) {
-	body, _, err := s.client.Get(ctx, "/api/v1/calendars", listQuery(params))
-	if err != nil {
-		return nil, nil, err
-	}
-	envelope, err := api.DecodeEnvelope[[]Calendar](body)
-	if err != nil {
-		return nil, nil, err
-	}
-	return envelope.Data, api.DecodePagination(envelope.Meta), nil
+	return api.List[Calendar](s.client, ctx, "/api/v1/calendars", listQuery(params))
 }
 
 func (s *Service) ShowCalendar(ctx context.Context, id int64) (*Calendar, error) {
@@ -90,15 +82,7 @@ func (s *Service) ImportICS(ctx context.Context, calendarID int64, filePath stri
 }
 
 func (s *Service) ListEvents(ctx context.Context, params EventListParams) ([]CalendarEvent, *api.Pagination, error) {
-	body, _, err := s.client.Get(ctx, "/api/v1/calendar_events", eventQuery(params))
-	if err != nil {
-		return nil, nil, err
-	}
-	envelope, err := api.DecodeEnvelope[[]CalendarEvent](body)
-	if err != nil {
-		return nil, nil, err
-	}
-	return envelope.Data, api.DecodePagination(envelope.Meta), nil
+	return api.List[CalendarEvent](s.client, ctx, "/api/v1/calendar_events", eventQuery(params))
 }
 
 func (s *Service) ShowEvent(ctx context.Context, id int64) (*CalendarEvent, error) {
@@ -207,26 +191,26 @@ func (s *Service) invitation(ctx context.Context, messageID int64, action string
 
 func listQuery(params ListParams) url.Values {
 	query := url.Values{}
-	setInt(query, "page", params.Page)
-	setInt(query, "per_page", params.PerPage)
+	api.SetInt(query, "page", params.Page)
+	api.SetInt(query, "per_page", params.PerPage)
 	return query
 }
 
 func eventQuery(params EventListParams) url.Values {
 	query := listQuery(params.ListParams)
-	setInt64(query, "calendar_id", params.CalendarID)
-	setString(query, "status", params.Status)
-	setString(query, "source", params.Source)
-	setString(query, "uid", params.UID)
-	setString(query, "starts_from", params.StartsFrom)
-	setString(query, "ends_to", params.EndsTo)
-	setString(query, "sort", params.Sort)
+	api.SetInt64(query, "calendar_id", params.CalendarID)
+	api.SetString(query, "status", params.Status)
+	api.SetString(query, "source", params.Source)
+	api.SetString(query, "uid", params.UID)
+	api.SetString(query, "starts_from", params.StartsFrom)
+	api.SetString(query, "ends_to", params.EndsTo)
+	api.SetString(query, "sort", params.Sort)
 	return query
 }
 
 func occurrenceQuery(params OccurrenceListParams) url.Values {
 	query := url.Values{}
-	setInt64(query, "calendar_id", params.CalendarID)
+	api.SetInt64(query, "calendar_id", params.CalendarID)
 	if len(params.CalendarIDs) > 0 {
 		ids := make([]string, 0, len(params.CalendarIDs))
 		for _, id := range params.CalendarIDs {
@@ -238,8 +222,8 @@ func occurrenceQuery(params OccurrenceListParams) url.Values {
 			query.Set("calendar_ids", strings.Join(ids, ","))
 		}
 	}
-	setString(query, "starts_from", params.StartsFrom)
-	setString(query, "ends_to", params.EndsTo)
+	api.SetString(query, "starts_from", params.StartsFrom)
+	api.SetString(query, "ends_to", params.EndsTo)
 	return query
 }
 
@@ -282,23 +266,5 @@ func eventInputMap(input CalendarEventInput) map[string]any {
 func setPayloadString(payload map[string]any, key, value string) {
 	if value != "" {
 		payload[key] = value
-	}
-}
-
-func setString(query url.Values, key, value string) {
-	if value != "" {
-		query.Set(key, value)
-	}
-}
-
-func setInt(query url.Values, key string, value int) {
-	if value > 0 {
-		query.Set(key, fmt.Sprintf("%d", value))
-	}
-}
-
-func setInt64(query url.Values, key string, value int64) {
-	if value > 0 {
-		query.Set(key, fmt.Sprintf("%d", value))
 	}
 }

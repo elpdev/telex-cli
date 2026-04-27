@@ -157,7 +157,7 @@ func TestNotesScreenCreateAndEditInvokeCallbacks(t *testing.T) {
 	screen = loaded.(Notes)
 	loaded, _ = screen.Update(cmd())
 	screen = loaded.(Notes)
-	if created.Title != "Untitled" || created.FolderID == nil || *created.FolderID != rootID {
+	if created.Title != defaultTitle || created.FolderID == nil || *created.FolderID != rootID {
 		t.Fatalf("created = %#v", created)
 	}
 	screen.index = 1

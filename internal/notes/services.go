@@ -22,15 +22,7 @@ type Service struct {
 func NewService(client Client) *Service { return &Service{client: client} }
 
 func (s *Service) ListNotes(ctx context.Context, params ListNotesParams) ([]Note, *api.Pagination, error) {
-	body, _, err := s.client.Get(ctx, "/api/v1/notes", notesQuery(params))
-	if err != nil {
-		return nil, nil, err
-	}
-	envelope, err := api.DecodeEnvelope[[]Note](body)
-	if err != nil {
-		return nil, nil, err
-	}
-	return envelope.Data, api.DecodePagination(envelope.Meta), nil
+	return api.List[Note](s.client, ctx, "/api/v1/notes", notesQuery(params))
 }
 
 func (s *Service) NotesTree(ctx context.Context) (*FolderTree, error) {
@@ -92,7 +84,7 @@ func notesQuery(params ListNotesParams) url.Values {
 	if params.FolderID != nil {
 		query.Set("folder_id", fmt.Sprintf("%d", *params.FolderID))
 	}
-	setString(query, "sort", params.Sort)
+	api.SetString(query, "sort", params.Sort)
 	return query
 }
 
@@ -108,16 +100,6 @@ func noteInputMap(input NoteInput) map[string]any {
 }
 
 func setPage(query url.Values, params ListParams) {
-	if params.Page > 0 {
-		query.Set("page", fmt.Sprintf("%d", params.Page))
-	}
-	if params.PerPage > 0 {
-		query.Set("per_page", fmt.Sprintf("%d", params.PerPage))
-	}
-}
-
-func setString(query url.Values, key, value string) {
-	if value != "" {
-		query.Set(key, value)
-	}
+	api.SetInt(query, "page", params.Page)
+	api.SetInt(query, "per_page", params.PerPage)
 }

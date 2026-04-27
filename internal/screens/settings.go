@@ -437,23 +437,12 @@ func newSettingsThemeList(themes []theme.Theme, selected, original string, th th
 		}
 	}
 
-	m := list.New(items, settingsThemeDelegate{th: th}, width, height)
-	m.SetShowTitle(false)
-	m.SetShowFilter(false)
-	m.SetFilteringEnabled(false)
-	m.SetShowStatusBar(false)
-	m.SetShowHelp(false)
-	m.DisableQuitKeybindings()
-	m.Select(selectedIdx)
-	return m
+	return newSimpleList(items, settingsThemeDelegate{th: th}, selectedIdx, width, height)
 }
 
-type settingsThemeDelegate struct{ th theme.Theme }
-
-func (d settingsThemeDelegate) Height() int  { return 1 }
-func (d settingsThemeDelegate) Spacing() int { return 0 }
-func (d settingsThemeDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
-	return nil
+type settingsThemeDelegate struct {
+	simpleDelegate
+	th theme.Theme
 }
 
 func (d settingsThemeDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {

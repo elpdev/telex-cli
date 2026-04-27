@@ -8,14 +8,12 @@ import (
 	"time"
 
 	"github.com/elpdev/telex-cli/internal/notes"
+	"github.com/elpdev/telex-cli/internal/notessync"
 	"github.com/elpdev/telex-cli/internal/notestore"
 	"github.com/spf13/cobra"
 )
 
-type notesSyncResult struct {
-	Folders int
-	Notes   int
-}
+type notesSyncResult = notessync.Result
 
 func newNotesCommand(rt *runtime) *cobra.Command {
 	cmd := &cobra.Command{Use: "notes", Short: "Notes commands"}
@@ -228,46 +226,11 @@ func newNotesDeleteCommand(rt *runtime) *cobra.Command {
 }
 
 func runNotesSync(rt *runtime, service *notes.Service, store notestore.Store) (*notesSyncResult, error) {
-	tree, err := service.NotesTree(rt.context())
+	result, err := notessync.Run(rt.context(), store, service)
 	if err != nil {
 		return nil, err
 	}
-	syncedAt := time.Now()
-	if err := store.StoreTree(tree, syncedAt); err != nil {
-		return nil, err
-	}
-	result := &notesSyncResult{}
-	if err := syncNotesFolder(rt, service, store, *tree, syncedAt, result); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-func syncNotesFolder(rt *runtime, service *notes.Service, store notestore.Store, folder notes.FolderTree, syncedAt time.Time, result *notesSyncResult) error {
-	result.Folders++
-	page := 1
-	for {
-		notes, pagination, err := service.ListNotes(rt.context(), notes.ListNotesParams{ListParams: notes.ListParams{Page: page, PerPage: 100}, FolderID: &folder.ID, Sort: "filename"})
-		if err != nil {
-			return err
-		}
-		for _, note := range notes {
-			if err := store.StoreNote(note, syncedAt); err != nil {
-				return err
-			}
-			result.Notes++
-		}
-		if pagination == nil || page*pagination.PerPage >= pagination.TotalCount {
-			break
-		}
-		page++
-	}
-	for _, child := range folder.Children {
-		if err := syncNotesFolder(rt, service, store, child, syncedAt, result); err != nil {
-			return err
-		}
-	}
-	return nil
+	return &result, nil
 }
 
 func notesService(rt *runtime) (*notes.Service, error) {

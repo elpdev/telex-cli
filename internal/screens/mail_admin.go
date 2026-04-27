@@ -726,32 +726,10 @@ func newMailAdminInboxList(inboxes []mail.Inbox, selected, width, height int) li
 }
 
 func newMailAdminList(items []list.Item, delegate list.ItemDelegate, selected, width, height int) list.Model {
-	m := list.New(items, delegate, width, height)
-	m.SetShowTitle(false)
-	m.SetShowFilter(false)
-	m.SetFilteringEnabled(false)
-	m.SetShowStatusBar(false)
-	m.SetShowHelp(false)
-	m.DisableQuitKeybindings()
-	if len(items) > 0 {
-		if selected < 0 {
-			selected = 0
-		}
-		if selected >= len(items) {
-			selected = len(items) - 1
-		}
-		m.Select(selected)
-	}
-	return m
+	return newSimpleList(items, delegate, selected, width, height)
 }
 
-type mailAdminDomainDelegate struct{}
-
-func (d mailAdminDomainDelegate) Height() int  { return 1 }
-func (d mailAdminDomainDelegate) Spacing() int { return 0 }
-func (d mailAdminDomainDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
-	return nil
-}
+type mailAdminDomainDelegate struct{ simpleDelegate }
 
 func (d mailAdminDomainDelegate) Render(w io.Writer, model list.Model, index int, item list.Item) {
 	domainItem, ok := item.(mailAdminDomainItem)
@@ -759,10 +737,7 @@ func (d mailAdminDomainDelegate) Render(w io.Writer, model list.Model, index int
 		return
 	}
 	domain := domainItem.domain
-	cursor := "  "
-	if index == model.Index() {
-		cursor = "> "
-	}
+	cursor := listCursor(index == model.Index())
 	state := "inactive"
 	if domain.Active {
 		state = "active"
@@ -775,13 +750,7 @@ func (d mailAdminDomainDelegate) Render(w io.Writer, model list.Model, index int
 	_, _ = io.WriteString(w, mailAdminPadRight(line, model.Width()))
 }
 
-type mailAdminInboxDelegate struct{}
-
-func (d mailAdminInboxDelegate) Height() int  { return 1 }
-func (d mailAdminInboxDelegate) Spacing() int { return 0 }
-func (d mailAdminInboxDelegate) Update(tea.Msg, *list.Model) tea.Cmd {
-	return nil
-}
+type mailAdminInboxDelegate struct{ simpleDelegate }
 
 func (d mailAdminInboxDelegate) Render(w io.Writer, model list.Model, index int, item list.Item) {
 	inboxItem, ok := item.(mailAdminInboxItem)
@@ -789,10 +758,7 @@ func (d mailAdminInboxDelegate) Render(w io.Writer, model list.Model, index int,
 		return
 	}
 	inbox := inboxItem.inbox
-	cursor := "  "
-	if index == model.Index() {
-		cursor = "> "
-	}
+	cursor := listCursor(index == model.Index())
 	state := "inactive"
 	if inbox.Active {
 		state = "active"
