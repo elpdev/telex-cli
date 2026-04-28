@@ -155,9 +155,36 @@ func newTUICommand(rt *runtime) *cobra.Command {
 }
 
 func runTUI(meta buildInfo, configPath, dataPath string) error {
-	program := tea.NewProgram(app.NewWithPaths(meta, configPath, dataPath))
+	program := tea.NewProgram(app.NewWithPaths(meta, configPath, dataPath), tea.WithEnvironment(tuiEnvironment(os.Environ())))
 	_, err := program.Run()
 	return err
+}
+
+func tuiEnvironment(env []string) []string {
+	if !isITerm2(env) || hasEnv(env, "SSH_TTY") {
+		return env
+	}
+	out := append([]string{}, env...)
+	return append(out, "SSH_TTY=telex-iterm2-renderer-workaround")
+}
+
+func isITerm2(env []string) bool {
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "TERM_PROGRAM=") && strings.Contains(strings.ToLower(strings.TrimPrefix(entry, "TERM_PROGRAM=")), "iterm") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnv(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *runtime) context() context.Context { return context.Background() }
