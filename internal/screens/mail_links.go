@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"github.com/elpdev/telex-cli/internal/opener"
 )
 
 func (m Mail) handleLinksKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
@@ -73,7 +74,11 @@ func (m Mail) openHTML() (Screen, tea.Cmd) {
 		return m, nil
 	}
 	m.status = "Opening HTML in browser..."
-	cmd := exec.Command("xdg-open", path)
+	cmd, err := opener.Command(path)
+	if err != nil {
+		m.status = err.Error()
+		return m, nil
+	}
 	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return htmlOpenFinishedMsg{path: path, err: err}
 	})
@@ -85,7 +90,11 @@ func (m Mail) openLink() (Screen, tea.Cmd) {
 	}
 	url := m.links[m.linkIndex].URL
 	m.status = "Opening link in browser..."
-	cmd := exec.Command("xdg-open", url)
+	cmd, err := opener.Command(url)
+	if err != nil {
+		m.status = err.Error()
+		return m, nil
+	}
 	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return linkOpenFinishedMsg{url: url, err: err}
 	})
@@ -125,7 +134,11 @@ func (m Mail) openArticleURL() (Screen, tea.Cmd) {
 	}
 	url := m.articleURL
 	m.status = "Opening article in browser..."
-	cmd := exec.Command("xdg-open", url)
+	cmd, err := opener.Command(url)
+	if err != nil {
+		m.status = err.Error()
+		return m, nil
+	}
 	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return linkOpenFinishedMsg{url: url, err: err}
 	})

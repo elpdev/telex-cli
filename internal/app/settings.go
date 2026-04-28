@@ -3,12 +3,12 @@ package app
 import (
 	"fmt"
 	"io/fs"
-	"os/exec"
 	"path/filepath"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/elpdev/telex-cli/internal/config"
+	"github.com/elpdev/telex-cli/internal/opener"
 	"github.com/elpdev/telex-cli/internal/screens"
 	"github.com/elpdev/telex-cli/internal/theme"
 )
@@ -64,7 +64,10 @@ func (m *Model) settingsActions() screens.SettingsActions {
 				if path == "" {
 					return nil
 				}
-				_ = startDetached(exec.Command("xdg-open", path))
+				cmd, err := opener.Command(path)
+				if err == nil {
+					_ = startDetached(cmd)
+				}
 				return nil
 			}
 		},
@@ -73,7 +76,10 @@ func (m *Model) settingsActions() screens.SettingsActions {
 				if target == "" {
 					return nil
 				}
-				_ = startDetached(exec.Command("xdg-open", target))
+				cmd, err := opener.Command(target)
+				if err == nil {
+					_ = startDetached(cmd)
+				}
 				return nil
 			}
 		},

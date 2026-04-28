@@ -4,8 +4,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/elpdev/telex-cli/internal/mailstore"
-	"os/exec"
+	"github.com/elpdev/telex-cli/internal/opener"
 )
 
 func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
@@ -197,7 +199,11 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 	case draftEditedMsg:
 		m.loading = false
 		if msg.err != nil {
-			m.status = fmt.Sprintf("Could not save draft: %v", msg.err)
+			if msg.path != "" {
+				m.status = fmt.Sprintf("Could not save draft: %v; edited file kept at %s", msg.err, msg.path)
+			} else {
+				m.status = fmt.Sprintf("Could not save draft: %v", msg.err)
+			}
 			return m, nil
 		}
 		if msg.path == "" && msg.existingPath != "" {
@@ -219,6 +225,10 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 					return remoteDraftUpdatedMsg{remoteID: draft.Meta.RemoteID, err: m.updateDraft(context.Background(), *draft)}
 				}
 			}
+			return m, nil
+		}
+		if err := waitForFileToSettle(msg.path, 2*time.Second); err != nil {
+			m.status = fmt.Sprintf("Could not save draft: %v; edited file kept at %s", err, msg.path)
 			return m, nil
 		}
 		draft, err := saveEditedDraft(m.store, msg.mailbox, msg.path, msg.existingPath)
@@ -298,7 +308,11 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		}
 		if msg.open {
 			m.status = "Opening attachment..."
-			cmd := exec.Command("xdg-open", msg.path)
+			cmd, err := opener.Command(msg.path)
+			if err != nil {
+				m.status = err.Error()
+				return m, nil
+			}
 			return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return attachmentOpenedMsg{path: msg.path, err: err} })
 		}
 		m.status = fmt.Sprintf("Saved attachment: %s", msg.path)

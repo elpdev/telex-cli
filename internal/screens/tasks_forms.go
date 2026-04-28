@@ -3,7 +3,6 @@ package screens
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -13,14 +12,13 @@ import (
 
 func editTaskProjectTemplate(name string) (tasks.ProjectInput, error) {
 	path := filepath.Join(os.TempDir(), fmt.Sprintf("telex-task-project-%d.md", time.Now().UnixNano()))
-	defer os.Remove(path)
 	if err := os.WriteFile(path, []byte("Name: "+name+"\n"), 0o600); err != nil {
 		return tasks.ProjectInput{}, err
 	}
 	if err := runTaskEditor(path); err != nil {
 		return tasks.ProjectInput{}, err
 	}
-	content, err := os.ReadFile(path)
+	content, err := readEditedFile(path)
 	if err != nil {
 		return tasks.ProjectInput{}, err
 	}
@@ -36,14 +34,13 @@ func editTaskProjectTemplate(name string) (tasks.ProjectInput, error) {
 
 func editTaskCardTemplate(title, body string) (tasks.CardInput, error) {
 	path := filepath.Join(os.TempDir(), fmt.Sprintf("telex-task-card-%d.md", time.Now().UnixNano()))
-	defer os.Remove(path)
 	if err := os.WriteFile(path, []byte(fmt.Sprintf("Title: %s\n\n%s", title, body)), 0o600); err != nil {
 		return tasks.CardInput{}, err
 	}
 	if err := runTaskEditor(path); err != nil {
 		return tasks.CardInput{}, err
 	}
-	content, err := os.ReadFile(path)
+	content, err := readEditedFile(path)
 	if err != nil {
 		return tasks.CardInput{}, err
 	}
@@ -69,17 +66,13 @@ func parseTaskCardTemplate(content string) tasks.CardInput {
 func runTaskEditor(path string) error {
 	editor := tasksEditorCommand()
 	if editor == "" {
+		_ = os.Remove(path)
 		return fmt.Errorf("set TELEX_TASKS_EDITOR, TELEX_NOTES_EDITOR, VISUAL, or EDITOR to edit tasks")
 	}
-	parts := strings.Fields(editor)
-	if len(parts) == 0 {
-		return fmt.Errorf("set TELEX_TASKS_EDITOR, TELEX_NOTES_EDITOR, VISUAL, or EDITOR to edit tasks")
+	if err := runEditorCommand(editor, path, "set TELEX_TASKS_EDITOR, TELEX_NOTES_EDITOR, VISUAL, or EDITOR to edit tasks"); err != nil {
+		return fmt.Errorf("%w; edited file kept at %s", err, path)
 	}
-	cmd := exec.Command(parts[0], append(parts[1:], path)...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return nil
 }
 
 func tasksEditorCommand() string {

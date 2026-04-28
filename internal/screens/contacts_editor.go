@@ -3,7 +3,6 @@ package screens
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -13,26 +12,18 @@ import (
 
 func editContactNoteTemplate(title, body string) (contacts.ContactNoteInput, error) {
 	path := filepath.Join(os.TempDir(), fmt.Sprintf("telex-contact-note-%d.md", time.Now().UnixNano()))
-	defer os.Remove(path)
 	if err := os.WriteFile(path, []byte(fmt.Sprintf("Title: %s\n\n%s", title, body)), 0o600); err != nil {
 		return contacts.ContactNoteInput{}, err
 	}
 	editor := contactsEditorCommand()
 	if editor == "" {
+		_ = os.Remove(path)
 		return contacts.ContactNoteInput{}, fmt.Errorf("set TELEX_CONTACTS_EDITOR, TELEX_NOTES_EDITOR, VISUAL, or EDITOR to edit contact notes")
 	}
-	parts := strings.Fields(editor)
-	if len(parts) == 0 {
-		return contacts.ContactNoteInput{}, fmt.Errorf("set TELEX_CONTACTS_EDITOR, TELEX_NOTES_EDITOR, VISUAL, or EDITOR to edit contact notes")
+	if err := runEditorCommand(editor, path, "set TELEX_CONTACTS_EDITOR, TELEX_NOTES_EDITOR, VISUAL, or EDITOR to edit contact notes"); err != nil {
+		return contacts.ContactNoteInput{}, fmt.Errorf("%w; edited file kept at %s", err, path)
 	}
-	cmd := exec.Command(parts[0], append(parts[1:], path)...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return contacts.ContactNoteInput{}, err
-	}
-	content, err := os.ReadFile(path)
+	content, err := readEditedFile(path)
 	if err != nil {
 		return contacts.ContactNoteInput{}, err
 	}

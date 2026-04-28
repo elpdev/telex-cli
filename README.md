@@ -163,6 +163,18 @@ TUI note create/edit uses `TELEX_NOTES_EDITOR` first, then `VISUAL`, then `EDITO
 export TELEX_NOTES_EDITOR=typora
 ```
 
+On macOS, GUI editors should wait until the edit window closes so Telex can read the saved file before removing its temporary copy:
+
+```sh
+export TELEX_NOTES_EDITOR="open -W -n -a Typora"
+```
+
+Drive file opening uses `OPENER` when set. To open Drive Markdown files in Typora on macOS:
+
+```sh
+export OPENER="open -a Typora"
+```
+
 ### Mailboxes
 
 ```sh

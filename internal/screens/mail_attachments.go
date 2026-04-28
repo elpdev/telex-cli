@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -13,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/elpdev/telex-cli/internal/components/filepicker"
 	"github.com/elpdev/telex-cli/internal/mailstore"
+	"github.com/elpdev/telex-cli/internal/opener"
 )
 
 func (m Mail) handleAttachmentsKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
@@ -143,7 +143,11 @@ func (m Mail) openAttachment() (Screen, tea.Cmd) {
 	path := mailstore.AttachmentCachePath(m.messages[m.messageIndex].Path, attachment)
 	if _, err := os.Stat(path); err == nil {
 		m.status = "Opening attachment..."
-		cmd := exec.Command("xdg-open", path)
+		cmd, err := opener.Command(path)
+		if err != nil {
+			m.status = err.Error()
+			return m, nil
+		}
 		return m, tea.ExecProcess(cmd, func(err error) tea.Msg { return attachmentOpenedMsg{path: path, err: err} })
 	}
 	return m.downloadAttachment(path, true)

@@ -54,20 +54,28 @@ func draftTemplate(fields draftFields) string {
 }
 
 func saveEditedDraft(store mailstore.Store, mailbox mailstore.MailboxMeta, path, existingPath string) (*mailstore.Draft, error) {
-	defer os.Remove(path)
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w; edited file kept at %s", err, path)
 	}
 	fields, err := parseDraftFile(string(content))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w; edited file kept at %s", err, path)
 	}
 	input := mailstore.DraftInput{Mailbox: mailbox, Subject: fields.Subject, To: fields.To, CC: fields.CC, BCC: fields.BCC, Body: fields.Body, SourceMessageID: fields.SourceMessageID, ConversationID: fields.ConversationID, DraftKind: fields.DraftKind, Now: time.Now()}
+	var draft *mailstore.Draft
 	if existingPath != "" {
-		return store.UpdateDraft(existingPath, input)
+		draft, err = store.UpdateDraft(existingPath, input)
+	} else {
+		draft, err = store.CreateDraft(input)
 	}
-	return store.CreateDraft(input)
+	if err != nil {
+		return nil, fmt.Errorf("%w; edited file kept at %s", err, path)
+	}
+	if err := os.Remove(path); err != nil {
+		return nil, err
+	}
+	return draft, nil
 }
 
 func parseDraftFile(content string) (draftFields, error) {

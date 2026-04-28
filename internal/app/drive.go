@@ -10,6 +10,7 @@ import (
 	"github.com/elpdev/telex-cli/internal/drive"
 	"github.com/elpdev/telex-cli/internal/drivestore"
 	"github.com/elpdev/telex-cli/internal/drivesync"
+	"github.com/elpdev/telex-cli/internal/opener"
 	"github.com/elpdev/telex-cli/internal/screens"
 )
 
@@ -35,9 +36,13 @@ func (m *Model) downloadDriveFile(ctx context.Context, meta drivestore.FileMeta)
 }
 
 func (m *Model) openDriveFile(path string) error {
-	opener := os.Getenv("OPENER")
-	if opener != "" {
-		return startDetached(openerCommand(opener, path))
+	openerEnv := os.Getenv("OPENER")
+	if openerEnv != "" {
+		cmd, err := openerCommand(openerEnv, path)
+		if err != nil {
+			return err
+		}
+		return startDetached(cmd)
 	}
 	if textFile(path) {
 		if editor := os.Getenv("VISUAL"); editor != "" {
@@ -51,15 +56,15 @@ func (m *Model) openDriveFile(path string) error {
 			}
 		}
 	}
-	return startDetached(exec.Command("xdg-open", path))
+	cmd, err := opener.Command(path)
+	if err != nil {
+		return err
+	}
+	return startDetached(cmd)
 }
 
-func openerCommand(opener, path string) *exec.Cmd {
-	parts := strings.Fields(opener)
-	if len(parts) == 0 {
-		return exec.Command("xdg-open", path)
-	}
-	return exec.Command(parts[0], append(parts[1:], path)...)
+func openerCommand(command, path string) (*exec.Cmd, error) {
+	return opener.CustomCommand(command, path)
 }
 
 func terminalCommand(editor, path string) *exec.Cmd {
