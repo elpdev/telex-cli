@@ -17,7 +17,10 @@ import (
 
 func (m Model) View() tea.View {
 	if m.width <= 0 || m.height <= 0 {
-		return tea.NewView("initializing...")
+		rendered := tea.NewView("initializing...")
+		rendered.AltScreen = true
+		rendered.BackgroundColor = m.theme.Background
+		return rendered
 	}
 
 	dims := layout.Calculate(m.width, m.height, m.showSidebar)
