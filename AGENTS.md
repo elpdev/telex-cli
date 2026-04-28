@@ -130,3 +130,4 @@ Keep checksum generation and platform archive coverage unless the product has a 
 - Keep comments rare and useful.
 - Default to ASCII in source and docs unless the file already uses Unicode or the UI requires it.
 - Do not introduce optional dependencies unless they are used and clearly improve the product.
+- Aim for a 100-line soft limit and 300-line hard limit per file. Split files that grow beyond these bounds rather than accumulating unrelated logic in one place.
