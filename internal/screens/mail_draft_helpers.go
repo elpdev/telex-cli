@@ -134,10 +134,7 @@ func splitDraftAddresses(value string) []string {
 }
 
 func quotedReplyBody(message mailstore.CachedMessage) string {
-	body := strings.TrimSpace(emailtext.DecodeQuotedPrintable(message.BodyText))
-	if body == "" {
-		body = strings.TrimSpace(emailtext.DecodeQuotedPrintable(message.BodyHTML))
-	}
+	body := quotedSourceBody(message)
 	if body == "" {
 		return "\n\n"
 	}
@@ -149,10 +146,7 @@ func quotedReplyBody(message mailstore.CachedMessage) string {
 }
 
 func quotedForwardBody(message mailstore.CachedMessage) string {
-	body := strings.TrimSpace(emailtext.DecodeQuotedPrintable(message.BodyText))
-	if body == "" {
-		body = strings.TrimSpace(emailtext.DecodeQuotedPrintable(message.BodyHTML))
-	}
+	body := quotedSourceBody(message)
 	var b strings.Builder
 	b.WriteString("\n\n---------- Forwarded message ---------\n")
 	b.WriteString(fmt.Sprintf("From: %s\n", senderLine(message)))
@@ -173,6 +167,38 @@ func quotedForwardBody(message mailstore.CachedMessage) string {
 		}
 	}
 	return b.String()
+}
+
+func quotedSourceBody(message mailstore.CachedMessage) string {
+	text := strings.TrimSpace(emailtext.DecodeQuotedPrintable(message.BodyText))
+	if text != "" {
+		if looksLikeHTMLBody(text) {
+			return htmlBodyToText(text)
+		}
+		return text
+	}
+	return htmlBodyToText(strings.TrimSpace(emailtext.DecodeQuotedPrintable(message.BodyHTML)))
+}
+
+func htmlBodyToText(body string) string {
+	if body == "" {
+		return ""
+	}
+	markdown, err := emailtext.HTMLToMarkdown(body)
+	if err != nil || strings.TrimSpace(markdown) == "" {
+		return strings.TrimSpace(body)
+	}
+	return strings.TrimSpace(markdown)
+}
+
+func looksLikeHTMLBody(body string) bool {
+	lower := strings.ToLower(body)
+	for _, token := range []string{"<html", "<body", "<div", "<p", "<br", "<blockquote", "<table", "<ul", "<ol", "<li"} {
+		if strings.Contains(lower, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func senderLine(message mailstore.CachedMessage) string {

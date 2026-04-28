@@ -1160,6 +1160,35 @@ func TestQuotedForwardBodyIncludesOriginalHeadersAndBody(t *testing.T) {
 	}
 }
 
+func TestQuotedReplyBodyConvertsHTMLOnlyBody(t *testing.T) {
+	message := mailstore.CachedMessage{BodyHTML: `<html><body><p>First line</p><p>Second line</p></body></html>`}
+
+	body := quotedReplyBody(message)
+
+	if !strings.Contains(body, "> First line") || !strings.Contains(body, "> Second line") {
+		t.Fatalf("body = %q", body)
+	}
+	if strings.Contains(body, "<p>") || strings.Contains(body, "<html") {
+		t.Fatalf("body contains raw HTML: %q", body)
+	}
+}
+
+func TestQuotedForwardBodyConvertsHTMLStoredAsTextBody(t *testing.T) {
+	message := mailstore.CachedMessage{
+		Meta:     mailstore.MessageMeta{Subject: "Launch", FromAddress: "sender@example.net"},
+		BodyText: `<div><p>First line</p><p>Second line</p></div>`,
+	}
+
+	body := quotedForwardBody(message)
+
+	if !strings.Contains(body, "First line") || !strings.Contains(body, "Second line") {
+		t.Fatalf("body = %q", body)
+	}
+	if strings.Contains(body, "<p>") || strings.Contains(body, "<div") {
+		t.Fatalf("body contains raw HTML: %q", body)
+	}
+}
+
 func TestMailScreenCreatesRemoteForwardDraft(t *testing.T) {
 	store := mailstore.New(t.TempDir())
 	mailbox := mailstore.MailboxMeta{SchemaVersion: mailstore.SchemaVersion, DomainID: 12, DomainName: "example.com", InboxID: 34, Address: "hello@example.com", LocalPart: "hello", Active: true, SyncedAt: time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC)}
