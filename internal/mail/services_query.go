@@ -21,6 +21,7 @@ func messageQuery(params MessageListParams) url.Values {
 	api.SetString(query, "subaddress", params.Subaddress)
 	api.SetString(query, "received_from", params.ReceivedFrom)
 	api.SetString(query, "received_to", params.ReceivedTo)
+	api.SetString(query, "updated_since", params.UpdatedSince)
 	api.SetString(query, "sort", params.Sort)
 	return query
 }
@@ -33,6 +34,7 @@ func outboundMessageQuery(params OutboundMessageListParams) url.Values {
 	api.SetInt64(query, "conversation_id", params.ConversationID)
 	api.SetInt64(query, "source_message_id", params.SourceMessageID)
 	api.SetString(query, "status", params.Status)
+	api.SetString(query, "updated_since", params.UpdatedSince)
 	api.SetString(query, "sort", params.Sort)
 	return query
 }

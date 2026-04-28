@@ -9,8 +9,9 @@ type ListParams struct {
 
 type ListNotesParams struct {
 	ListParams
-	FolderID *int64
-	Sort     string
+	FolderID     *int64
+	UpdatedSince string
+	Sort         string
 }
 
 type Note struct {

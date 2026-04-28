@@ -237,6 +237,7 @@ type MessageListParams struct {
 	Subaddress     string
 	ReceivedFrom   string
 	ReceivedTo     string
+	UpdatedSince   string
 	Sort           string
 }
 
@@ -246,6 +247,7 @@ type OutboundMessageListParams struct {
 	ConversationID  int64
 	SourceMessageID int64
 	Status          string
+	UpdatedSince    string
 	Sort            string
 }
 

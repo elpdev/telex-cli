@@ -17,8 +17,9 @@ func Run(ctx context.Context, store contactstore.Store, service *contacts.Servic
 	syncedAt := time.Now()
 	result := &Result{}
 	page := 1
+	updatedSince := latestContactUpdatedSince(store)
 	for {
-		items, pagination, err := service.ListContacts(ctx, contacts.ListContactsParams{ListParams: contacts.ListParams{Page: page, PerPage: 100}, Sort: "name"})
+		items, pagination, err := service.ListContacts(ctx, contacts.ListContactsParams{ListParams: contacts.ListParams{Page: page, PerPage: 100}, UpdatedSince: updatedSince, Sort: "name"})
 		if err != nil {
 			return nil, err
 		}
@@ -44,4 +45,29 @@ func Run(ctx context.Context, store contactstore.Store, service *contacts.Servic
 		return nil, err
 	}
 	return result, nil
+}
+
+func latestContactUpdatedSince(store contactstore.Store) string {
+	items, err := store.ListContacts()
+	if err != nil {
+		return ""
+	}
+	var latest time.Time
+	for _, item := range items {
+		if item.Meta.RemoteUpdatedAt.After(latest) {
+			latest = item.Meta.RemoteUpdatedAt
+		}
+		for _, email := range item.Meta.EmailAddresses {
+			if email.UpdatedAt.After(latest) {
+				latest = email.UpdatedAt
+			}
+		}
+		if item.Note != nil && item.Note.Meta.UpdatedAt != nil && item.Note.Meta.UpdatedAt.After(latest) {
+			latest = *item.Note.Meta.UpdatedAt
+		}
+	}
+	if latest.IsZero() {
+		return ""
+	}
+	return latest.UTC().Format(time.RFC3339Nano)
 }

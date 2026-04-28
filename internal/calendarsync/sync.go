@@ -27,6 +27,7 @@ func Run(ctx context.Context, store calendarstore.Store, service *calendar.Servi
 		return Result{}, err
 	}
 	var result Result
+	updatedSince := latestEventUpdatedSince(store)
 	for _, item := range calendars {
 		if opts.CalendarID > 0 && item.ID != opts.CalendarID {
 			continue
@@ -37,7 +38,7 @@ func Run(ctx context.Context, store calendarstore.Store, service *calendar.Servi
 		result.Calendars++
 		page := 1
 		for {
-			events, pagination, err := service.ListEvents(ctx, calendar.EventListParams{ListParams: calendar.ListParams{Page: page, PerPage: 100}, CalendarID: item.ID, Sort: "starts_at"})
+			events, pagination, err := service.ListEvents(ctx, calendar.EventListParams{ListParams: calendar.ListParams{Page: page, PerPage: 100}, CalendarID: item.ID, UpdatedSince: updatedSince, Sort: "starts_at"})
 			if err != nil {
 				return Result{}, err
 			}
@@ -68,6 +69,23 @@ func Run(ctx context.Context, store calendarstore.Store, service *calendar.Servi
 	}
 	result.Occurrences = len(occurrences)
 	return result, nil
+}
+
+func latestEventUpdatedSince(store calendarstore.Store) string {
+	events, err := store.ListEvents(0)
+	if err != nil {
+		return ""
+	}
+	var latest time.Time
+	for _, event := range events {
+		if event.Meta.RemoteUpdatedAt.After(latest) {
+			latest = event.Meta.RemoteUpdatedAt
+		}
+	}
+	if latest.IsZero() {
+		return ""
+	}
+	return latest.UTC().Format(time.RFC3339Nano)
 }
 
 func DefaultRange(from, to string) (string, string) {

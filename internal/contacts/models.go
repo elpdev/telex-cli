@@ -9,9 +9,10 @@ type ListParams struct {
 
 type ListContactsParams struct {
 	ListParams
-	ContactType string
-	Query       string
-	Sort        string
+	ContactType  string
+	Query        string
+	UpdatedSince string
+	Sort         string
 }
 
 type Contact struct {

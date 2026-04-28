@@ -23,17 +23,18 @@ func Run(ctx context.Context, store notestore.Store, service *notes.Service) (Re
 		return Result{}, err
 	}
 	var result Result
-	if err := syncFolder(ctx, store, service, *tree, syncedAt, &result); err != nil {
+	updatedSince := latestNoteUpdatedSince(store)
+	if err := syncFolder(ctx, store, service, *tree, syncedAt, updatedSince, &result); err != nil {
 		return Result{}, err
 	}
 	return result, nil
 }
 
-func syncFolder(ctx context.Context, store notestore.Store, service *notes.Service, folder notes.FolderTree, syncedAt time.Time, result *Result) error {
+func syncFolder(ctx context.Context, store notestore.Store, service *notes.Service, folder notes.FolderTree, syncedAt time.Time, updatedSince string, result *Result) error {
 	result.Folders++
 	page := 1
 	for {
-		cached, pagination, err := service.ListNotes(ctx, notes.ListNotesParams{ListParams: notes.ListParams{Page: page, PerPage: 100}, FolderID: &folder.ID, Sort: "filename"})
+		cached, pagination, err := service.ListNotes(ctx, notes.ListNotesParams{ListParams: notes.ListParams{Page: page, PerPage: 100}, FolderID: &folder.ID, UpdatedSince: updatedSince, Sort: "filename"})
 		if err != nil {
 			return err
 		}
@@ -49,9 +50,26 @@ func syncFolder(ctx context.Context, store notestore.Store, service *notes.Servi
 		page++
 	}
 	for _, child := range folder.Children {
-		if err := syncFolder(ctx, store, service, child, syncedAt, result); err != nil {
+		if err := syncFolder(ctx, store, service, child, syncedAt, updatedSince, result); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func latestNoteUpdatedSince(store notestore.Store) string {
+	notes, err := store.AllNotes()
+	if err != nil {
+		return ""
+	}
+	var latest time.Time
+	for _, note := range notes {
+		if note.Meta.RemoteUpdatedAt.After(latest) {
+			latest = note.Meta.RemoteUpdatedAt
+		}
+	}
+	if latest.IsZero() {
+		return ""
+	}
+	return latest.UTC().Format(time.RFC3339Nano)
 }

@@ -13,30 +13,31 @@ import (
 )
 
 type MessageMeta struct {
-	SchemaVersion  int              `toml:"schema_version"`
-	Kind           string           `toml:"kind"`
-	RemoteID       int64            `toml:"remote_id"`
-	ConversationID int64            `toml:"conversation_id"`
-	DomainID       int64            `toml:"domain_id"`
-	DomainName     string           `toml:"domain_name"`
-	InboxID        int64            `toml:"inbox_id"`
-	Mailbox        string           `toml:"mailbox"`
-	Status         string           `toml:"status"`
-	RemoteError    string           `toml:"remote_error"`
-	Subject        string           `toml:"subject"`
-	FromAddress    string           `toml:"from_address"`
-	FromName       string           `toml:"from_name"`
-	To             []string         `toml:"to"`
-	CC             []string         `toml:"cc"`
-	Read           bool             `toml:"read"`
-	Starred        bool             `toml:"starred"`
-	SenderBlocked  bool             `toml:"sender_blocked"`
-	SenderTrusted  bool             `toml:"sender_trusted"`
-	DomainBlocked  bool             `toml:"domain_blocked"`
-	Labels         []LabelMeta      `toml:"labels"`
-	Attachments    []AttachmentMeta `toml:"attachments"`
-	ReceivedAt     time.Time        `toml:"received_at"`
-	SyncedAt       time.Time        `toml:"synced_at"`
+	SchemaVersion   int              `toml:"schema_version"`
+	Kind            string           `toml:"kind"`
+	RemoteID        int64            `toml:"remote_id"`
+	ConversationID  int64            `toml:"conversation_id"`
+	DomainID        int64            `toml:"domain_id"`
+	DomainName      string           `toml:"domain_name"`
+	InboxID         int64            `toml:"inbox_id"`
+	Mailbox         string           `toml:"mailbox"`
+	Status          string           `toml:"status"`
+	RemoteError     string           `toml:"remote_error"`
+	Subject         string           `toml:"subject"`
+	FromAddress     string           `toml:"from_address"`
+	FromName        string           `toml:"from_name"`
+	To              []string         `toml:"to"`
+	CC              []string         `toml:"cc"`
+	Read            bool             `toml:"read"`
+	Starred         bool             `toml:"starred"`
+	SenderBlocked   bool             `toml:"sender_blocked"`
+	SenderTrusted   bool             `toml:"sender_trusted"`
+	DomainBlocked   bool             `toml:"domain_blocked"`
+	Labels          []LabelMeta      `toml:"labels"`
+	Attachments     []AttachmentMeta `toml:"attachments"`
+	ReceivedAt      time.Time        `toml:"received_at"`
+	RemoteUpdatedAt time.Time        `toml:"remote_updated_at"`
+	SyncedAt        time.Time        `toml:"synced_at"`
 }
 
 type LabelMeta struct {
@@ -78,29 +79,30 @@ func (s Store) StoreInboxMessage(mailbox MailboxMeta, message mail.Message, body
 		return "", err
 	}
 	meta := MessageMeta{
-		SchemaVersion:  SchemaVersion,
-		Kind:           "message",
-		RemoteID:       message.ID,
-		ConversationID: message.ConversationID,
-		DomainID:       mailbox.DomainID,
-		DomainName:     mailbox.DomainName,
-		InboxID:        mailbox.InboxID,
-		Mailbox:        message.SystemState,
-		Status:         message.Status,
-		Subject:        message.Subject,
-		FromAddress:    message.FromAddress,
-		FromName:       message.FromName,
-		To:             message.ToAddresses,
-		CC:             message.CCAddresses,
-		Read:           message.Read,
-		Starred:        message.Starred,
-		SenderBlocked:  message.SenderBlocked,
-		SenderTrusted:  message.SenderTrusted,
-		DomainBlocked:  message.DomainBlocked,
-		Labels:         labelMetas(message.Labels),
-		Attachments:    attachmentMetas(message.Attachments),
-		ReceivedAt:     receivedAt,
-		SyncedAt:       syncedAt,
+		SchemaVersion:   SchemaVersion,
+		Kind:            "message",
+		RemoteID:        message.ID,
+		ConversationID:  message.ConversationID,
+		DomainID:        mailbox.DomainID,
+		DomainName:      mailbox.DomainName,
+		InboxID:         mailbox.InboxID,
+		Mailbox:         message.SystemState,
+		Status:          message.Status,
+		Subject:         message.Subject,
+		FromAddress:     message.FromAddress,
+		FromName:        message.FromName,
+		To:              message.ToAddresses,
+		CC:              message.CCAddresses,
+		Read:            message.Read,
+		Starred:         message.Starred,
+		SenderBlocked:   message.SenderBlocked,
+		SenderTrusted:   message.SenderTrusted,
+		DomainBlocked:   message.DomainBlocked,
+		Labels:          labelMetas(message.Labels),
+		Attachments:     attachmentMetas(message.Attachments),
+		ReceivedAt:      receivedAt,
+		RemoteUpdatedAt: message.UpdatedAt,
+		SyncedAt:        syncedAt,
 	}
 	if err := writeTOML(filepath.Join(path, "meta.toml"), meta); err != nil {
 		return "", err
@@ -220,6 +222,24 @@ func FindInboxMessage(mailboxPath string, remoteID int64) (*CachedMessage, error
 		}
 	}
 	return nil, fmt.Errorf("inbox message %d not found", remoteID)
+}
+
+func LatestInboxRemoteUpdatedAt(mailboxPath string) (time.Time, error) {
+	messages, err := ListInbox(mailboxPath)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var latest time.Time
+	for _, message := range messages {
+		updatedAt := message.Meta.RemoteUpdatedAt
+		if updatedAt.IsZero() {
+			updatedAt = message.Meta.SyncedAt
+		}
+		if updatedAt.After(latest) {
+			latest = updatedAt
+		}
+	}
+	return latest, nil
 }
 
 func (s Store) UpdateCachedMessageByRemoteID(remoteID int64, message mail.Message, syncedAt time.Time) (*CachedMessage, error) {

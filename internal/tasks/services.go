@@ -151,6 +151,7 @@ func listQuery(params ListParams) url.Values {
 	query := url.Values{}
 	api.SetInt(query, "page", params.Page)
 	api.SetInt(query, "per_page", params.PerPage)
+	api.SetString(query, "updated_since", params.UpdatedSince)
 	return query
 }
 

@@ -3,8 +3,9 @@ package tasks
 import "time"
 
 type ListParams struct {
-	Page    int
-	PerPage int
+	Page         int
+	PerPage      int
+	UpdatedSince string
 }
 
 type Workspace struct {

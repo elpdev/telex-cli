@@ -103,6 +103,7 @@ func contactsQuery(params ListContactsParams) url.Values {
 	query := listQuery(params.ListParams)
 	api.SetString(query, "contact_type", params.ContactType)
 	api.SetString(query, "q", params.Query)
+	api.SetString(query, "updated_since", params.UpdatedSince)
 	api.SetString(query, "sort", params.Sort)
 	return query
 }

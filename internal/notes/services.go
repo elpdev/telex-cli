@@ -84,6 +84,7 @@ func notesQuery(params ListNotesParams) url.Values {
 	if params.FolderID != nil {
 		query.Set("folder_id", fmt.Sprintf("%d", *params.FolderID))
 	}
+	api.SetString(query, "updated_since", params.UpdatedSince)
 	api.SetString(query, "sort", params.Sort)
 	return query
 }

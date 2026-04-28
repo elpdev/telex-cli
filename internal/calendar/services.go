@@ -193,6 +193,7 @@ func listQuery(params ListParams) url.Values {
 	query := url.Values{}
 	api.SetInt(query, "page", params.Page)
 	api.SetInt(query, "per_page", params.PerPage)
+	api.SetString(query, "updated_since", params.UpdatedSince)
 	return query
 }
 
@@ -204,6 +205,7 @@ func eventQuery(params EventListParams) url.Values {
 	api.SetString(query, "uid", params.UID)
 	api.SetString(query, "starts_from", params.StartsFrom)
 	api.SetString(query, "ends_to", params.EndsTo)
+	api.SetString(query, "updated_since", params.UpdatedSince)
 	api.SetString(query, "sort", params.Sort)
 	return query
 }

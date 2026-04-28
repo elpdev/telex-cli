@@ -3,8 +3,9 @@ package calendar
 import "time"
 
 type ListParams struct {
-	Page    int
-	PerPage int
+	Page         int
+	PerPage      int
+	UpdatedSince string
 }
 
 type Calendar struct {
@@ -28,13 +29,14 @@ type CalendarInput struct {
 
 type EventListParams struct {
 	ListParams
-	CalendarID int64
-	Status     string
-	Source     string
-	UID        string
-	StartsFrom string
-	EndsTo     string
-	Sort       string
+	CalendarID   int64
+	Status       string
+	Source       string
+	UID          string
+	StartsFrom   string
+	EndsTo       string
+	UpdatedSince string
+	Sort         string
 }
 
 type OccurrenceListParams struct {

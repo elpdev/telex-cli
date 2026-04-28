@@ -80,12 +80,14 @@ func SyncRemoteDraftsForMailbox(ctx context.Context, service *mail.Service, stor
 	count := 0
 	page := 1
 	const perPage = 100
+	updatedSince := latestRemoteDraftUpdatedSince(store, mailbox)
 	for {
 		outbound, pagination, err := service.ListOutboundMessages(ctx, mail.OutboundMessageListParams{
-			ListParams: mail.ListParams{Page: page, PerPage: perPage},
-			DomainID:   mailbox.DomainID,
-			Status:     "draft",
-			Sort:       "-updated_at",
+			ListParams:   mail.ListParams{Page: page, PerPage: perPage},
+			DomainID:     mailbox.DomainID,
+			Status:       "draft",
+			UpdatedSince: updatedSince,
+			Sort:         "-updated_at",
 		})
 		if err != nil {
 			return count, fmt.Errorf("list page %d: %w", page, err)
@@ -138,12 +140,17 @@ func SyncInboxForMailbox(ctx context.Context, service *mail.Service, store mails
 	bodyErrors := 0
 	page := 1
 	const perPage = 100
+	updatedSince, err := latestInboxUpdatedSince(store, mailbox)
+	if err != nil {
+		return count, bodyErrors, err
+	}
 	for {
 		messages, pagination, err := service.ListMessages(ctx, mail.MessageListParams{
-			ListParams: mail.ListParams{Page: page, PerPage: perPage},
-			InboxID:    mailbox.InboxID,
-			Mailbox:    "inbox",
-			Sort:       "-received_at",
+			ListParams:   mail.ListParams{Page: page, PerPage: perPage},
+			InboxID:      mailbox.InboxID,
+			Mailbox:      "inbox",
+			UpdatedSince: updatedSince,
+			Sort:         "-received_at",
 		})
 		if err != nil {
 			return count, bodyErrors, fmt.Errorf("list page %d: %w", page, err)
@@ -166,6 +173,46 @@ func SyncInboxForMailbox(ctx context.Context, service *mail.Service, store mails
 		}
 		page++
 	}
+}
+
+func latestInboxUpdatedSince(store mailstore.Store, mailbox mailstore.MailboxMeta) (string, error) {
+	mailboxPath, err := store.MailboxPath(mailbox.DomainName, mailbox.LocalPart)
+	if err != nil {
+		return "", err
+	}
+	latest, err := mailstore.LatestInboxRemoteUpdatedAt(mailboxPath)
+	if err != nil {
+		return "", err
+	}
+	return formatUpdatedSince(latest), nil
+}
+
+func latestRemoteDraftUpdatedSince(store mailstore.Store, mailbox mailstore.MailboxMeta) string {
+	_, mailboxPath, err := store.FindMailboxByAddress(mailbox.Address)
+	if err != nil {
+		return ""
+	}
+	drafts, err := mailstore.ListDrafts(mailboxPath)
+	if err != nil {
+		return ""
+	}
+	var latest time.Time
+	for _, draft := range drafts {
+		if draft.Meta.RemoteID == 0 {
+			continue
+		}
+		if draft.Meta.UpdatedAt.After(latest) {
+			latest = draft.Meta.UpdatedAt
+		}
+	}
+	return formatUpdatedSince(latest)
+}
+
+func formatUpdatedSince(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
 }
 
 func outboundOccurredAt(message *mail.OutboundMessage) time.Time {
