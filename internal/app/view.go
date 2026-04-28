@@ -17,7 +17,10 @@ import (
 
 func (m Model) View() tea.View {
 	if m.width <= 0 || m.height <= 0 {
-		return tea.NewView("initializing...")
+		rendered := tea.NewView("initializing...")
+		rendered.AltScreen = true
+		rendered.BackgroundColor = m.theme.Background
+		return rendered
 	}
 
 	dims := layout.Calculate(m.width, m.height, m.showSidebar)
@@ -37,7 +40,7 @@ func (m Model) View() tea.View {
 	}
 
 	view := lipgloss.JoinVertical(lipgloss.Left, head, body, foot)
-	view = lipgloss.NewStyle().Width(m.width).Height(m.height).Background(m.theme.Background).Render(view)
+	view = m.fillScreen(view)
 
 	if m.showHelp {
 		view = modal.Overlay(view, m.helpOverlay(), m.width, m.height, m.theme)
@@ -45,11 +48,17 @@ func (m Model) View() tea.View {
 	if m.showCommandPalette {
 		view = modal.Overlay(view, m.commandPalette.View(m.theme), m.width, m.height, m.theme)
 	}
+	view = m.fillScreen(view)
 
 	rendered := tea.NewView(view)
 	rendered.AltScreen = true
 	rendered.BackgroundColor = m.theme.Background
 	return rendered
+}
+
+func (m Model) fillScreen(view string) string {
+	background := lipgloss.NewStyle().Background(m.theme.Background)
+	return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, view, lipgloss.WithWhitespaceStyle(background))
 }
 
 func max(a, b int) int {

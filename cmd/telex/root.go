@@ -155,7 +155,7 @@ func newTUICommand(rt *runtime) *cobra.Command {
 }
 
 func runTUI(meta buildInfo, configPath, dataPath string) error {
-	program := tea.NewProgram(app.NewWithPaths(meta, configPath, dataPath))
+	program := tea.NewProgram(app.NewWithPaths(meta, configPath, dataPath), tea.WithEnvironment(os.Environ()))
 	_, err := program.Run()
 	return err
 }

@@ -32,21 +32,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.switchScreen("news")
 			m.showCommandPalette = false
 			m.updateDerivedScreens()
-			return m, cmd
+			return m, routeTransitionCmd(cmd)
 		}
 		m.switchScreen(msg.ScreenID)
 		m.showCommandPalette = false
 		m.updateDerivedScreens()
-		return m, m.initScreen(m.activeScreen)
+		return m, routeTransitionCmd(m.initScreen(m.activeScreen))
 	case hnscreens.NavigateMsg:
 		screenID := hackerNewsScreenID(msg.ScreenID)
 		if isNewsTabScreen(screenID) {
 			cmd := m.activateNewsTab(screenID)
 			m.switchScreen("news")
-			return m, cmd
+			return m, routeTransitionCmd(cmd)
 		}
 		m.switchScreen(screenID)
-		return m, m.initScreen(m.activeScreen)
+		return m, routeTransitionCmd(m.initScreen(m.activeScreen))
 	case hnscreens.OpenCommentsMsg:
 		screen, ok := unwrapHackerNewsScreen(m.screens["hn-comments"])
 		if !ok {
@@ -147,6 +147,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updated, cmd := active.Update(msg)
 	m.screens[m.activeScreen] = updated
 	return m, cmd
+}
+
+func routeTransitionCmd(cmd tea.Cmd) tea.Cmd {
+	if cmd == nil {
+		return tea.ClearScreen
+	}
+	return tea.Sequence(tea.ClearScreen, cmd)
 }
 
 type commandsExecutedMsg struct {
