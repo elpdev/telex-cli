@@ -47,7 +47,7 @@ func (m Mail) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			m.mode = mailModeList
 			m.resetDetailViewport()
 			m.status = ""
-			return m, nil
+			return m.markSelectedRead()
 		}
 		if key.Matches(msg, m.keys.OpenHTML) {
 			return m.openHTML()

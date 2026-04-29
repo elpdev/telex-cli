@@ -40,6 +40,34 @@ func (m Mail) toggleSelectedRead() (Screen, tea.Cmd) {
 	}
 }
 
+func (m Mail) markSelectedRead() (Screen, tea.Cmd) {
+	if len(m.messages) == 0 || m.messageIndex < 0 || m.messageIndex >= len(m.messages) {
+		return m, nil
+	}
+	message := m.messages[m.messageIndex]
+	if message.Meta.Read {
+		return m, nil
+	}
+	if m.remoteResults || !m.currentBoxSupportsMessageActions() {
+		return m, nil
+	}
+	if m.toggleRead == nil {
+		m.status = "Read/unread action is not configured"
+		return m, nil
+	}
+	index := m.messageIndex
+	m.status = "Marking read..."
+	return m, func() tea.Msg {
+		if err := m.toggleRead(context.Background(), message.Meta.RemoteID, true); err != nil {
+			return messageReadToggledMsg{index: index, path: message.Path, read: true, err: err}
+		}
+		if _, err := mailstore.SetCachedMessageRead(message.Path, true, time.Now()); err != nil {
+			return messageReadToggledMsg{index: index, path: message.Path, read: true, err: err}
+		}
+		return messageReadToggledMsg{index: index, path: message.Path, read: true}
+	}
+}
+
 func (m Mail) toggleSelectedStar() (Screen, tea.Cmd) {
 	if len(m.messages) == 0 {
 		return m, nil

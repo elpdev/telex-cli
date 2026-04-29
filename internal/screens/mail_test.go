@@ -59,6 +59,74 @@ func TestMailScreenLoadsCachedInboxAndOpensDetail(t *testing.T) {
 	}
 }
 
+func TestMailScreenMarksUnreadMessageReadWhenDetailCloses(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	mailbox := testScreenMailbox(12, 34, "example.com", "hello", "hello@example.com")
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.StoreInboxMessage(mailbox, mail.Message{
+		ID:          123,
+		Subject:     "Unread",
+		FromAddress: "sender@example.net",
+		ToAddresses: []string{"hello@example.com"},
+		SystemState: "inbox",
+		Read:        false,
+		ReceivedAt:  time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC),
+	}, &mail.MessageBody{Text: "Cached body"}, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotID int64
+	var gotRead bool
+	var calls int
+	screen := NewMailWithActions(store, func(ctx context.Context, id int64, read bool) error {
+		gotID = id
+		gotRead = read
+		calls++
+		return nil
+	}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	screen = updated.(Mail)
+	if cmd != nil {
+		t.Fatal("opening detail should not mark read")
+	}
+	if calls != 0 {
+		t.Fatalf("open marked read %d time(s)", calls)
+	}
+	readBack, err := mailstore.ReadCachedMessage(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readBack.Meta.Read {
+		t.Fatal("expected message to remain unread while open")
+	}
+
+	updated, cmd = screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	screen = updated.(Mail)
+	if cmd == nil {
+		t.Fatal("expected mark-read command")
+	}
+	updated, _ = screen.Update(cmd())
+	screen = updated.(Mail)
+	if gotID != 123 || !gotRead || calls != 1 {
+		t.Fatalf("mark read got id=%d read=%t calls=%d", gotID, gotRead, calls)
+	}
+	if !screen.messages[0].Meta.Read {
+		t.Fatal("expected screen message state to be read")
+	}
+	readBack, err = mailstore.ReadCachedMessage(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !readBack.Meta.Read {
+		t.Fatal("expected cached metadata to be read")
+	}
+}
+
 func TestAggregateUnreadMailLoadsAllUnreadInboxMessages(t *testing.T) {
 	store := mailstore.New(t.TempDir())
 	first := testScreenMailbox(12, 34, "example.com", "hello", "hello@example.com")
