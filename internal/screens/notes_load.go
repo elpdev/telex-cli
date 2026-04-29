@@ -83,6 +83,9 @@ func (n Notes) editCachedCmd(cached notestore.CachedNote) tea.Cmd {
 		if cached.Meta.FolderID > 0 {
 			input.FolderID = &cached.Meta.FolderID
 		}
+		if input.Title == cached.Meta.Title && input.Body == cached.Body && sameInt64Ptr(input.FolderID, cached.Meta.FolderID) {
+			return noteActionFinishedMsg{status: "No changes to save"}
+		}
 		updated, err := n.update(context.Background(), cached.Meta.RemoteID, input)
 		if err != nil {
 			return noteActionFinishedMsg{err: err}
@@ -90,6 +93,13 @@ func (n Notes) editCachedCmd(cached notestore.CachedNote) tea.Cmd {
 		loaded := n.load(folderID)
 		return noteActionFinishedMsg{status: "Updated " + updated.Title, loaded: loaded, err: loaded.err}
 	}
+}
+
+func sameInt64Ptr(left *int64, right int64) bool {
+	if left == nil {
+		return right == 0
+	}
+	return *left == right
 }
 
 func (n Notes) deleteCmd() tea.Cmd {

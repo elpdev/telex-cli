@@ -131,7 +131,7 @@ func TestNotesScreenSyncRefreshesList(t *testing.T) {
 
 func TestNotesScreenCreateAndEditInvokeCallbacks(t *testing.T) {
 	t.Setenv("EDITOR", "false")
-	t.Setenv("TELEX_NOTES_EDITOR", "true")
+	t.Setenv("TELEX_NOTES_EDITOR", testEditorScript(t, "Title: Edited\n\nEdited body"))
 	store := testNotesStore(t)
 	rootID := int64(1)
 	var created notes.NoteInput
@@ -157,15 +157,38 @@ func TestNotesScreenCreateAndEditInvokeCallbacks(t *testing.T) {
 	screen = loaded.(Notes)
 	loaded, _ = screen.Update(cmd())
 	screen = loaded.(Notes)
-	if created.Title != defaultTitle || created.FolderID == nil || *created.FolderID != rootID {
+	if created.Title != "Edited" || created.Body != "Edited body" || created.FolderID == nil || *created.FolderID != rootID {
 		t.Fatalf("created = %#v", created)
 	}
 	screen.index = 1
 	loaded, cmd = screen.Update(tea.KeyPressMsg(tea.Key{Text: "e", Code: 'e'}))
 	screen = loaded.(Notes)
 	loaded, _ = screen.Update(cmd())
-	if updated.Title == "" || !strings.Contains(updated.Body, "Cached") {
+	if updated.Title != "Edited" || updated.Body != "Edited body" {
 		t.Fatalf("updated = %#v", updated)
+	}
+}
+
+func TestNotesScreenEditSkipsUnchangedTemplate(t *testing.T) {
+	t.Setenv("TELEX_NOTES_EDITOR", "true")
+	store := testNotesStore(t)
+	updates := 0
+	screen := NewNotes(store, nil).WithActions(nil, func(ctx context.Context, id int64, input notes.NoteInput) (*notes.Note, error) {
+		updates++
+		return &notes.Note{ID: id, FolderID: input.FolderID, Title: input.Title, Body: input.Body}, nil
+	}, nil)
+	loaded, _ := screen.Update(screen.load(0))
+	screen = loaded.(Notes)
+	screen.index = 1
+	loaded, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "e", Code: 'e'}))
+	screen = loaded.(Notes)
+	loaded, _ = screen.Update(cmd())
+	screen = loaded.(Notes)
+	if updates != 0 {
+		t.Fatalf("updates = %d, want 0", updates)
+	}
+	if screen.status != "No changes to save" {
+		t.Fatalf("status = %q", screen.status)
 	}
 }
 
@@ -233,6 +256,16 @@ func testNotesStore(t *testing.T) notestore.Store {
 		t.Fatal(err)
 	}
 	return store
+}
+
+func testEditorScript(t *testing.T, content string) string {
+	t.Helper()
+	path := t.TempDir() + "/editor.sh"
+	script := "#!/bin/sh\nprintf '%s' '" + strings.ReplaceAll(content, "'", "'\\''") + "' > \"$1\"\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestMain(m *testing.M) {

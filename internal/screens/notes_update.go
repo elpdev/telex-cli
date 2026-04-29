@@ -42,12 +42,14 @@ func (n Notes) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			return n, nil
 		}
 		n.status = msg.status
-		n.tree = msg.loaded.tree
-		n.folder = msg.loaded.folder
-		n.notes = msg.loaded.notes
-		n.rows = n.buildRows()
-		n.clampIndex()
-		n.syncNoteList()
+		if msg.loaded.tree != nil {
+			n.tree = msg.loaded.tree
+			n.folder = msg.loaded.folder
+			n.notes = msg.loaded.notes
+			n.rows = n.buildRows()
+			n.clampIndex()
+			n.syncNoteList()
+		}
 		return n, nil
 	case NotesActionMsg:
 		return n.handleAction(msg.Action)
