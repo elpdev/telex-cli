@@ -75,12 +75,9 @@ func (m Mail) listView(width, height int) string {
 		return b.String()
 	}
 	headerLines := strings.Count(b.String(), "\n")
-	limit := max(1, height-headerLines-2)
-	start := 0
-	if m.messageIndex >= limit {
-		start = m.messageIndex - limit + 1
-	}
-	end := min(len(m.messages), start+limit)
+	limit := max(1, height-headerLines-3)
+	start, end, page, pages := paginatedRange(len(m.messages), m.messageIndex, limit)
+	b.WriteString(fmt.Sprintf("Page %d/%d · %d-%d/%d\n", page, pages, start+1, end, len(m.messages)))
 	layout := mailColumns(width)
 	for i := start; i < end; i++ {
 		b.WriteString(formatMailRow(m.messages[i], i == m.messageIndex, layout))

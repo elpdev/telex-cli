@@ -25,6 +25,19 @@ func viewportRangeHint(v viewport.Model) string {
 	return fmt.Sprintf("%d-%d/%d", offset+1, end, total)
 }
 
+func paginatedRange(total, selected, pageSize int) (start, end, page, pages int) {
+	if total <= 0 {
+		return 0, 0, 0, 0
+	}
+	pageSize = max(1, pageSize)
+	selected = clampIndex(selected, total)
+	pages = (total + pageSize - 1) / pageSize
+	page = selected/pageSize + 1
+	start = (page - 1) * pageSize
+	end = min(total, start+pageSize)
+	return start, end, page, pages
+}
+
 func truncate(value string, width int) string {
 	if width <= 0 || len(value) <= width {
 		return value

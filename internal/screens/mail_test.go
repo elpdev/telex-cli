@@ -3,6 +3,7 @@ package screens
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -835,6 +836,69 @@ func TestMailScreenSearchFiltersCurrentBox(t *testing.T) {
 	view := stripScreenANSI(screen.View(100, 20))
 	if strings.Contains(view, "Alpha") || !strings.Contains(view, "Beta") || !strings.Contains(view, "Filter: needle (1/2)") {
 		t.Fatalf("view = %q", view)
+	}
+}
+
+func TestMailScreenListViewPaginatesVisibleMessages(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	mailbox := testScreenMailbox(12, 34, "example.com", "hello", "hello@example.com")
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		if _, err := store.StoreInboxMessage(mailbox, mail.Message{ID: int64(i + 1), Subject: fmt.Sprintf("Msg %d", i+1), FromAddress: "sender@example.net", SystemState: "inbox", ReceivedAt: now.Add(-time.Duration(i) * time.Hour)}, nil, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	screen := NewMail(store)
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+
+	view := stripScreenANSI(screen.View(100, 8))
+	if !strings.Contains(view, "Page 1/2 · 1-3/5") || !strings.Contains(view, "Msg 1") || !strings.Contains(view, "Msg 3") || strings.Contains(view, "Msg 4") {
+		t.Fatalf("page 1 view = %q", view)
+	}
+	for i := 0; i < 3; i++ {
+		updated, _ = screen.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+		screen = updated.(Mail)
+	}
+	view = stripScreenANSI(screen.View(100, 8))
+	if !strings.Contains(view, "Page 2/2 · 4-5/5") || !strings.Contains(view, "Msg 4") || !strings.Contains(view, "Msg 5") || strings.Contains(view, "Msg 1") {
+		t.Fatalf("page 2 view = %q", view)
+	}
+}
+
+func TestMailScreenSearchFiltersMessagesOutsideVisiblePage(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	mailbox := testScreenMailbox(12, 34, "example.com", "hello", "hello@example.com")
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		if _, err := store.StoreInboxMessage(mailbox, mail.Message{ID: int64(i + 1), Subject: fmt.Sprintf("Msg %d", i+1), FromAddress: "sender@example.net", SystemState: "inbox", ReceivedAt: now.Add(-time.Duration(i) * time.Hour)}, nil, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	screen := NewMail(store)
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	initial := stripScreenANSI(screen.View(100, 8))
+	if strings.Contains(initial, "Msg 5") {
+		t.Fatalf("expected Msg 5 to start outside first page: %q", initial)
+	}
+	for _, key := range []tea.KeyPressMsg{
+		tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}),
+		tea.KeyPressMsg(tea.Key{Text: "Msg 5"}),
+		tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}),
+	} {
+		updated, _ = screen.Update(key)
+		screen = updated.(Mail)
+	}
+	view := stripScreenANSI(screen.View(100, 8))
+	if !strings.Contains(view, "Msg 5") || !strings.Contains(view, "Filter: Msg 5 (1/5)") || !strings.Contains(view, "Page 1/1 · 1-1/1") {
+		t.Fatalf("filtered view = %q", view)
 	}
 }
 
