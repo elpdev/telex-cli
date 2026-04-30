@@ -22,6 +22,7 @@ func newContactsCommand(rt *runtime) *cobra.Command {
 	cmd.AddCommand(newContactsCreateCommand(rt))
 	cmd.AddCommand(newContactsEditCommand(rt))
 	cmd.AddCommand(newContactsDeleteCommand(rt))
+	cmd.AddCommand(newContactsImportVCFCommand(rt))
 	cmd.AddCommand(newContactNoteCommand(rt))
 	cmd.AddCommand(newContactCommunicationsCommand(rt))
 	return cmd
@@ -282,6 +283,29 @@ func newContactCommunicationsCommand(rt *runtime) *cobra.Command {
 				rows = append(rows, communicationRow(communication))
 			}
 			writeRows(cmd.OutOrStdout(), []string{"id", "kind", "direction", "subject", "occurred_at"}, rows)
+			return nil
+		},
+	}
+}
+
+func newContactsImportVCFCommand(rt *runtime) *cobra.Command {
+	return &cobra.Command{
+		Use:   "import-vcf <file>",
+		Short: "Import contacts from a VCF file",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			service, err := contactsService(rt)
+			if err != nil {
+				return err
+			}
+			result, err := service.ImportVCF(rt.context(), args[0])
+			if err != nil {
+				return err
+			}
+			writeRows(cmd.OutOrStdout(), []string{"key", "value"}, [][]string{{"created", strconv.Itoa(result.Created)}, {"updated", strconv.Itoa(result.Updated)}, {"skipped", strconv.Itoa(result.Skipped)}, {"failed", strconv.Itoa(result.Failed)}, {"success", strconv.FormatBool(result.Success)}})
+			for _, importErr := range result.Errors {
+				fmt.Fprintln(cmd.ErrOrStderr(), importErr)
+			}
 			return nil
 		},
 	}

@@ -11,6 +11,7 @@ import (
 type Client interface {
 	Get(context.Context, string, url.Values) ([]byte, int, error)
 	Post(context.Context, string, any) ([]byte, int, error)
+	PostMultipartFile(context.Context, string, string, string) ([]byte, int, error)
 	Put(context.Context, string, any) ([]byte, int, error)
 	Patch(context.Context, string, any) ([]byte, int, error)
 	Delete(context.Context, string) (int, error)
@@ -97,6 +98,18 @@ func (s *Service) UpdateContactNote(ctx context.Context, id int64, input Contact
 
 func (s *Service) ContactCommunications(ctx context.Context, id int64, params ListParams) ([]ContactCommunication, *api.Pagination, error) {
 	return api.List[ContactCommunication](s.client, ctx, fmt.Sprintf("/api/v1/contacts/%d/communications", id), listQuery(params))
+}
+
+func (s *Service) ImportVCF(ctx context.Context, filePath string) (*ImportResult, error) {
+	body, _, err := s.client.PostMultipartFile(ctx, "/api/v1/contacts/import_vcf", "file", filePath)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := api.DecodeEnvelope[ImportResult](body)
+	if err != nil {
+		return nil, err
+	}
+	return &envelope.Data, nil
 }
 
 func contactsQuery(params ListContactsParams) url.Values {
