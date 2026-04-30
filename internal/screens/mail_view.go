@@ -107,15 +107,15 @@ func mailListFooterHint(box string, aggregate bool) string {
 	}
 	switch box {
 	case "inbox":
-		return mailFooterHint("[enter] open", "[c] compose", "[/] filter", "[a] archive", "[J] junk", "[d] trash", "[h/l] mailbox", "[?] help")
+		return mailFooterHint("[enter] open", "[c] compose", "[/] filter", "[a] archive", "[J] junk", "[d] trash", "[h/l] account · [{/}] box", "[?] help")
 	case "junk":
-		return mailFooterHint("[enter] open", "[/] filter", "[U] not junk", "[h/l] mailbox", "[?] help")
+		return mailFooterHint("[enter] open", "[/] filter", "[U] not junk", "[h/l] account · [{/}] box", "[?] help")
 	case "archive", "trash":
-		return mailFooterHint("[enter] open", "[/] filter", "[R] restore", "[h/l] mailbox", "[?] help")
+		return mailFooterHint("[enter] open", "[/] filter", "[R] restore", "[h/l] account · [{/}] box", "[?] help")
 	case "drafts":
-		return mailFooterHint("[enter] open", "[c] new", "[e] edit", "[S] send", "[x] delete", "[h/l] mailbox", "[?] help")
+		return mailFooterHint("[enter] open", "[c] new", "[e] edit", "[S] send", "[x] delete", "[h/l] account · [{/}] box", "[?] help")
 	default:
-		return mailFooterHint("[enter] open", "[/] filter", "[h/l] mailbox", "[?] help")
+		return mailFooterHint("[enter] open", "[/] filter", "[h/l] account · [{/}] box", "[?] help")
 	}
 }
 

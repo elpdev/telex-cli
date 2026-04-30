@@ -34,6 +34,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateDerivedScreens()
 			return m, routeTransitionCmd(cmd)
 		}
+		if isMailHubTab(msg.ScreenID) {
+			cmd := m.activateMailHubTab(msg.ScreenID)
+			m.switchScreen("mail")
+			m.showCommandPalette = false
+			m.updateDerivedScreens()
+			return m, routeTransitionCmd(cmd)
+		}
 		m.switchScreen(msg.ScreenID)
 		m.showCommandPalette = false
 		m.updateDerivedScreens()
@@ -329,9 +336,6 @@ func (m Model) handleSidebarKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	target := ids[idx]
-	if target == "mail" && !isMailSection(m.activeScreen) {
-		target = "mail-unread"
-	}
 	m.sidebarCursor = target
 	m.switchScreen(target)
 	m.updateDerivedScreens()
@@ -342,6 +346,7 @@ func (m *Model) updateDerivedScreens() {
 	m.screens["home"] = m.buildHome()
 	m.screens["settings"] = m.buildSettings()
 	m.screens["news"] = m.buildNews()
+	m.screens["mail"] = m.buildMailHub()
 	if m.devBuild() {
 		m.screens["logs"] = screens.NewLogs(m.logs)
 	}
@@ -364,6 +369,26 @@ func (m *Model) activateNewsTab(id string) tea.Cmd {
 	m.screens["news"] = updated
 	if cmd == nil {
 		return m.initScreen("news")
+	}
+	return cmd
+}
+
+func isMailHubTab(id string) bool {
+	if id == "mail-mailboxes" {
+		return true
+	}
+	return isAggregateMailScreen(id)
+}
+
+func (m *Model) activateMailHubTab(id string) tea.Cmd {
+	hub, ok := m.screens["mail"].(screens.MailHub)
+	if !ok {
+		return m.initScreen(id)
+	}
+	updated, cmd := hub.SetActiveID(id)
+	m.screens["mail"] = updated
+	if cmd == nil {
+		return m.initScreen("mail")
 	}
 	return cmd
 }

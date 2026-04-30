@@ -152,10 +152,11 @@ func (m Model) devBuild() bool { return m.meta.Version == "dev" }
 
 func (m *Model) registerScreens() {
 	m.screens["home"] = m.buildHome()
-	m.screens["mail"] = m.buildMailScreen()
+	m.screens["mail-mailboxes"] = m.buildMailScreen()
 	for _, scope := range aggregateMailScreens() {
 		m.screens[scope.id] = m.buildAggregateMailScreen(scope)
 	}
+	m.screens["mail"] = m.buildMailHub()
 	m.screens["mail-admin"] = screens.NewMailAdmin(m.loadMailAdmin).WithActions(m.saveDomain, m.deleteDomain, m.validateDomainOutbound, m.saveInbox, m.deleteInbox, m.inboxPipeline)
 	m.screens["calendar"] = screens.NewCalendar(calendarstore.New(m.dataPath), m.syncCalendar).WithActions(m.createCalendarEvent, m.updateCalendarEvent, m.deleteCalendarEvent).WithCalendarActions(m.createCalendar, m.updateCalendar, m.deleteCalendar).WithImportICS(m.importCalendarICS).WithInvitationActions(m.showCalendarInvitation, m.syncCalendarInvitation, m.respondCalendarInvitation)
 	m.screens["contacts"] = screens.NewContacts(contactstore.New(m.dataPath), m.syncContacts).WithActions(m.deleteContact, m.loadContactNote, m.updateContactNote, m.loadContactCommunications)
@@ -213,10 +214,31 @@ func (m *Model) buildNews() screens.News {
 	return news
 }
 
+func (m *Model) buildMailHub() screens.MailHub {
+	tabs := []screens.MailHubTab{
+		{ID: "mail-unread", Label: "Unread"},
+		{ID: "mail-inbox", Label: "Inbox"},
+		{ID: "mail-starred", Label: "Starred"},
+		{ID: "mail-drafts", Label: "Drafts"},
+		{ID: "mail-sent", Label: "Sent"},
+		{ID: "mail-outbox", Label: "Outbox"},
+		{ID: "mail-archive", Label: "Archive"},
+		{ID: "mail-junk", Label: "Junk"},
+		{ID: "mail-trash", Label: "Trash"},
+		{ID: "mail-mailboxes", Label: "Mailboxes"},
+	}
+	initFn := func(id string) tea.Cmd { return m.initScreen(id) }
+	hub := screens.NewMailHub(tabs, m.theme, m.screens, initFn)
+	if existing, ok := m.screens["mail"].(screens.MailHub); ok {
+		hub = hub.SetActiveIndex(existing.ActiveIndex())
+	}
+	return hub
+}
+
 func (m *Model) refreshScreenOrder() {
 	m.screenOrder = m.screenOrder[:0]
 	for id := range m.screens {
-		if id == "mail-admin" || isAggregateMailScreen(id) || isHackerNewsScreen(id) {
+		if id == "mail-admin" || id == "mail-mailboxes" || isAggregateMailScreen(id) || isHackerNewsScreen(id) {
 			continue
 		}
 		m.screenOrder = append(m.screenOrder, id)

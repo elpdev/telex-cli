@@ -676,7 +676,7 @@ func TestMailScreenSwitchesMessageBoxes(t *testing.T) {
 	screen := NewMail(store)
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
-	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "}", Code: '}'}))
 	screen = updated.(Mail)
 	if cmd == nil {
 		t.Fatal("expected box switch load command")
@@ -726,7 +726,7 @@ func TestMailScreenShowsSentAndOutbox(t *testing.T) {
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	for range 3 {
-		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
+		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "}", Code: '}'}))
 		screen = updated.(Mail)
 		if cmd == nil {
 			t.Fatal("expected box switch load command")
@@ -738,7 +738,7 @@ func TestMailScreenShowsSentAndOutbox(t *testing.T) {
 	if !strings.Contains(sentView, "/ sent") || !strings.Contains(sentView, "Sent Subject") {
 		t.Fatalf("sent view = %q", sentView)
 	}
-	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "}", Code: '}'}))
 	screen = updated.(Mail)
 	if cmd == nil {
 		t.Fatal("expected box switch load command")
@@ -770,7 +770,7 @@ func TestMailScreenSendsSelectedDraft(t *testing.T) {
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	for range 5 {
-		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
+		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "}", Code: '}'}))
 		screen = updated.(Mail)
 		if cmd == nil {
 			t.Fatal("expected box load command")
@@ -817,7 +817,7 @@ func TestMailScreenDraftSendFailureLeavesDraft(t *testing.T) {
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	for range 5 {
-		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
+		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "}", Code: '}'}))
 		screen = updated.(Mail)
 		if cmd == nil {
 			t.Fatal("expected box load command")
@@ -867,7 +867,7 @@ func TestMailScreenShowsOutboundDeliveryMetadata(t *testing.T) {
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	for range 4 {
-		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
+		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "}", Code: '}'}))
 		screen = updated.(Mail)
 		if cmd == nil {
 			t.Fatal("expected box switch load command")
@@ -1213,7 +1213,7 @@ func TestMailScreenConfirmsDraftAttachmentDetach(t *testing.T) {
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	for range 5 {
-		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
+		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "}", Code: '}'}))
 		screen = updated.(Mail)
 		if cmd == nil {
 			t.Fatal("expected box load command")
@@ -1268,7 +1268,7 @@ func TestMailScreenAttachPickerSelectionAddsAttachmentToDraft(t *testing.T) {
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	for range 5 {
-		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
+		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "}", Code: '}'}))
 		screen = updated.(Mail)
 		updated, _ = screen.Update(cmd())
 		screen = updated.(Mail)
@@ -1314,7 +1314,7 @@ func TestMailScreenAttachPickerCancelDoesNotModifyDraft(t *testing.T) {
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	for range 5 {
-		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
+		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "}", Code: '}'}))
 		screen = updated.(Mail)
 		updated, _ = screen.Update(cmd())
 		screen = updated.(Mail)
@@ -1509,7 +1509,7 @@ func TestDeleteDraftRemovesSelectedDraft(t *testing.T) {
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	for range 5 {
-		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
+		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "}", Code: '}'}))
 		screen = updated.(Mail)
 		if cmd == nil {
 			t.Fatal("expected box load command")
@@ -1671,7 +1671,7 @@ func TestMailScreenRestoresArchivedMessage(t *testing.T) {
 	}, nil, nil, nil, nil, nil, nil)
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
-	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "}", Code: '}'}))
 	screen = updated.(Mail)
 	if cmd == nil {
 		t.Fatal("expected archive load command")
@@ -1746,7 +1746,7 @@ func TestMailScreenRestoreFailureLeavesTrashUnchanged(t *testing.T) {
 	updated, _ := screen.Update(screen.Init()())
 	screen = updated.(Mail)
 	for range 2 {
-		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "]", Code: ']'}))
+		updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "}", Code: '}'}))
 		screen = updated.(Mail)
 		if cmd == nil {
 			t.Fatal("expected box load command")

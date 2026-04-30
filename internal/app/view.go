@@ -72,26 +72,12 @@ func (m Model) sidebarItems() []sidebar.Item {
 	ids := m.sidebarScreenIDs()
 	items := make([]sidebar.Item, 0, len(ids))
 	for _, id := range ids {
-		title := m.screens[id].Title()
-		if isMailSection(m.activeScreen) && id == "mail" {
-			title = "Mailboxes"
-		}
-		items = append(items, sidebar.Item{ID: id, Title: title})
+		items = append(items, sidebar.Item{ID: id, Title: m.screens[id].Title()})
 	}
 	return items
 }
 
 func (m Model) sidebarScreenIDs() []string {
-	if isMailSection(m.activeScreen) {
-		ids := []string{"home", "mail-unread", "mail-starred", "mail-inbox", "mail-sent", "mail-drafts", "mail-outbox", "mail-junk", "mail-archive", "mail-trash", "mail", "mail-admin"}
-		out := make([]string, 0, len(ids))
-		for _, id := range ids {
-			if _, ok := m.screens[id]; ok {
-				out = append(out, id)
-			}
-		}
-		return out
-	}
 	return append([]string(nil), m.screenOrder...)
 }
 
@@ -116,10 +102,6 @@ func containsScreenID(ids []string, id string) bool {
 		}
 	}
 	return false
-}
-
-func isMailSection(id string) bool {
-	return id == "mail-admin" || isMailScreen(id)
 }
 
 func (m Model) helpOverlay() string {

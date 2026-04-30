@@ -125,7 +125,7 @@ func (m *Model) registerCommands() {
 
 	m.commands.Register(commands.Command{ID: "go-home", Module: commands.ModuleGlobal, Title: "Go to Home", Keywords: []string{"home", "start"}, Run: route("home")})
 	m.commands.Register(commands.Command{ID: "go-mail", Module: commands.ModuleMail, Group: commands.GroupNav, Title: "Open Mail", Description: "Unread across all mailboxes", Keywords: []string{"mail", "email", "unread", "inbox"}, Pinned: true, Run: route("mail-unread")})
-	m.commands.Register(commands.Command{ID: "go-mailboxes", Module: commands.ModuleMail, Group: commands.GroupNav, Title: "Open Mailboxes", Description: "Browse one mailbox at a time", Keywords: []string{"mail", "email", "mailboxes", "accounts"}, Pinned: true, Run: route("mail")})
+	m.commands.Register(commands.Command{ID: "go-mailboxes", Module: commands.ModuleMail, Group: commands.GroupNav, Title: "Open Mailboxes", Description: "Browse one mailbox at a time", Keywords: []string{"mail", "email", "mailboxes", "accounts"}, Pinned: true, Run: route("mail-mailboxes")})
 	for _, scope := range aggregateMailScreens() {
 		m.commands.Register(commands.Command{ID: "go-" + scope.id, Module: commands.ModuleMail, Group: commands.GroupNav, Title: "Open " + scope.title, Keywords: []string{"mail", "email", strings.ToLower(scope.title)}, Run: route(scope.id)})
 	}
@@ -235,7 +235,7 @@ func (m *Model) registerCommands() {
 func (m Model) paletteContext() commands.Context {
 	ctx := commands.Context{ActiveScreen: m.activeScreen, ActiveModule: m.activeModule()}
 	if isMailScreen(m.activeScreen) {
-		if mail, ok := m.screens[m.activeScreen].(screens.Mail); ok {
+		if mail, ok := m.activeMailScreen(); ok {
 			sel := mail.Selection()
 			ctx.Selection = &commands.Selection{
 				Kind:     sel.BoxLikes,
@@ -271,6 +271,19 @@ func (m Model) paletteContext() commands.Context {
 		}
 	}
 	return ctx
+}
+
+func (m Model) activeMailScreen() (screens.Mail, bool) {
+	if m.activeScreen == "mail" {
+		hub, ok := m.screens["mail"].(screens.MailHub)
+		if !ok {
+			return screens.Mail{}, false
+		}
+		child, ok := m.screens[hub.ActiveID()].(screens.Mail)
+		return child, ok
+	}
+	mail, ok := m.screens[m.activeScreen].(screens.Mail)
+	return mail, ok
 }
 
 func (m Model) activeModule() string {

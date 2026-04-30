@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/elpdev/telex-cli/internal/commands"
+	"github.com/elpdev/telex-cli/internal/screens"
 )
 
 func TestSwitchScreenForTest(t *testing.T) {
@@ -45,21 +46,21 @@ func TestBackgroundMailSyncTickSchedulesSyncAndNextTick(t *testing.T) {
 
 func TestBackgroundMailSyncReloadsActiveMailScreen(t *testing.T) {
 	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
-	model = model.SwitchScreenForTest("mail-unread")
+	model = model.SwitchScreenForTest("mail")
 	updated, cmd := model.Update(backgroundMailSyncedMsg{source: "boot"})
 	model = updated.(Model)
 
 	if cmd == nil {
 		t.Fatal("expected background mail sync to reload active mail screen")
 	}
-	if model.CurrentScreenID() != "mail-unread" {
+	if model.CurrentScreenID() != "mail" {
 		t.Fatalf("expected active mail screen to remain selected, got %q", model.CurrentScreenID())
 	}
 }
 
 func TestSkippedBackgroundMailSyncDoesNotReload(t *testing.T) {
 	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
-	model = model.SwitchScreenForTest("mail-unread")
+	model = model.SwitchScreenForTest("mail")
 	_, cmd := model.Update(backgroundMailSyncedMsg{source: "timer", skipped: true, err: errMailSyncAlreadyRunning})
 
 	if cmd != nil {
@@ -76,8 +77,11 @@ func TestGlobalMailSidebarEntryOpensUnread(t *testing.T) {
 	}
 	model = sendKey(t, model, tea.Key{Code: tea.KeyEnter})
 
-	if model.CurrentScreenID() != "mail-unread" {
-		t.Fatalf("expected mail sidebar entry to open unread, got %q", model.CurrentScreenID())
+	if model.CurrentScreenID() != "mail" {
+		t.Fatalf("expected mail sidebar entry to open mail hub, got %q", model.CurrentScreenID())
+	}
+	if id := mailHubActiveID(t, model); id != "mail-unread" {
+		t.Fatalf("expected hub default tab mail-unread, got %q", id)
 	}
 }
 
@@ -89,8 +93,11 @@ func TestMailCommandsOpenUnreadAndMailboxes(t *testing.T) {
 	}
 	updated, _ := model.Update(cmd.Run()())
 	model = updated.(Model)
-	if model.CurrentScreenID() != "mail-unread" {
-		t.Fatalf("go-mail opened %q, want mail-unread", model.CurrentScreenID())
+	if model.CurrentScreenID() != "mail" {
+		t.Fatalf("go-mail opened %q, want mail", model.CurrentScreenID())
+	}
+	if id := mailHubActiveID(t, model); id != "mail-unread" {
+		t.Fatalf("go-mail hub tab = %q, want mail-unread", id)
 	}
 
 	cmd, ok = model.commands.Find("go-mailboxes")
@@ -102,6 +109,18 @@ func TestMailCommandsOpenUnreadAndMailboxes(t *testing.T) {
 	if model.CurrentScreenID() != "mail" {
 		t.Fatalf("go-mailboxes opened %q, want mail", model.CurrentScreenID())
 	}
+	if id := mailHubActiveID(t, model); id != "mail-mailboxes" {
+		t.Fatalf("go-mailboxes hub tab = %q, want mail-mailboxes", id)
+	}
+}
+
+func mailHubActiveID(t *testing.T, model Model) string {
+	t.Helper()
+	hub, ok := model.screens["mail"].(screens.MailHub)
+	if !ok {
+		t.Fatalf("mail screen is not a MailHub: %T", model.screens["mail"])
+	}
+	return hub.ActiveID()
 }
 
 func TestNotesScreenRegisteredInNavigationAndCommands(t *testing.T) {
@@ -255,7 +274,7 @@ func TestMailAdminScreenRegisteredInNavigationAndCommands(t *testing.T) {
 	}
 }
 
-func TestAggregateMailScreensRegisteredWithMailSidebar(t *testing.T) {
+func TestAggregateMailScreensRegisteredAsHubTabs(t *testing.T) {
 	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
 	for _, id := range []string{"mail-unread", "mail-starred", "mail-inbox", "mail-sent", "mail-drafts", "mail-outbox", "mail-junk", "mail-archive", "mail-trash"} {
 		if _, ok := model.screens[id]; !ok {
@@ -269,15 +288,41 @@ func TestAggregateMailScreensRegisteredWithMailSidebar(t *testing.T) {
 				t.Fatalf("%s should be hidden from global sidebar: %#v", id, model.screenOrder)
 			}
 		}
+
+		updated, _ := model.Update(routeMsg{ScreenID: id})
+		routed := updated.(Model)
+		if routed.CurrentScreenID() != "mail" {
+			t.Fatalf("routing to %s set active screen %q, want mail", id, routed.CurrentScreenID())
+		}
+		if active := mailHubActiveID(t, routed); active != id {
+			t.Fatalf("routing to %s left hub tab %q", id, active)
+		}
 	}
 
-	model = model.SwitchScreenForTest("mail-unread")
-	ids := model.sidebarScreenIDs()
-	assertContainsScreenID(t, ids, "home")
-	assertContainsScreenID(t, ids, "mail-unread")
-	assertContainsScreenID(t, ids, "mail-starred")
-	assertContainsScreenID(t, ids, "mail-trash")
-	assertContainsScreenID(t, ids, "mail-admin")
+	if _, ok := model.screens["mail-mailboxes"]; !ok {
+		t.Fatal("expected mail-mailboxes screen")
+	}
+	for _, navID := range model.screenOrder {
+		if navID == "mail-mailboxes" {
+			t.Fatalf("mail-mailboxes should be hidden from global sidebar: %#v", model.screenOrder)
+		}
+	}
+}
+
+func TestMailHubCyclesTabsWithBrackets(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+	model = model.SwitchScreenForTest("mail")
+	first := mailHubActiveID(t, model)
+
+	model = sendKey(t, model, tea.Key{Text: "]", Code: ']'})
+	if mailHubActiveID(t, model) == first {
+		t.Fatal("expected ] to advance hub tab")
+	}
+
+	model = sendKey(t, model, tea.Key{Text: "[", Code: '['})
+	if got := mailHubActiveID(t, model); got != first {
+		t.Fatalf("expected [ to return to first tab %q, got %q", first, got)
+	}
 }
 
 func TestTabCyclesFocusOutsideConversationView(t *testing.T) {
