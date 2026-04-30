@@ -17,6 +17,8 @@ type TasksKeyMap struct {
 	MoveNext key.Binding
 	MovePrev key.Binding
 	MoveTo   key.Binding
+	Copy     key.Binding
+	CopyID   key.Binding
 }
 
 func DefaultTasksKeyMap() TasksKeyMap {
@@ -35,9 +37,11 @@ func DefaultTasksKeyMap() TasksKeyMap {
 		MoveNext: key.NewBinding(key.WithKeys(">", "L"), key.WithHelp(">/L", "move to next column")),
 		MovePrev: key.NewBinding(key.WithKeys("<", "H"), key.WithHelp("</H", "move to previous column")),
 		MoveTo:   key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "move to column…")),
+		Copy:     key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy body/name")),
+		CopyID:   key.NewBinding(key.WithKeys("Y"), key.WithHelp("Y", "copy id")),
 	}
 }
 
 func (t Tasks) KeyBindings() []key.Binding {
-	return []key.Binding{t.keys.Up, t.keys.Down, t.keys.Open, t.keys.Back, t.keys.Refresh, t.keys.Sync, t.keys.Search, t.keys.Project, t.keys.New, t.keys.Edit, t.keys.Delete, t.keys.MovePrev, t.keys.MoveNext, t.keys.MoveTo}
+	return []key.Binding{t.keys.Up, t.keys.Down, t.keys.Open, t.keys.Back, t.keys.Refresh, t.keys.Sync, t.keys.Search, t.keys.Project, t.keys.New, t.keys.Edit, t.keys.Delete, t.keys.MovePrev, t.keys.MoveNext, t.keys.MoveTo, t.keys.Copy, t.keys.CopyID}
 }

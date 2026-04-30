@@ -12,6 +12,7 @@ import (
 type UIPrefs struct {
 	Theme          string `toml:"theme,omitempty"`
 	SidebarVisible *bool  `toml:"sidebar_visible,omitempty"`
+	TasksProjectID int64  `toml:"tasks_project_id,omitempty"`
 }
 
 func PrefsPath() string { return filepath.Join(Dir(), "prefs.toml") }

@@ -164,6 +164,16 @@ func (r *runtime) context() context.Context { return context.Background() }
 
 func (r *runtime) configFiles() (string, string) { return config.Paths(r.configPath) }
 
+func (r *runtime) prefsPath() string { return config.PrefsPathFor(r.configPath) }
+
+func (r *runtime) loadPrefs() (*config.UIPrefs, error) {
+	return config.LoadPrefs(r.prefsPath())
+}
+
+func (r *runtime) savePrefs(prefs *config.UIPrefs) error {
+	return prefs.SaveTo(r.prefsPath())
+}
+
 func (r *runtime) loadConfig() (*config.Config, error) {
 	configFile, _ := r.configFiles()
 	cfg, err := config.LoadFrom(configFile)

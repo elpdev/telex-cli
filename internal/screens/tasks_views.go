@@ -127,6 +127,7 @@ func (t Tasks) renderPreview(rows []taskRow, width int) string {
 		b.WriteString(fmt.Sprintf("Project %d\n", row.Project.Meta.RemoteID))
 	case row.Card != nil:
 		b.WriteString(row.Card.Meta.Title + "\n")
+		b.WriteString(fmt.Sprintf("ID %d · Project %d\n", row.Card.Meta.RemoteID, row.Card.Meta.ProjectID))
 		meta := ""
 		if updated := formatNotesRelative(row.Card.Meta.RemoteUpdatedAt); updated != "" {
 			meta = "Updated " + updated
@@ -160,6 +161,9 @@ func (t Tasks) renderPreview(rows []taskRow, width int) string {
 func (t Tasks) Title() string { return "Projects" }
 
 func (t Tasks) actionLegend() string {
+	if t.detail != nil {
+		return "esc: back · e: edit · y: copy body · Y: copy id"
+	}
 	row, ok := t.selectedRow()
 	if !ok {
 		if t.project == nil {
@@ -169,9 +173,9 @@ func (t Tasks) actionLegend() string {
 	}
 	switch {
 	case row.Project != nil:
-		return "enter: open · n: new project · S: sync"
+		return "enter: open · n: new project · S: sync · y: copy name · Y: copy id"
 	case row.Card != nil:
-		return "enter: open · e: edit · x: delete · </>: move column · m: move to…"
+		return "enter: open · e: edit · x: delete · </>: move column · m: move to… · y: copy body · Y: copy id"
 	case row.Column != nil:
 		return "n: new card · S: sync · /: filter"
 	}
@@ -196,6 +200,7 @@ func (t Tasks) detailView(width, height int) string {
 	bodyWidth := notesBodyWidth(width)
 	var head strings.Builder
 	head.WriteString(t.detail.Meta.Title + "\n")
+	head.WriteString(fmt.Sprintf("ID %d · Project %d\n", t.detail.Meta.RemoteID, t.detail.Meta.ProjectID))
 	if updated := formatNotesRelative(t.detail.Meta.RemoteUpdatedAt); updated != "" {
 		head.WriteString("Updated " + updated + "\n")
 	}
