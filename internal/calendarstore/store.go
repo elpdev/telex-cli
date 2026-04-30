@@ -179,6 +179,22 @@ func (s Store) DeleteCalendar(id int64) error {
 	return nil
 }
 
+func (s Store) PruneMissingCalendars(keep map[int64]bool) error {
+	calendars, err := s.ListCalendars()
+	if err != nil {
+		return err
+	}
+	for _, item := range calendars {
+		if keep[item.RemoteID] {
+			continue
+		}
+		if err := s.DeleteCalendar(item.RemoteID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s Store) StoreEvent(value calendar.CalendarEvent, syncedAt time.Time) error {
 	if err := s.EnsureRoot(); err != nil {
 		return err
@@ -247,6 +263,22 @@ func (s Store) DeleteEvent(id int64) error {
 		return nil
 	}
 	return err
+}
+
+func (s Store) PruneMissingEvents(keep map[int64]bool) error {
+	events, err := s.ListEvents(0)
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if keep[event.Meta.RemoteID] {
+			continue
+		}
+		if err := s.DeleteEvent(event.Meta.RemoteID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s Store) DeleteEventOccurrences(id int64) error {

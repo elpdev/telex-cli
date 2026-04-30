@@ -30,6 +30,43 @@ func TestRouteRunsScreenInitCommand(t *testing.T) {
 	}
 }
 
+func TestBackgroundMailSyncTickSchedulesSyncAndNextTick(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+	updated, cmd := model.Update(mailAutoSyncTickMsg{})
+	model = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected mail auto sync tick to schedule commands")
+	}
+	if model.CurrentScreenID() != "home" {
+		t.Fatalf("expected tick to leave active screen unchanged, got %q", model.CurrentScreenID())
+	}
+}
+
+func TestBackgroundMailSyncReloadsActiveMailScreen(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+	model = model.SwitchScreenForTest("mail-unread")
+	updated, cmd := model.Update(backgroundMailSyncedMsg{source: "boot"})
+	model = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected background mail sync to reload active mail screen")
+	}
+	if model.CurrentScreenID() != "mail-unread" {
+		t.Fatalf("expected active mail screen to remain selected, got %q", model.CurrentScreenID())
+	}
+}
+
+func TestSkippedBackgroundMailSyncDoesNotReload(t *testing.T) {
+	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
+	model = model.SwitchScreenForTest("mail-unread")
+	_, cmd := model.Update(backgroundMailSyncedMsg{source: "timer", skipped: true, err: errMailSyncAlreadyRunning})
+
+	if cmd != nil {
+		t.Fatal("expected skipped background mail sync not to reload")
+	}
+}
+
 func TestGlobalMailSidebarEntryOpensUnread(t *testing.T) {
 	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
 	model = sendKey(t, model, tea.Key{Code: tea.KeyTab})

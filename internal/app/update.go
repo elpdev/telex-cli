@@ -110,6 +110,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logs.Info(fmt.Sprintf("Drive sync mode set: %s", msg.Mode))
 		m.updateDerivedScreens()
 		return m, nil
+	case startupSyncFinishedMsg:
+		m.logStartupSync(msg)
+		if m.activeScreen == "home" {
+			return m, m.initScreen(m.activeScreen)
+		}
+		return m, nil
+	case mailAutoSyncTickMsg:
+		return m, tea.Batch(m.backgroundMailSyncCmd("timer"), mailAutoSyncTickCmd())
+	case backgroundMailSyncedMsg:
+		if msg.skipped {
+			m.logs.Info("Background mail sync skipped; sync already running")
+			return m, nil
+		}
+		if msg.err != nil {
+			m.logs.Warn(fmt.Sprintf("Background mail sync failed (%s): %v", msg.source, msg.err))
+			return m, nil
+		}
+		m.logs.Info(fmt.Sprintf("Background mail sync completed (%s)", msg.source))
+		if isMailScreen(m.activeScreen) || m.activeScreen == "home" {
+			return m, m.initScreen(m.activeScreen)
+		}
+		return m, nil
 	case settingsSignOutMsg:
 		if err := m.signOut(); err != nil {
 			m.logs.Warn(fmt.Sprintf("Sign out: %v", err))

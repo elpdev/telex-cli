@@ -168,6 +168,59 @@ func (s Store) DeleteNote(id int64) error {
 	return err
 }
 
+func (s Store) PruneMissingFolders(keep map[int64]bool) error {
+	entries, err := os.ReadDir(s.foldersRoot())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".toml" {
+			continue
+		}
+		var meta FolderMeta
+		path := filepath.Join(s.foldersRoot(), entry.Name())
+		if _, err := toml.DecodeFile(path, &meta); err != nil {
+			continue
+		}
+		if keep[meta.RemoteID] {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s Store) PruneMissingNotes(keep map[int64]bool) error {
+	entries, err := os.ReadDir(s.notesRoot())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		cached, err := s.ReadNotePath(filepath.Join(s.notesRoot(), entry.Name()))
+		if err != nil {
+			continue
+		}
+		if keep[cached.Meta.RemoteID] {
+			continue
+		}
+		if err := os.RemoveAll(cached.Path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s Store) AllNotes() ([]CachedNote, error) {
 	entries, err := os.ReadDir(s.notesRoot())
 	if err != nil {

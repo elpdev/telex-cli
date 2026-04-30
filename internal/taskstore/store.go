@@ -153,6 +153,11 @@ func (s Store) DeleteProject(id int64) error {
 	if os.IsNotExist(err) {
 		return nil
 	}
+	if err == nil {
+		_ = os.RemoveAll(s.projectCardsRoot(id))
+		_ = os.Remove(s.boardPath(id))
+		_ = os.Remove(s.boardMetaPath(id))
+	}
 	return err
 }
 
@@ -162,6 +167,38 @@ func (s Store) DeleteCard(projectID, id int64) error {
 		return nil
 	}
 	return err
+}
+
+func (s Store) PruneMissingProjects(keep map[int64]bool) error {
+	projects, err := s.ListProjects()
+	if err != nil {
+		return err
+	}
+	for _, project := range projects {
+		if keep[project.Meta.RemoteID] {
+			continue
+		}
+		if err := s.DeleteProject(project.Meta.RemoteID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s Store) PruneMissingCards(projectID int64, keep map[int64]bool) error {
+	cards, err := s.ListCards(projectID)
+	if err != nil {
+		return err
+	}
+	for _, card := range cards {
+		if keep[card.Meta.RemoteID] {
+			continue
+		}
+		if err := s.DeleteCard(projectID, card.Meta.RemoteID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s Store) ListProjects() ([]CachedProject, error) {

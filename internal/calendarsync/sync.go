@@ -27,7 +27,8 @@ func Run(ctx context.Context, store calendarstore.Store, service *calendar.Servi
 		return Result{}, err
 	}
 	var result Result
-	updatedSince := latestEventUpdatedSince(store)
+	keepCalendars := map[int64]bool{}
+	keepEvents := map[int64]bool{}
 	for _, item := range calendars {
 		if opts.CalendarID > 0 && item.ID != opts.CalendarID {
 			continue
@@ -35,10 +36,11 @@ func Run(ctx context.Context, store calendarstore.Store, service *calendar.Servi
 		if err := store.StoreCalendar(item, syncedAt); err != nil {
 			return Result{}, err
 		}
+		keepCalendars[item.ID] = true
 		result.Calendars++
 		page := 1
 		for {
-			events, pagination, err := service.ListEvents(ctx, calendar.EventListParams{ListParams: calendar.ListParams{Page: page, PerPage: 100}, CalendarID: item.ID, UpdatedSince: updatedSince, Sort: "starts_at"})
+			events, pagination, err := service.ListEvents(ctx, calendar.EventListParams{ListParams: calendar.ListParams{Page: page, PerPage: 100}, CalendarID: item.ID, Sort: "starts_at"})
 			if err != nil {
 				return Result{}, err
 			}
@@ -51,6 +53,7 @@ func Run(ctx context.Context, store calendarstore.Store, service *calendar.Servi
 				if err := store.StoreEvent(event, syncedAt); err != nil {
 					return Result{}, err
 				}
+				keepEvents[event.ID] = true
 				result.Events++
 			}
 			if pagination == nil || page*pagination.PerPage >= pagination.TotalCount {
@@ -58,6 +61,12 @@ func Run(ctx context.Context, store calendarstore.Store, service *calendar.Servi
 			}
 			page++
 		}
+	}
+	if err := store.PruneMissingCalendars(keepCalendars); err != nil {
+		return Result{}, err
+	}
+	if err := store.PruneMissingEvents(keepEvents); err != nil {
+		return Result{}, err
 	}
 	from, to := DefaultRange(opts.From, opts.To)
 	occurrences, err := service.ListOccurrences(ctx, calendar.OccurrenceListParams{CalendarID: opts.CalendarID, StartsFrom: from, EndsTo: to})

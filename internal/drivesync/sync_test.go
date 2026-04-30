@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/elpdev/telex-cli/internal/config"
 	"github.com/elpdev/telex-cli/internal/drive"
@@ -50,6 +51,31 @@ func TestRunSkipsContentInMetadataOnlyMode(t *testing.T) {
 		t.Fatalf("entries = %#v", entries)
 	}
 }
+
+func TestRunPrunesMissingDriveEntries(t *testing.T) {
+	store := drivestore.New(t.TempDir())
+	oldFolder, err := store.StoreFolder(store.DriveRoot(), drive.Folder{ID: 99, Name: "Old"}, testTime())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StoreFile(oldFolder, drive.File{ID: 100, FolderID: int64Ptr(99), Filename: "old.txt"}, []byte("old"), testTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Run(context.Background(), store, drive.NewService(&syncFakeClient{}), config.DriveSyncMetadataOnly); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(oldFolder); !os.IsNotExist(err) {
+		t.Fatalf("expected stale folder to be pruned, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.DriveRoot(), "Projects", "plan.txt.meta.toml")); err != nil {
+		t.Fatalf("expected current metadata to remain: %v", err)
+	}
+}
+
+func int64Ptr(v int64) *int64 { return &v }
+
+func testTime() time.Time { return time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC) }
 
 type syncFakeClient struct{}
 

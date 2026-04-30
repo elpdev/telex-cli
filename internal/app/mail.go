@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/elpdev/telex-cli/internal/mailsync"
 	"github.com/elpdev/telex-cli/internal/screens"
 )
+
+var errMailSyncAlreadyRunning = errors.New("mail sync already running")
 
 type aggregateMailScreen struct {
 	id         string
@@ -167,6 +170,11 @@ func (m *Model) untrustSender(ctx context.Context, id int64) error {
 }
 
 func (m *Model) syncMail(ctx context.Context) (screens.MailSyncResult, error) {
+	if !m.tryStartMailSync() {
+		return screens.MailSyncResult{}, errMailSyncAlreadyRunning
+	}
+	defer m.finishMailSync()
+
 	service, err := m.mailService()
 	if err != nil {
 		return screens.MailSyncResult{}, err
@@ -181,6 +189,28 @@ func (m *Model) syncMail(ctx context.Context) (screens.MailSyncResult, error) {
 		BodyErrors:       result.BodyErrors,
 		InboxErrors:      result.InboxErrors,
 	}, err
+}
+
+func (m *Model) tryStartMailSync() bool {
+	if m.syncState == nil {
+		return true
+	}
+	m.syncState.mu.Lock()
+	defer m.syncState.mu.Unlock()
+	if m.syncState.mailSyncing {
+		return false
+	}
+	m.syncState.mailSyncing = true
+	return true
+}
+
+func (m *Model) finishMailSync() {
+	if m.syncState == nil {
+		return
+	}
+	m.syncState.mu.Lock()
+	m.syncState.mailSyncing = false
+	m.syncState.mu.Unlock()
 }
 
 func (m *Model) sendDraft(ctx context.Context, mailbox mailstore.MailboxMeta, draft mailstore.Draft) error {

@@ -221,6 +221,64 @@ func (s Store) List(path string) ([]Entry, error) {
 	return out, nil
 }
 
+func (s Store) PruneMissing(keepFolders, keepFiles map[string]bool) error {
+	root := s.DriveRoot()
+	if _, err := os.Stat(root); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if keepFolders == nil {
+		keepFolders = map[string]bool{}
+	}
+	if keepFiles == nil {
+		keepFiles = map[string]bool{}
+	}
+	keepFolders[filepath.Clean(root)] = true
+	folders := []string{}
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		clean := filepath.Clean(path)
+		if entry.IsDir() {
+			if clean != filepath.Clean(root) {
+				if _, err := os.Stat(filepath.Join(path, "meta.toml")); err == nil {
+					folders = append(folders, clean)
+				}
+			}
+			return nil
+		}
+		if !strings.HasSuffix(entry.Name(), ".meta.toml") {
+			return nil
+		}
+		filePath := strings.TrimSuffix(path, ".meta.toml")
+		if keepFiles[filepath.Clean(filePath)] {
+			return nil
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	sort.Slice(folders, func(i, j int) bool { return len(folders[i]) > len(folders[j]) })
+	for _, folder := range folders {
+		if keepFolders[folder] {
+			continue
+		}
+		if err := os.RemoveAll(folder); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 func ReadFolderMeta(path string) (*FolderMeta, error) {
 	var meta FolderMeta
 	if _, err := toml.DecodeFile(filepath.Join(path, "meta.toml"), &meta); err != nil {

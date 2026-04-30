@@ -228,6 +228,32 @@ func (s Store) DeleteContact(id int64) error {
 	return err
 }
 
+func (s Store) PruneMissingContacts(keep map[int64]bool) error {
+	entries, err := os.ReadDir(s.recordsRoot())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		cached, err := s.ReadContactPath(filepath.Join(s.recordsRoot(), entry.Name()))
+		if err != nil {
+			continue
+		}
+		if keep[cached.Meta.RemoteID] {
+			continue
+		}
+		if err := os.RemoveAll(cached.Path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s Store) Counts() (int, error) {
 	contacts, err := s.ListContacts()
 	if err != nil {

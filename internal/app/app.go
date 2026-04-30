@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 
 	helpbubble "charm.land/bubbles/v2/help"
 	tea "charm.land/bubbletea/v2"
@@ -62,6 +63,12 @@ type Model struct {
 	prefsPath  string
 	instance   string
 	client     *api.Client
+	syncState  *backgroundSyncState
+}
+
+type backgroundSyncState struct {
+	mu          sync.Mutex
+	mailSyncing bool
 }
 
 func New(meta BuildInfo) Model {
@@ -111,6 +118,7 @@ func assembleModel(meta BuildInfo, configPath, dataPath, prefsPath string, prefs
 		dataPath:     dataPath,
 		prefsPath:    prefsPath,
 		instance:     loadInstance(configPath),
+		syncState:    &backgroundSyncState{},
 	}
 
 	m.registerScreens()
@@ -136,6 +144,7 @@ func (m Model) Init() tea.Cmd {
 		}
 		cmds = append(cmds, screen.Init())
 	}
+	cmds = append(cmds, m.startupSyncCmd(), m.backgroundMailSyncCmd("boot"), mailAutoSyncTickCmd())
 	return tea.Batch(cmds...)
 }
 

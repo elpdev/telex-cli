@@ -23,12 +23,12 @@ func Run(ctx context.Context, store taskstore.Store, service *tasks.Service) (Re
 	if err := store.StoreWorkspace(workspace, syncedAt); err != nil {
 		return Result{}, err
 	}
-	updatedSince := latestTaskUpdatedSince(store)
-	projects, err := listAllProjects(ctx, service, updatedSince)
+	projects, err := listAllProjects(ctx, service)
 	if err != nil {
 		return Result{}, err
 	}
 	result := Result{}
+	keepProjects := map[int64]bool{}
 	for _, summary := range projects {
 		project, err := service.ShowProject(ctx, summary.ID)
 		if err != nil {
@@ -37,7 +37,11 @@ func Run(ctx context.Context, store taskstore.Store, service *tasks.Service) (Re
 		if err := StoreProject(store, *project, syncedAt); err != nil {
 			return result, err
 		}
+		keepProjects[project.ID] = true
 		result.Projects++
+	}
+	if err := store.PruneMissingProjects(keepProjects); err != nil {
+		return result, err
 	}
 	cachedProjects, err := store.ListProjects()
 	if err != nil {
@@ -53,25 +57,30 @@ func Run(ctx context.Context, store taskstore.Store, service *tasks.Service) (Re
 			return result, err
 		}
 		result.Boards++
-		cards, err := listAllCards(ctx, service, projectID, updatedSince)
+		cards, err := listAllCards(ctx, service, projectID)
 		if err != nil {
 			return result, err
 		}
+		keepCards := map[int64]bool{}
 		for _, card := range cards {
 			if err := store.StoreCard(projectID, card, syncedAt); err != nil {
 				return result, err
 			}
+			keepCards[card.ID] = true
 			result.Cards++
+		}
+		if err := store.PruneMissingCards(projectID, keepCards); err != nil {
+			return result, err
 		}
 	}
 	return result, nil
 }
 
-func listAllProjects(ctx context.Context, service *tasks.Service, updatedSince string) ([]tasks.Project, error) {
+func listAllProjects(ctx context.Context, service *tasks.Service) ([]tasks.Project, error) {
 	page := 1
 	all := []tasks.Project{}
 	for {
-		projects, pagination, err := service.ListProjects(ctx, tasks.ListParams{Page: page, PerPage: 100, UpdatedSince: updatedSince})
+		projects, pagination, err := service.ListProjects(ctx, tasks.ListParams{Page: page, PerPage: 100})
 		if err != nil {
 			return all, err
 		}
@@ -83,11 +92,11 @@ func listAllProjects(ctx context.Context, service *tasks.Service, updatedSince s
 	}
 }
 
-func listAllCards(ctx context.Context, service *tasks.Service, projectID int64, updatedSince string) ([]tasks.Card, error) {
+func listAllCards(ctx context.Context, service *tasks.Service, projectID int64) ([]tasks.Card, error) {
 	page := 1
 	all := []tasks.Card{}
 	for {
-		cards, pagination, err := service.ListCards(ctx, projectID, tasks.ListParams{Page: page, PerPage: 100, UpdatedSince: updatedSince})
+		cards, pagination, err := service.ListCards(ctx, projectID, tasks.ListParams{Page: page, PerPage: 100})
 		if err != nil {
 			return all, err
 		}

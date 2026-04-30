@@ -32,11 +32,21 @@ func Run(ctx context.Context, store drivestore.Store, service *drive.Service, sy
 	if err != nil {
 		return Result{}, err
 	}
-	return syncFolderTree(ctx, store, service, store.DriveRoot(), 0, groupFolders(folders), groupFiles(files), syncMode, time.Now())
+	keepFolders := map[string]bool{}
+	keepFiles := map[string]bool{}
+	result, err := syncFolderTree(ctx, store, service, store.DriveRoot(), 0, groupFolders(folders), groupFiles(files), syncMode, time.Now(), keepFolders, keepFiles)
+	if err != nil {
+		return result, err
+	}
+	if err := store.PruneMissing(keepFolders, keepFiles); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
-func syncFolderTree(ctx context.Context, store drivestore.Store, service *drive.Service, localPath string, parentID int64, foldersByParent map[int64][]drive.Folder, filesByFolder map[int64][]drive.File, syncMode string, syncedAt time.Time) (Result, error) {
+func syncFolderTree(ctx context.Context, store drivestore.Store, service *drive.Service, localPath string, parentID int64, foldersByParent map[int64][]drive.Folder, filesByFolder map[int64][]drive.File, syncMode string, syncedAt time.Time, keepFolders, keepFiles map[string]bool) (Result, error) {
 	result := Result{}
+	keepFolders[localPath] = true
 	for _, file := range filesByFolder[parentID] {
 		var content []byte
 		if syncMode == config.DriveSyncFull && file.Downloadable {
@@ -48,9 +58,11 @@ func syncFolderTree(ctx context.Context, store drivestore.Store, service *drive.
 				result.DownloadedFiles++
 			}
 		}
-		if _, err := store.StoreFile(localPath, file, content, syncedAt); err != nil {
+		filePath, err := store.StoreFile(localPath, file, content, syncedAt)
+		if err != nil {
 			return result, fmt.Errorf("store file %d: %w", file.ID, err)
 		}
+		keepFiles[filePath] = true
 		result.Files++
 	}
 	for _, folder := range foldersByParent[parentID] {
@@ -59,7 +71,8 @@ func syncFolderTree(ctx context.Context, store drivestore.Store, service *drive.
 			return result, fmt.Errorf("store folder %d: %w", folder.ID, err)
 		}
 		result.Folders++
-		child, err := syncFolderTree(ctx, store, service, folderPath, folder.ID, foldersByParent, filesByFolder, syncMode, syncedAt)
+		keepFolders[folderPath] = true
+		child, err := syncFolderTree(ctx, store, service, folderPath, folder.ID, foldersByParent, filesByFolder, syncMode, syncedAt, keepFolders, keepFiles)
 		result.Folders += child.Folders
 		result.Files += child.Files
 		result.DownloadedFiles += child.DownloadedFiles

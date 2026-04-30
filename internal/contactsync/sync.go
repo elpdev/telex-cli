@@ -17,9 +17,9 @@ func Run(ctx context.Context, store contactstore.Store, service *contacts.Servic
 	syncedAt := time.Now()
 	result := &Result{}
 	page := 1
-	updatedSince := latestContactUpdatedSince(store)
+	keep := map[int64]bool{}
 	for {
-		items, pagination, err := service.ListContacts(ctx, contacts.ListContactsParams{ListParams: contacts.ListParams{Page: page, PerPage: 100}, UpdatedSince: updatedSince, Sort: "name"})
+		items, pagination, err := service.ListContacts(ctx, contacts.ListContactsParams{ListParams: contacts.ListParams{Page: page, PerPage: 100}, Sort: "name"})
 		if err != nil {
 			return nil, err
 		}
@@ -31,6 +31,7 @@ func Run(ctx context.Context, store contactstore.Store, service *contacts.Servic
 			if err := store.StoreContact(*full, syncedAt); err != nil {
 				return nil, err
 			}
+			keep[full.ID] = true
 			result.Contacts++
 			if full.Note != nil {
 				result.Notes++
@@ -42,6 +43,9 @@ func Run(ctx context.Context, store contactstore.Store, service *contacts.Servic
 		page++
 	}
 	if err := store.StoreSyncMeta(syncedAt); err != nil {
+		return nil, err
+	}
+	if err := store.PruneMissingContacts(keep); err != nil {
 		return nil, err
 	}
 	return result, nil
