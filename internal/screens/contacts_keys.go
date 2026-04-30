@@ -14,7 +14,7 @@ func DefaultContactsKeyMap() ContactsKeyMap {
 		Sync:           key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "sync contacts")),
 		Search:         key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		Delete:         key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "delete")),
-		EditNote:       key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit note")),
+		EditNote:       key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit contact")),
 		Note:           key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "refresh note")),
 		Communications: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "communications")),
 	}

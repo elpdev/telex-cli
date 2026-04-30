@@ -36,6 +36,21 @@ func (m *Model) deleteContact(ctx context.Context, id int64) error {
 	return contactstore.New(m.dataPath).DeleteContact(id)
 }
 
+func (m *Model) updateContact(ctx context.Context, id int64, input contacts.ContactInput) (*contacts.Contact, error) {
+	service, err := m.contactsService()
+	if err != nil {
+		return nil, err
+	}
+	contact, err := service.UpdateContact(ctx, id, input)
+	if err != nil {
+		return nil, err
+	}
+	if err := contactstore.New(m.dataPath).StoreContact(*contact, time.Now()); err != nil {
+		return nil, err
+	}
+	return contact, nil
+}
+
 func (m *Model) loadContactNote(ctx context.Context, id int64) (*contacts.ContactNote, error) {
 	service, err := m.contactsService()
 	if err != nil {

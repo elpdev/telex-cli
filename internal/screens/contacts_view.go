@@ -98,7 +98,7 @@ func (c Contacts) detailView(width, height int) string {
 			b.WriteString(fmt.Sprintf("  %s · %s · %s\n", item.OccurredAt.Format("2006-01-02"), item.Direction, summary))
 		}
 	} else {
-		b.WriteString("\nPress e to edit note, c to load communications, or N to refresh note.\n")
+		b.WriteString("\nPress e to edit contact, c to load communications, or N to refresh note.\n")
 	}
 	body := b.String()
 	c.detailViewport.SetWidth(width)

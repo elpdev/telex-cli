@@ -10,6 +10,7 @@ import (
 )
 
 type ContactsSyncFunc func(context.Context) (ContactsSyncResult, error)
+type UpdateContactFunc func(context.Context, int64, contacts.ContactInput) (*contacts.Contact, error)
 type DeleteContactFunc func(context.Context, int64) error
 type LoadContactNoteFunc func(context.Context, int64) (*contacts.ContactNote, error)
 type UpdateContactNoteFunc func(context.Context, int64, contacts.ContactNoteInput) (*contacts.ContactNote, error)
@@ -23,6 +24,7 @@ type ContactsSyncResult struct {
 type Contacts struct {
 	store              contactstore.Store
 	sync               ContactsSyncFunc
+	update             UpdateContactFunc
 	delete             DeleteContactFunc
 	loadNote           LoadContactNoteFunc
 	updateNote         UpdateContactNoteFunc
