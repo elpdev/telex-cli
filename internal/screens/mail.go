@@ -22,6 +22,11 @@ func NewAggregateMailWithActions(store mailstore.Store, title, box string, unrea
 	return m
 }
 
+func (m Mail) WithStarredOnly() Mail {
+	m.scope.StarredOnly = true
+	return m
+}
+
 func NewMailWithActions(store mailstore.Store, toggleRead ToggleReadFunc, toggleStar ToggleStarFunc, archive MessageActionFunc, trash MessageActionFunc, restore MessageActionFunc, sync SyncFunc, sendDraft SendDraftFunc, updateDraft UpdateDraftFunc, deleteDraft DeleteDraftFunc, forward ForwardFunc, download DownloadAttachmentFunc, remoteSearch ...RemoteSearchFunc) Mail {
 	var search RemoteSearchFunc
 	if len(remoteSearch) > 0 {

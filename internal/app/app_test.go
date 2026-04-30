@@ -257,7 +257,7 @@ func TestMailAdminScreenRegisteredInNavigationAndCommands(t *testing.T) {
 
 func TestAggregateMailScreensRegisteredWithMailSidebar(t *testing.T) {
 	model := New(BuildInfo{Version: "test", Commit: "none", Date: "unknown"})
-	for _, id := range []string{"mail-unread", "mail-inbox", "mail-sent", "mail-drafts", "mail-outbox", "mail-junk", "mail-archive", "mail-trash"} {
+	for _, id := range []string{"mail-unread", "mail-starred", "mail-inbox", "mail-sent", "mail-drafts", "mail-outbox", "mail-junk", "mail-archive", "mail-trash"} {
 		if _, ok := model.screens[id]; !ok {
 			t.Fatalf("expected %s screen", id)
 		}
@@ -275,6 +275,7 @@ func TestAggregateMailScreensRegisteredWithMailSidebar(t *testing.T) {
 	ids := model.sidebarScreenIDs()
 	assertContainsScreenID(t, ids, "home")
 	assertContainsScreenID(t, ids, "mail-unread")
+	assertContainsScreenID(t, ids, "mail-starred")
 	assertContainsScreenID(t, ids, "mail-trash")
 	assertContainsScreenID(t, ids, "mail-admin")
 }

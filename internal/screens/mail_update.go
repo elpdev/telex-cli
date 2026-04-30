@@ -142,7 +142,14 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			m.status = fmt.Sprintf("Could not update star state: %v", msg.err)
 			return m, nil
 		}
-		m.updateMessageByPath(msg.path, func(message *mailstore.CachedMessage) { message.Meta.Starred = msg.starred })
+		if m.scope.StarredOnly && !msg.starred {
+			m.removeMessageByPath(msg.path)
+			m.mode = mailModeList
+			m.resetDetailViewport()
+			m.clampSelection()
+		} else {
+			m.updateMessageByPath(msg.path, func(message *mailstore.CachedMessage) { message.Meta.Starred = msg.starred })
+		}
 		if msg.starred {
 			m.status = "Starred"
 		} else {

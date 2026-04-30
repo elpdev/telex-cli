@@ -64,7 +64,9 @@ func (m Mail) listView(width, height int) string {
 	b.WriteString("\n")
 	if len(m.messages) == 0 {
 		if m.scope.Aggregate {
-			if m.scope.UnreadOnly {
+			if m.scope.StarredOnly {
+				b.WriteString("No starred cached messages. Run `telex sync` to refresh local mail.\n")
+			} else if m.scope.UnreadOnly {
 				b.WriteString("No unread cached inbox messages. Run `telex sync` to refresh local mail.\n")
 			} else {
 				b.WriteString(fmt.Sprintf("No cached %s messages across mailboxes. Run `telex sync`.\n", box))

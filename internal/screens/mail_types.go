@@ -94,10 +94,11 @@ type Mail struct {
 }
 
 type MailScope struct {
-	Title      string
-	Box        string
-	UnreadOnly bool
-	Aggregate  bool
+	Title       string
+	Box         string
+	UnreadOnly  bool
+	StarredOnly bool
+	Aggregate   bool
 }
 
 type MailKeyMap struct {

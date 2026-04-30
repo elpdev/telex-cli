@@ -17,15 +17,17 @@ import (
 var errMailSyncAlreadyRunning = errors.New("mail sync already running")
 
 type aggregateMailScreen struct {
-	id         string
-	title      string
-	box        string
-	unreadOnly bool
+	id          string
+	title       string
+	box         string
+	unreadOnly  bool
+	starredOnly bool
 }
 
 func aggregateMailScreens() []aggregateMailScreen {
 	return []aggregateMailScreen{
 		{id: "mail-unread", title: "Unread", box: "inbox", unreadOnly: true},
+		{id: "mail-starred", title: "Starred", box: "starred", starredOnly: true},
 		{id: "mail-inbox", title: "Inbox", box: "inbox"},
 		{id: "mail-sent", title: "Sent", box: "sent"},
 		{id: "mail-drafts", title: "Drafts", box: "drafts"},
@@ -41,7 +43,11 @@ func (m *Model) buildMailScreen() screens.Mail {
 }
 
 func (m *Model) buildAggregateMailScreen(scope aggregateMailScreen) screens.Mail {
-	return screens.NewAggregateMailWithActions(mailstore.New(m.dataPath), scope.title, scope.box, scope.unreadOnly, m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail).WithConversationActions(m.conversationTimeline, m.conversationBody).WithJunkActions(m.junkMessage, m.notJunkMessage).WithSenderPolicyActions(m.blockSender, m.unblockSender, m.blockDomain, m.unblockDomain, m.trustSender, m.untrustSender)
+	mailScreen := screens.NewAggregateMailWithActions(mailstore.New(m.dataPath), scope.title, scope.box, scope.unreadOnly, m.toggleMessageRead, m.toggleMessageStar, m.archiveMessage, m.trashMessage, m.restoreMessage, m.syncMail, m.sendDraft, m.updateDraft, m.deleteDraft, m.forwardMessage, m.downloadAttachment, m.searchMail)
+	if scope.starredOnly {
+		mailScreen = mailScreen.WithStarredOnly()
+	}
+	return mailScreen.WithConversationActions(m.conversationTimeline, m.conversationBody).WithJunkActions(m.junkMessage, m.notJunkMessage).WithSenderPolicyActions(m.blockSender, m.unblockSender, m.blockDomain, m.unblockDomain, m.trustSender, m.untrustSender)
 }
 
 func (m *Model) toggleMessageStar(ctx context.Context, id int64, starred bool) error {

@@ -83,7 +83,7 @@ func (m Model) sidebarItems() []sidebar.Item {
 
 func (m Model) sidebarScreenIDs() []string {
 	if isMailSection(m.activeScreen) {
-		ids := []string{"home", "mail-unread", "mail-inbox", "mail-sent", "mail-drafts", "mail-outbox", "mail-junk", "mail-archive", "mail-trash", "mail", "mail-admin"}
+		ids := []string{"home", "mail-unread", "mail-starred", "mail-inbox", "mail-sent", "mail-drafts", "mail-outbox", "mail-junk", "mail-archive", "mail-trash", "mail", "mail-admin"}
 		out := make([]string, 0, len(ids))
 		for _, id := range ids {
 			if _, ok := m.screens[id]; ok {

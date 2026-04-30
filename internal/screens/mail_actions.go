@@ -107,7 +107,7 @@ func (m Mail) moveSelectedMessage(action string) (Screen, tea.Cmd) {
 		m.status = "Remote search results are read-only; run sync to cache actions"
 		return m, nil
 	}
-	fromBox := m.currentBox()
+	fromBox := m.selectedMessageBox()
 	moveRemote := m.archive
 	toBox := "archive"
 	status := "Archiving..."
@@ -178,4 +178,11 @@ func (m Mail) moveSelectedMessage(action string) (Screen, tea.Cmd) {
 		}
 		return messageMovedMsg{index: index, path: message.Path, action: action}
 	}
+}
+
+func (m Mail) selectedMessageBox() string {
+	if m.scope.StarredOnly && len(m.messages) > 0 && m.messageIndex >= 0 && m.messageIndex < len(m.messages) {
+		return m.messages[m.messageIndex].Meta.Mailbox
+	}
+	return m.currentBox()
 }

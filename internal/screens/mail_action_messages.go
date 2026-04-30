@@ -28,6 +28,9 @@ type MailSelection struct {
 func (m Mail) Selection() MailSelection {
 	box := m.currentBox()
 	sel := MailSelection{Box: box, IsDraft: box == "drafts"}
+	if m.scope.StarredOnly {
+		sel.BoxLikes = "message"
+	}
 	if box == "inbox" || box == "junk" || box == "archive" || box == "trash" {
 		sel.BoxLikes = "message"
 	} else if box == "drafts" {
@@ -37,6 +40,9 @@ func (m Mail) Selection() MailSelection {
 		return sel
 	}
 	msg := m.messages[m.messageIndex]
+	if m.scope.StarredOnly {
+		sel.Box = msg.Meta.Mailbox
+	}
 	sel.Subject = msg.Meta.Subject
 	sel.HasItem = true
 	return sel
@@ -71,7 +77,7 @@ func (m Mail) handleAction(action string) (Screen, tea.Cmd) {
 	case "attach":
 		return m.startAttachFile()
 	case "reply":
-		if m.currentBox() != "inbox" || len(m.messages) == 0 {
+		if m.selectedMessageBox() != "inbox" || len(m.messages) == 0 {
 			return m, nil
 		}
 		return m.editReplyDraft()
@@ -81,22 +87,22 @@ func (m Mail) handleAction(action string) (Screen, tea.Cmd) {
 		}
 		return m.startForward()
 	case "archive":
-		if m.currentBox() != "inbox" || len(m.messages) == 0 {
+		if m.selectedMessageBox() != "inbox" || len(m.messages) == 0 {
 			return m, nil
 		}
 		return m.moveSelectedMessage("archive")
 	case "junk":
-		if m.currentBox() != "inbox" || len(m.messages) == 0 {
+		if m.selectedMessageBox() != "inbox" || len(m.messages) == 0 {
 			return m, nil
 		}
 		return m.moveSelectedMessage("junk")
 	case "not-junk":
-		if m.currentBox() != "junk" || len(m.messages) == 0 {
+		if m.selectedMessageBox() != "junk" || len(m.messages) == 0 {
 			return m, nil
 		}
 		return m.moveSelectedMessage("not-junk")
 	case "trash":
-		if m.currentBox() != "inbox" || len(m.messages) == 0 {
+		if m.selectedMessageBox() != "inbox" || len(m.messages) == 0 {
 			return m, nil
 		}
 		return m.requestConfirm("trash", "Move this message to trash?")

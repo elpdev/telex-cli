@@ -192,6 +192,9 @@ func (m Mail) currentBoxSupportsMessageActions() bool {
 	if m.remoteResults {
 		return false
 	}
+	if m.scope.StarredOnly {
+		return true
+	}
 	switch m.currentBox() {
 	case "inbox", "junk", "archive", "trash":
 		return true
@@ -201,6 +204,9 @@ func (m Mail) currentBoxSupportsMessageActions() bool {
 }
 
 func (m Mail) currentBoxSupportsRemoteSearch() bool {
+	if m.scope.StarredOnly {
+		return false
+	}
 	switch m.currentBox() {
 	case "inbox", "junk", "archive", "trash":
 		return true

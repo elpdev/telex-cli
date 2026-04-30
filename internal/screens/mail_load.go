@@ -58,6 +58,14 @@ func (m Mail) loadAggregate(mailboxes []mailstore.MailboxMeta) ([]mailstore.Cach
 		if err != nil {
 			return nil, err
 		}
+		if m.scope.StarredOnly {
+			cached, err := listStarredMessages(mailboxPath)
+			if err != nil {
+				return nil, err
+			}
+			messages = append(messages, cached...)
+			continue
+		}
 		cached, err := listCachedBox(mailboxPath, box)
 		if err != nil {
 			return nil, err
@@ -72,6 +80,22 @@ func (m Mail) loadAggregate(mailboxes []mailstore.MailboxMeta) ([]mailstore.Cach
 	sort.Slice(messages, func(i, j int) bool {
 		return messages[i].Meta.ReceivedAt.After(messages[j].Meta.ReceivedAt)
 	})
+	return messages, nil
+}
+
+func listStarredMessages(mailboxPath string) ([]mailstore.CachedMessage, error) {
+	messages := []mailstore.CachedMessage{}
+	for _, box := range []string{"inbox", "junk", "archive", "trash"} {
+		cached, err := mailstore.ListMessages(mailboxPath, box)
+		if err != nil {
+			return nil, err
+		}
+		for _, message := range cached {
+			if message.Meta.Starred {
+				messages = append(messages, message)
+			}
+		}
+	}
 	return messages, nil
 }
 

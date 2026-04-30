@@ -188,6 +188,79 @@ func TestAggregateDraftsLoadsAllMailboxDrafts(t *testing.T) {
 	}
 }
 
+func TestAggregateStarredMailLoadsAllStarredMessages(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	first := testScreenMailbox(12, 34, "example.com", "hello", "hello@example.com")
+	second := testScreenMailbox(13, 35, "agent.test", "support", "support@agent.test")
+	for _, mailbox := range []mailstore.MailboxMeta{first, second} {
+		if err := store.CreateMailbox(mailbox); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)
+	if _, err := store.StoreInboxMessage(first, mail.Message{ID: 1, Subject: "Unstarred Subject", FromAddress: "plain@example.net", SystemState: "inbox", Starred: false, ReceivedAt: now}, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StoreInboxMessage(first, mail.Message{ID: 2, Subject: "First Starred", FromAddress: "first@example.net", SystemState: "inbox", Starred: true, ReceivedAt: now.Add(-time.Hour)}, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StoreInboxMessage(second, mail.Message{ID: 3, Subject: "Second Starred", FromAddress: "second@example.net", SystemState: "inbox", Starred: true, ReceivedAt: now.Add(time.Hour)}, nil, now); err != nil {
+		t.Fatal(err)
+	}
+
+	screen := NewAggregateMail(store, "Starred", "starred", false).WithStarredOnly()
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	view := stripScreenANSI(screen.View(100, 20))
+
+	if !strings.Contains(view, "Mail / Starred") || !strings.Contains(view, "First Starred") || !strings.Contains(view, "Second Starred") {
+		t.Fatalf("view = %q", view)
+	}
+	if strings.Contains(view, "Unstarred Subject") {
+		t.Fatalf("view contains unstarred message: %q", view)
+	}
+}
+
+func TestAggregateStarredMailRemovesUnstarredMessage(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	mailbox := testScreenMailbox(12, 34, "example.com", "hello", "hello@example.com")
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)
+	path, err := store.StoreInboxMessage(mailbox, mail.Message{ID: 123, Subject: "Starred", FromAddress: "sender@example.net", SystemState: "inbox", Starred: true, ReceivedAt: now}, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	screen := NewAggregateMailWithActions(store, "Starred", "starred", false, nil, func(ctx context.Context, id int64, starred bool) error {
+		if id != 123 || starred {
+			t.Fatalf("toggle got id=%d starred=%t", id, starred)
+		}
+		return nil
+	}, nil, nil, nil, nil, nil, nil, nil, nil, nil).WithStarredOnly()
+	updated, _ := screen.Update(screen.Init()())
+	screen = updated.(Mail)
+	updated, cmd := screen.Update(tea.KeyPressMsg(tea.Key{Text: "s", Code: 's'}))
+	screen = updated.(Mail)
+	if cmd == nil {
+		t.Fatal("expected toggle command")
+	}
+	updated, _ = screen.Update(cmd())
+	screen = updated.(Mail)
+
+	if len(screen.messages) != 0 {
+		t.Fatalf("expected message to be removed, got %d", len(screen.messages))
+	}
+	readBack, err := mailstore.ReadCachedMessage(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readBack.Meta.Starred {
+		t.Fatal("expected cached metadata to be unstarred")
+	}
+}
+
 func TestAggregateComposeOpensFromPicker(t *testing.T) {
 	store := mailstore.New(t.TempDir())
 	first := testScreenMailbox(12, 34, "example.com", "hello", "hello@example.com")
