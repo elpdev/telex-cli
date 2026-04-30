@@ -103,6 +103,10 @@ func MeaningfulPlainText(value string) bool {
 }
 
 func looksLikeCSSDump(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if looksLikeMinifiedCSS(trimmed) {
+		return true
+	}
 	lines := strings.Split(value, "\n")
 	nonEmpty := 0
 	cssLines := 0
@@ -120,6 +124,18 @@ func looksLikeCSSDump(value string) bool {
 		}
 	}
 	return nonEmpty >= 8 && cssLines*100/nonEmpty >= 60
+}
+
+func looksLikeMinifiedCSS(value string) bool {
+	if len(value) < 500 || strings.Contains(value, "\n") {
+		return false
+	}
+	if !strings.HasPrefix(value, ".") && !strings.HasPrefix(value, "#") && !strings.HasPrefix(value, "@") {
+		return false
+	}
+	braces := strings.Count(value, "{") + strings.Count(value, "}")
+	semicolons := strings.Count(value, ";")
+	return braces >= 20 && semicolons >= 20
 }
 
 func HTMLToMarkdown(htmlBody string) (string, error) {
