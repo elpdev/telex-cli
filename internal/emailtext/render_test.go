@@ -86,6 +86,19 @@ func TestRenderRejectsCSSHeavyPlainTextAndUsesHTML(t *testing.T) {
 	}
 }
 
+func TestRenderRejectsMinifiedCSSPlainTextAndUsesHTML(t *testing.T) {
+	rule := ".custom-hzv07h{margin:20px;font-family:system-ui;color:#333;line-height:23px;padding:20px;}"
+	plain := strings.Repeat(rule, 12)
+	rendered, err := Render(plain, `<html><head><style>.bad{display:none;}</style></head><body><p>Apple receipt body</p></body></html>`, 80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered = stripANSI(rendered)
+	if strings.Contains(rendered, ".custom-hzv07h") || !strings.Contains(rendered, "Apple receipt body") {
+		t.Fatalf("rendered = %q", rendered)
+	}
+}
+
 func TestHTMLToMarkdownFlattensEmailTables(t *testing.T) {
 	markdown, err := HTMLToMarkdown(`<table><tr><td><h1>Title</h1></td></tr><tr><td><p>First cell</p></td><td><p>Second cell</p></td></tr></table>`)
 	if err != nil {
