@@ -44,7 +44,7 @@ func (n Notes) createCmd() tea.Cmd {
 	}
 	folderID := n.currentFolderID()
 	return func() tea.Msg {
-		input, err := editNoteTemplate(defaultTitle, "")
+		input, err := editNoteTemplate(defaultTitle, "", folderID)
 		if err != nil {
 			return noteActionFinishedMsg{err: err}
 		}
@@ -76,14 +76,11 @@ func (n Notes) editCachedCmd(cached notestore.CachedNote) tea.Cmd {
 	}
 	folderID := n.currentFolderID()
 	return func() tea.Msg {
-		input, err := editNoteTemplate(cached.Meta.Title, cached.Body)
+		input, err := editNoteTemplate(cached.Meta.Title, cached.Body, cached.Meta.FolderID)
 		if err != nil {
 			return noteActionFinishedMsg{err: err}
 		}
-		if cached.Meta.FolderID > 0 {
-			input.FolderID = &cached.Meta.FolderID
-		}
-		if input.Title == cached.Meta.Title && input.Body == cached.Body && sameInt64Ptr(input.FolderID, cached.Meta.FolderID) {
+		if input.Title == cached.Meta.Title && input.Body == renderNoteDocument(cached.Meta.Title, cached.Body, cached.Meta.FolderID) && sameInt64Ptr(input.FolderID, cached.Meta.FolderID) {
 			return noteActionFinishedMsg{status: "No changes to save"}
 		}
 		updated, err := n.update(context.Background(), cached.Meta.RemoteID, input)

@@ -80,6 +80,7 @@ type Card struct {
 
 type ProjectInput struct {
 	Name string
+	Body string
 }
 
 type BoardInput struct {

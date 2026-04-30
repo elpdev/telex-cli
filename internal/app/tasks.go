@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/elpdev/telex-cli/internal/frontmatter"
 	"github.com/elpdev/telex-cli/internal/screens"
 	"github.com/elpdev/telex-cli/internal/tasks"
 	"github.com/elpdev/telex-cli/internal/taskssync"
@@ -47,7 +49,7 @@ func (m *Model) createTaskCard(ctx context.Context, projectID int64, input tasks
 	if err := taskstore.New(m.dataPath).StoreCard(projectID, *card, time.Now()); err != nil {
 		return nil, err
 	}
-	if err := addTaskCardToTodo(ctx, taskstore.New(m.dataPath), service, projectID, *card); err != nil {
+	if err := addTaskCardToColumn(ctx, taskstore.New(m.dataPath), service, projectID, *card, taskCardColumnFromBody(input.Body, "Todo")); err != nil {
 		return nil, err
 	}
 	return card, nil
@@ -68,6 +70,11 @@ func (m *Model) updateTaskCard(ctx context.Context, projectID, id int64, input t
 	}
 	if err := replaceTaskCardBoardLink(ctx, taskstore.New(m.dataPath), service, projectID, oldFilename, *card); err != nil {
 		return nil, err
+	}
+	if column := taskCardColumnFromBody(input.Body, ""); column != "" {
+		if err := moveTaskCardToColumn(ctx, taskstore.New(m.dataPath), service, projectID, card.Filename, column); err != nil {
+			return nil, err
+		}
 	}
 	if err := taskstore.New(m.dataPath).StoreCard(projectID, *card, time.Now()); err != nil {
 		return nil, err
@@ -104,12 +111,15 @@ func storeTaskProject(store taskstore.Store, project tasks.Project, syncedAt tim
 	return taskssync.StoreProject(store, project, syncedAt)
 }
 
-func addTaskCardToTodo(ctx context.Context, store taskstore.Store, service *tasks.Service, projectID int64, card tasks.Card) error {
+func addTaskCardToColumn(ctx context.Context, store taskstore.Store, service *tasks.Service, projectID int64, card tasks.Card, column string) error {
+	if strings.TrimSpace(column) == "" {
+		column = "Todo"
+	}
 	board, err := service.ShowBoard(ctx, projectID)
 	if err != nil {
 		return err
 	}
-	updatedBody := tasks.AddCardToColumn(board.Body, "Todo", "cards/"+card.Filename)
+	updatedBody := tasks.AddCardToColumn(board.Body, column, "cards/"+card.Filename)
 	if updatedBody == board.Body {
 		return store.StoreBoard(projectID, *board, time.Now())
 	}
@@ -118,6 +128,18 @@ func addTaskCardToTodo(ctx context.Context, store taskstore.Store, service *task
 		return err
 	}
 	return store.StoreBoard(projectID, *updated, time.Now())
+}
+
+func taskCardColumnFromBody(body, fallback string) string {
+	doc, err := frontmatter.Parse(body)
+	if err != nil {
+		return fallback
+	}
+	column := strings.TrimSpace(doc.Fields["column"])
+	if column == "" {
+		return fallback
+	}
+	return column
 }
 
 func replaceTaskCardBoardLink(ctx context.Context, store taskstore.Store, service *tasks.Service, projectID int64, oldFilename string, card tasks.Card) error {
