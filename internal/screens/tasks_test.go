@@ -131,6 +131,30 @@ func TestTasksEditorCommandUsesNotesOverride(t *testing.T) {
 	}
 }
 
+func TestParseTaskCardTemplateFrontmatter(t *testing.T) {
+	document := "---\ntitle: Homepage\ncolumn: Doing\n---\n\n# Body"
+	input := parseTaskCardTemplate(document)
+	if input.Card.Title != "Homepage" || input.Card.Body != document || input.Column != "Doing" {
+		t.Fatalf("input = %#v", input)
+	}
+}
+
+func TestParseTaskCardTemplateLegacy(t *testing.T) {
+	document := "Title: Homepage\n\n# Body"
+	input := parseTaskCardTemplate(document)
+	if input.Card.Title != "Homepage" || input.Card.Body != document || input.Column != "" {
+		t.Fatalf("input = %#v", input)
+	}
+}
+
+func TestParseTaskProjectDocumentFrontmatter(t *testing.T) {
+	document := "---\nname: Website\n---\n"
+	input := parseTaskProjectDocument(document)
+	if input.Name != "Website" || input.Body != document {
+		t.Fatalf("input = %#v", input)
+	}
+}
+
 func testTasksStore(t *testing.T) taskstore.Store {
 	t.Helper()
 	store := taskstore.New(t.TempDir())

@@ -131,7 +131,8 @@ func TestNotesScreenSyncRefreshesList(t *testing.T) {
 
 func TestNotesScreenCreateAndEditInvokeCallbacks(t *testing.T) {
 	t.Setenv("EDITOR", "false")
-	t.Setenv("TELEX_NOTES_EDITOR", testEditorScript(t, "Title: Edited\n\nEdited body"))
+	editedDocument := "---\ntitle: Edited\nfolder_id: 1\n---\n\nEdited body"
+	t.Setenv("TELEX_NOTES_EDITOR", testEditorScript(t, editedDocument))
 	store := testNotesStore(t)
 	rootID := int64(1)
 	var created notes.NoteInput
@@ -157,14 +158,14 @@ func TestNotesScreenCreateAndEditInvokeCallbacks(t *testing.T) {
 	screen = loaded.(Notes)
 	loaded, _ = screen.Update(cmd())
 	screen = loaded.(Notes)
-	if created.Title != "Edited" || created.Body != "Edited body" || created.FolderID == nil || *created.FolderID != rootID {
+	if created.Title != "Edited" || created.Body != editedDocument || created.FolderID == nil || *created.FolderID != rootID {
 		t.Fatalf("created = %#v", created)
 	}
 	screen.index = 1
 	loaded, cmd = screen.Update(tea.KeyPressMsg(tea.Key{Text: "e", Code: 'e'}))
 	screen = loaded.(Notes)
 	loaded, _ = screen.Update(cmd())
-	if updated.Title != "Edited" || updated.Body != "Edited body" {
+	if updated.Title != "Edited" || updated.Body != editedDocument {
 		t.Fatalf("updated = %#v", updated)
 	}
 }
@@ -233,8 +234,15 @@ func TestNotesScreenSmallTerminalDoesNotPanic(t *testing.T) {
 }
 
 func TestParseNoteTemplate(t *testing.T) {
-	input := parseNoteTemplate("Title: Plan\n\n# Body")
-	if input.Title != "Plan" || input.Body != "# Body" {
+	input := parseNoteTemplate("---\ntitle: Plan\nfolder_id: 2\n---\n\n# Body", 1)
+	if input.Title != "Plan" || input.Body != "---\ntitle: Plan\nfolder_id: 2\n---\n\n# Body" || input.FolderID == nil || *input.FolderID != 2 {
+		t.Fatalf("input = %#v", input)
+	}
+}
+
+func TestParseLegacyNoteTemplate(t *testing.T) {
+	input := parseNoteTemplate("Title: Plan\n\n# Body", 1)
+	if input.Title != "Plan" || input.Body != "Title: Plan\n\n# Body" || input.FolderID == nil || *input.FolderID != 1 {
 		t.Fatalf("input = %#v", input)
 	}
 }

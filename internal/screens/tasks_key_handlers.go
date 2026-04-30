@@ -24,7 +24,7 @@ func (t Tasks) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			return t, nil
 		}
 		if key.Matches(msg, t.keys.Edit) {
-			return t, t.editCachedCardCmd(*t.detail)
+			return t, t.editCachedCardCmd(*t.detail, "")
 		}
 		if key.Matches(msg, t.keys.Copy) {
 			return t.copyCardBody()

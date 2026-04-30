@@ -81,11 +81,11 @@ func (t Tasks) createCardCmd() tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		input, err := editTaskCardTemplate(defaultTitle, "")
+		input, err := editTaskCardTemplate(defaultTitle, "", "Todo")
 		if err != nil {
 			return taskActionFinishedMsg{err: err}
 		}
-		card, err := t.createCard(context.Background(), projectID, input)
+		card, err := t.createCard(context.Background(), projectID, input.Card)
 		if err != nil {
 			return taskActionFinishedMsg{err: err}
 		}
@@ -100,21 +100,25 @@ func (t Tasks) editCardCmd() tea.Cmd {
 		t.status = "Select a card to edit"
 		return nil
 	}
-	return t.editCachedCardCmd(*row.Card)
+	column := ""
+	if row.Column != nil {
+		column = row.Column.Name
+	}
+	return t.editCachedCardCmd(*row.Card, column)
 }
 
-func (t Tasks) editCachedCardCmd(cached taskstore.CachedCard) tea.Cmd {
+func (t Tasks) editCachedCardCmd(cached taskstore.CachedCard, column string) tea.Cmd {
 	if t.updateCard == nil {
 		t.status = "Edit card is not configured"
 		return nil
 	}
 	projectID := cached.Meta.ProjectID
 	return func() tea.Msg {
-		input, err := editTaskCardTemplate(cached.Meta.Title, cached.Body)
+		input, err := editTaskCardTemplate(cached.Meta.Title, cached.Body, column)
 		if err != nil {
 			return taskActionFinishedMsg{err: err}
 		}
-		card, err := t.updateCard(context.Background(), projectID, cached.Meta.RemoteID, input)
+		card, err := t.updateCard(context.Background(), projectID, cached.Meta.RemoteID, input.Card)
 		if err != nil {
 			return taskActionFinishedMsg{err: err}
 		}

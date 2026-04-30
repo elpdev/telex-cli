@@ -156,7 +156,11 @@ func listQuery(params ListParams) url.Values {
 }
 
 func projectInputMap(input ProjectInput) map[string]any {
-	return map[string]any{"name": input.Name}
+	payload := map[string]any{"name": input.Name}
+	if input.Body != "" {
+		payload["body"] = input.Body
+	}
+	return payload
 }
 
 func cardInputMap(input CardInput) map[string]any {
