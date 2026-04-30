@@ -71,30 +71,38 @@ func (c Calendar) handleAction(action string) (Screen, tea.Cmd) {
 	case "today":
 		c.jumpToTodayRange()
 		c.loading = true
-		c.status = "Showing " + c.rangeLabel()
+		c.status = c.rangeStatusLabel()
 		return c, c.loadCmd()
 	case "previous-range":
 		c.shiftRange(-1)
 		c.loading = true
-		c.status = "Showing " + c.rangeLabel()
+		c.status = c.rangeStatusLabel()
 		return c, c.loadCmd()
 	case "next-range":
 		c.shiftRange(1)
 		c.loading = true
-		c.status = "Showing " + c.rangeLabel()
+		c.status = c.rangeStatusLabel()
 		return c, c.loadCmd()
 	case "toggle-view":
-		c.toggleMode()
+		c.cycleMode()
+		if c.mode == calendarViewWeek || c.mode == calendarViewMonth {
+			c.loading = true
+			return c, c.loadCmd()
+		}
 		return c, nil
 	case "view-agenda":
-		c.mode = calendarViewAgenda
-		c.detail = false
-		c.status = "Showing agenda"
+		c.setMode(calendarViewAgenda)
 		return c, nil
+	case "view-week":
+		c.setMode(calendarViewWeek)
+		c.loading = true
+		return c, c.loadCmd()
+	case "view-month":
+		c.setMode(calendarViewMonth)
+		c.loading = true
+		return c, c.loadCmd()
 	case "view-calendars":
-		c.mode = calendarViewCalendars
-		c.detail = false
-		c.status = "Showing calendars"
+		c.setMode(calendarViewCalendars)
 		return c, nil
 	case "new-calendar":
 		c.mode = calendarViewCalendars

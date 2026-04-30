@@ -34,10 +34,21 @@ func (c Calendar) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		}
 		return c, nil
 	}
+	if key.Matches(msg, c.keys.ViewAgenda) {
+		return c.handleAction("view-agenda")
+	}
+	if key.Matches(msg, c.keys.ViewWeek) {
+		return c.handleAction("view-week")
+	}
+	if key.Matches(msg, c.keys.ViewMonth) {
+		return c.handleAction("view-month")
+	}
+	if key.Matches(msg, c.keys.ViewCalendars) {
+		return c.handleAction("view-calendars")
+	}
 	if c.mode == calendarViewCalendars {
 		if key.Matches(msg, c.keys.Back) {
-			c.mode = calendarViewAgenda
-			c.status = "Showing agenda"
+			c.setMode(calendarViewAgenda)
 			return c, nil
 		}
 		c.ensureCalendarList()
@@ -49,21 +60,58 @@ func (c Calendar) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 			return c, cmd
 		}
 	}
-	if key.Matches(msg, c.keys.Up) && c.mode == calendarViewAgenda && c.index > 0 {
-		c.index--
-		return c, nil
-	}
-	if key.Matches(msg, c.keys.Down) && c.mode == calendarViewAgenda && c.index < len(c.items)-1 {
-		c.index++
-		return c, nil
-	}
-	if key.Matches(msg, c.keys.Open) && c.mode == calendarViewAgenda && len(c.items) > 0 {
-		c.detail = true
-		return c, nil
-	}
 	if key.Matches(msg, c.keys.Back) && c.detail {
 		c.detail = false
 		return c, nil
+	}
+	switch c.mode {
+	case calendarViewAgenda:
+		if key.Matches(msg, c.keys.Up) && c.index > 0 {
+			c.index--
+			return c, nil
+		}
+		if key.Matches(msg, c.keys.Down) && c.index < len(c.items)-1 {
+			c.index++
+			return c, nil
+		}
+		if key.Matches(msg, c.keys.Open) && len(c.items) > 0 {
+			c.detail = true
+			return c, nil
+		}
+	case calendarViewMonth:
+		if key.Matches(msg, c.keys.Up) {
+			return c.handleGridShift(-7)
+		}
+		if key.Matches(msg, c.keys.Down) {
+			return c.handleGridShift(7)
+		}
+		if key.Matches(msg, c.keys.Left) {
+			return c.handleGridShift(-1)
+		}
+		if key.Matches(msg, c.keys.Right) {
+			return c.handleGridShift(1)
+		}
+		if key.Matches(msg, c.keys.Open) {
+			return c.openSelectedDay()
+		}
+	case calendarViewWeek:
+		if key.Matches(msg, c.keys.Up) {
+			c.shiftHour(-1)
+			return c, nil
+		}
+		if key.Matches(msg, c.keys.Down) {
+			c.shiftHour(1)
+			return c, nil
+		}
+		if key.Matches(msg, c.keys.Left) {
+			return c.handleGridShift(-1)
+		}
+		if key.Matches(msg, c.keys.Right) {
+			return c.handleGridShift(1)
+		}
+		if key.Matches(msg, c.keys.Open) {
+			return c.openSelectedSlot()
+		}
 	}
 	if key.Matches(msg, c.keys.Refresh) {
 		c.loading = true
@@ -75,10 +123,10 @@ func (c Calendar) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if key.Matches(msg, c.keys.Today) {
 		return c.handleAction("today")
 	}
-	if key.Matches(msg, c.keys.Prev) && c.mode == calendarViewAgenda && !c.detail {
+	if key.Matches(msg, c.keys.Prev) && c.modeAllowsRangeShift() && !c.detail {
 		return c.handleAction("previous-range")
 	}
-	if key.Matches(msg, c.keys.Next) && c.mode == calendarViewAgenda && !c.detail {
+	if key.Matches(msg, c.keys.Next) && c.modeAllowsRangeShift() && !c.detail {
 		return c.handleAction("next-range")
 	}
 	if key.Matches(msg, c.keys.View) {
@@ -102,10 +150,10 @@ func (c Calendar) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 	if key.Matches(msg, c.keys.Import) && c.mode == calendarViewCalendars {
 		return c.handleAction("import-ics")
 	}
-	if key.Matches(msg, c.keys.Filter) && c.mode == calendarViewAgenda && !c.detail {
+	if key.Matches(msg, c.keys.Filter) && c.modeAllowsFilter() && !c.detail {
 		return c.handleAction("filter")
 	}
-	if key.Matches(msg, c.keys.Clear) && c.mode == calendarViewAgenda && c.filter.active() {
+	if key.Matches(msg, c.keys.Clear) && c.modeAllowsFilter() && c.filter.active() {
 		return c.handleAction("clear-filter")
 	}
 	return c, nil

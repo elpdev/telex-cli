@@ -29,6 +29,8 @@ type calendarViewMode int
 
 const (
 	calendarViewAgenda calendarViewMode = iota
+	calendarViewWeek
+	calendarViewMonth
 	calendarViewCalendars
 )
 
@@ -69,10 +71,16 @@ type Calendar struct {
 	calendarList   list.Model
 	rangeStart     time.Time
 	rangeEnd       time.Time
-	mode           calendarViewMode
-	index          int
-	calendarIndex  int
-	detail         bool
+	mode            calendarViewMode
+	index           int
+	calendarIndex   int
+	selectedDate    time.Time
+	weekStartsOn    time.Weekday
+	hourCursor      int
+	visibleHourFrom int
+	visibleHourTo   int
+	slotsPerHour    int
+	detail          bool
 	filtering      bool
 	filterInput    string
 	filter         calendarAgendaFilter

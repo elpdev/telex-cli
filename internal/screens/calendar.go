@@ -13,7 +13,18 @@ import (
 )
 
 func NewCalendar(store calendarstore.Store, sync CalendarSyncFunc) Calendar {
-	return Calendar{store: store, sync: sync, loading: true, keys: DefaultCalendarKeyMap(), calendarList: newCalendarList(nil, 0, 0, 0)}
+	return Calendar{
+		store:           store,
+		sync:            sync,
+		loading:         true,
+		keys:            DefaultCalendarKeyMap(),
+		calendarList:    newCalendarList(nil, 0, 0, 0),
+		weekStartsOn:    time.Monday,
+		visibleHourFrom: 6,
+		visibleHourTo:   22,
+		slotsPerHour:    2,
+		hourCursor:      time.Now().Hour(),
+	}
 }
 
 func (c Calendar) WithActions(create CreateCalendarEventFunc, update UpdateCalendarEventFunc, delete DeleteCalendarEventFunc) Calendar {
@@ -63,8 +74,13 @@ func (c Calendar) View(width, height int) string {
 	if c.status != "" {
 		b.WriteString(c.status + "\n")
 	}
-	if c.mode == calendarViewAgenda {
+	switch c.mode {
+	case calendarViewAgenda:
 		b.WriteString("Range: " + c.rangeLabel() + "\n")
+	case calendarViewWeek:
+		b.WriteString("Week of " + c.weekStartLabel() + "\n")
+	case calendarViewMonth:
+		b.WriteString(c.monthLabel() + "\n")
 	}
 	if cache := c.cacheStatusLine(); cache != "" {
 		b.WriteString(cache + "\n")
@@ -81,16 +97,31 @@ func (c Calendar) View(width, height int) string {
 	} else if c.mode == calendarViewAgenda && c.filter.active() {
 		b.WriteString(fmt.Sprintf("Filters: %s (%d/%d)\n", c.filter.summary(), len(c.items), len(c.agendaSourceItems())))
 	}
+	if c.mode == calendarViewWeek || c.mode == calendarViewMonth {
+		if c.filter.active() {
+			b.WriteString(fmt.Sprintf("Filters: %s (%d/%d)\n", c.filter.summary(), len(c.items), len(c.agendaSourceItems())))
+		}
+	}
 	if c.confirm != "" {
 		b.WriteString(c.confirm + " [y/N]\n")
 	}
 	b.WriteString("\n")
-	if c.mode == calendarViewCalendars {
-		b.WriteString(c.calendarListView(width, max(1, height-8)))
-		return style.Render(b.String())
-	}
+	headerLines := strings.Count(b.String(), "\n")
+	bodyHeight := max(1, height-headerLines)
+
 	if c.detail {
 		b.WriteString(c.detailView())
+		return style.Render(b.String())
+	}
+	switch c.mode {
+	case calendarViewCalendars:
+		b.WriteString(c.calendarListView(width, max(1, height-8)))
+		return style.Render(b.String())
+	case calendarViewMonth:
+		b.WriteString(c.monthView(width, bodyHeight))
+		return style.Render(b.String())
+	case calendarViewWeek:
+		b.WriteString(c.weekView(width, bodyHeight))
 		return style.Render(b.String())
 	}
 	if len(c.items) == 0 && c.filter.active() {
