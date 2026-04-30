@@ -53,26 +53,32 @@ func (c Contacts) editNoteCmd(id int64) tea.Cmd {
 	if c.detail != nil {
 		selected = c.detail
 	}
-	title := defaultTitle
-	body := ""
-	if selected != nil {
-		title = selected.Meta.DisplayName
-		if selected.Note != nil {
-			title = selected.Note.Meta.Title
-			body = selected.Note.Body
-		}
+	if selected == nil {
+		return func() tea.Msg { return contactActionFinishedMsg{} }
 	}
+	contact := *selected
 	return func() tea.Msg {
-		input, err := editContactNoteTemplate(title, body)
+		input, err := editContactDocumentTemplate(contact)
 		if err != nil {
 			return contactActionFinishedMsg{err: err}
 		}
-		_, err = c.updateNote(context.Background(), id, input)
+		if input.UpdateContact {
+			if c.update == nil {
+				return contactActionFinishedMsg{err: fmt.Errorf("contact edit is not configured")}
+			}
+			_, err = c.update(context.Background(), id, input.Contact)
+			if err != nil {
+				return contactActionFinishedMsg{err: err}
+			}
+		}
+		if input.UpdateNote {
+			_, err = c.updateNote(context.Background(), id, input.Note)
+		}
 		items, loadErr := c.store.ListContacts()
 		if err == nil {
 			err = loadErr
 		}
-		return contactActionFinishedMsg{status: "Updated contact note", loaded: contactsLoadedMsg{contacts: items, err: loadErr}, err: err}
+		return contactActionFinishedMsg{status: "Updated contact", loaded: contactsLoadedMsg{contacts: items, err: loadErr}, err: err}
 	}
 }
 

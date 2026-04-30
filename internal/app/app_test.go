@@ -166,6 +166,9 @@ func TestContactsScreenRegisteredInNavigationAndCommands(t *testing.T) {
 			t.Fatalf("expected command %q", id)
 		}
 	}
+	if command, ok := model.commands.Find("contacts-edit-note"); !ok || command.Title != "Edit selected contact" || command.Shortcut != "e" {
+		t.Fatalf("contacts edit command = %#v ok=%t", command, ok)
+	}
 }
 
 func TestCalendarScreenRegisteredInNavigationAndCommands(t *testing.T) {

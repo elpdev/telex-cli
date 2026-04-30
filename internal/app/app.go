@@ -159,7 +159,7 @@ func (m *Model) registerScreens() {
 	m.screens["mail"] = m.buildMailHub()
 	m.screens["mail-admin"] = screens.NewMailAdmin(m.loadMailAdmin).WithActions(m.saveDomain, m.deleteDomain, m.validateDomainOutbound, m.saveInbox, m.deleteInbox, m.inboxPipeline)
 	m.screens["calendar"] = screens.NewCalendar(calendarstore.New(m.dataPath), m.syncCalendar).WithActions(m.createCalendarEvent, m.updateCalendarEvent, m.deleteCalendarEvent).WithCalendarActions(m.createCalendar, m.updateCalendar, m.deleteCalendar).WithImportICS(m.importCalendarICS).WithInvitationActions(m.showCalendarInvitation, m.syncCalendarInvitation, m.respondCalendarInvitation)
-	m.screens["contacts"] = screens.NewContacts(contactstore.New(m.dataPath), m.syncContacts).WithActions(m.deleteContact, m.loadContactNote, m.updateContactNote, m.loadContactCommunications)
+	m.screens["contacts"] = screens.NewContacts(contactstore.New(m.dataPath), m.syncContacts).WithActions(m.updateContact, m.deleteContact, m.loadContactNote, m.updateContactNote, m.loadContactCommunications)
 	m.screens["drive"] = screens.NewDrive(drivestore.New(m.dataPath), m.syncDrive).WithActions(m.downloadDriveFile, m.openDriveFile, m.uploadDriveFile, m.createDriveFolder, m.renameDriveFile, m.renameDriveFolder, m.deleteDriveFile, m.deleteDriveFolder)
 	m.screens["notes"] = screens.NewNotes(notestore.New(m.dataPath), m.syncNotes).WithActions(m.createNote, m.updateNote, m.deleteNote)
 	m.screens["tasks"] = screens.NewTasks(taskstore.New(m.dataPath), m.syncTasks).WithActions(m.createTaskProject, m.createTaskCard, m.updateTaskCard, m.deleteTaskCard, m.moveTaskCard)
