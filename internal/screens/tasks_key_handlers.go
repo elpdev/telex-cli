@@ -26,6 +26,12 @@ func (t Tasks) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		if key.Matches(msg, t.keys.Edit) {
 			return t, t.editCachedCardCmd(*t.detail)
 		}
+		if key.Matches(msg, t.keys.Copy) {
+			return t.copyCardBody()
+		}
+		if key.Matches(msg, t.keys.CopyID) {
+			return t.copyCardID()
+		}
 		if key.Matches(msg, t.keys.Up) && t.detailScroll > 0 {
 			t.detailScroll--
 		} else if key.Matches(msg, t.keys.Down) {
@@ -71,6 +77,36 @@ func (t Tasks) handleKey(msg tea.KeyPressMsg) (Screen, tea.Cmd) {
 		return t.handleAction("move-card-prev")
 	case key.Matches(msg, t.keys.MoveTo):
 		return t.handleAction("move-card-to")
+	case key.Matches(msg, t.keys.Copy):
+		row, ok := t.selectedRow()
+		if !ok {
+			t.status = "Nothing to copy"
+			return t, nil
+		}
+		switch {
+		case row.Card != nil:
+			return t.copySelectedCardBody()
+		case row.Project != nil:
+			return t.copySelectedProjectName()
+		default:
+			t.status = "Nothing to copy"
+			return t, nil
+		}
+	case key.Matches(msg, t.keys.CopyID):
+		row, ok := t.selectedRow()
+		if !ok {
+			t.status = "Nothing to copy"
+			return t, nil
+		}
+		switch {
+		case row.Card != nil:
+			return t.copySelectedCardID()
+		case row.Project != nil:
+			return t.copySelectedProjectID()
+		default:
+			t.status = "Nothing to copy"
+			return t, nil
+		}
 	default:
 		t.ensureList(rows)
 		updated, cmd := t.rowList.Update(msg)

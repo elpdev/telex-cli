@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/elpdev/telex-cli/internal/config"
+	"github.com/elpdev/telex-cli/internal/tasks"
 	"github.com/elpdev/telex-cli/internal/taskstore"
 )
 
@@ -58,5 +62,72 @@ func TestTasksSyncStoresProjectsBoardsAndCards(t *testing.T) {
 	}
 	if card.Body != "# Homepage" || card.Meta.Title != "Homepage" {
 		t.Fatalf("card = %#v", card)
+	}
+}
+
+func TestTasksUseSetsCurrentProject(t *testing.T) {
+	dataDir := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := (&config.Config{BaseURL: "http://example", ClientID: "id", SecretKey: "secret"}).SaveTo(configPath); err != nil {
+		t.Fatal(err)
+	}
+
+	syncedAt := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	store := taskstore.New(dataDir)
+	if err := store.StoreProject(tasks.Project{ProjectSummary: tasks.ProjectSummary{ID: 4, Name: "Website", UpdatedAt: syncedAt}}, syncedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreCard(4, tasks.Card{TaskFile: tasks.TaskFile{ID: 9, Title: "Homepage", Filename: "Homepage.md", UpdatedAt: syncedAt}, Body: "# Homepage"}, syncedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(args ...string) string {
+		cmd := newRootCommand(buildInfo{})
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		full := append([]string{"--config", configPath, "--data-dir", dataDir}, args...)
+		cmd.SetArgs(full)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("%v args=%v out=%s", err, args, out.String())
+		}
+		return out.String()
+	}
+
+	if got := run("tasks", "use"); !strings.Contains(got, "No current task project") {
+		t.Fatalf("initial use = %q", got)
+	}
+
+	if got := run("tasks", "use", "4"); !strings.Contains(got, "Using project 4 (Website)") {
+		t.Fatalf("set use = %q", got)
+	}
+
+	prefs, err := config.LoadPrefs(config.PrefsPathFor(configPath))
+	if err != nil {
+		t.Fatalf("load prefs: %v", err)
+	}
+	if prefs.TasksProjectID != 4 {
+		t.Fatalf("prefs.TasksProjectID = %d", prefs.TasksProjectID)
+	}
+
+	if got := run("tasks", "card", "show", "9"); !strings.Contains(got, "Homepage") || !strings.Contains(got, "# Homepage") {
+		t.Fatalf("card show fallback = %q", got)
+	}
+
+	if got := run("tasks", "projects"); !strings.Contains(got, "*\t4\tWebsite") {
+		t.Fatalf("projects marker = %q", got)
+	}
+
+	if got := run("tasks", "use", "--clear"); !strings.Contains(got, "Cleared") {
+		t.Fatalf("clear = %q", got)
+	}
+
+	cmd := newRootCommand(buildInfo{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--config", configPath, "--data-dir", dataDir, "tasks", "card", "show", "9"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatalf("expected error after clear, out=%s", out.String())
 	}
 }

@@ -24,7 +24,102 @@ func newTasksCommand(rt *runtime) *cobra.Command {
 	cmd.AddCommand(newTasksBoardCommand(rt))
 	cmd.AddCommand(newTasksCardsCommand(rt))
 	cmd.AddCommand(newTasksCardCommand(rt))
+	cmd.AddCommand(newTasksUseCommand(rt))
 	return cmd
+}
+
+func newTasksUseCommand(rt *runtime) *cobra.Command {
+	var clear bool
+	cmd := &cobra.Command{
+		Use:   "use [project-id]",
+		Short: "Set, show, or clear the current task project for CLI commands",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			prefs, err := rt.loadPrefs()
+			if err != nil {
+				return err
+			}
+			if clear {
+				prefs.TasksProjectID = 0
+				if err := rt.savePrefs(prefs); err != nil {
+					return err
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "Cleared current task project.")
+				return nil
+			}
+			if len(args) == 0 {
+				if prefs.TasksProjectID == 0 {
+					fmt.Fprintln(cmd.OutOrStdout(), "No current task project set.")
+					return nil
+				}
+				name := lookupProjectName(rt, prefs.TasksProjectID)
+				if name != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "%d\t%s\n", prefs.TasksProjectID, name)
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "%d\n", prefs.TasksProjectID)
+				}
+				return nil
+			}
+			id, err := parseID(args[0])
+			if err != nil {
+				return err
+			}
+			prefs.TasksProjectID = id
+			if err := rt.savePrefs(prefs); err != nil {
+				return err
+			}
+			name := lookupProjectName(rt, id)
+			if name != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "Using project %d (%s).\n", id, name)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "Using project %d.\n", id)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&clear, "clear", false, "clear the current task project")
+	return cmd
+}
+
+func lookupProjectName(rt *runtime, id int64) string {
+	project, err := taskstore.New(rt.dataPath).ReadProject(id)
+	if err != nil {
+		return ""
+	}
+	return project.Meta.Name
+}
+
+func resolveProjectID(rt *runtime, args []string) (int64, error) {
+	if len(args) >= 1 {
+		return parseID(args[0])
+	}
+	prefs, err := rt.loadPrefs()
+	if err != nil {
+		return 0, err
+	}
+	if prefs.TasksProjectID == 0 {
+		return 0, fmt.Errorf("no project id given and no current project set; pass <project-id> or run `telex tasks use <id>`")
+	}
+	return prefs.TasksProjectID, nil
+}
+
+func resolveProjectAndCardID(rt *runtime, args []string) (int64, int64, error) {
+	switch len(args) {
+	case 2:
+		return parseTwoIDs(args)
+	case 1:
+		cardID, err := parseID(args[0])
+		if err != nil {
+			return 0, 0, err
+		}
+		projectID, err := resolveProjectID(rt, nil)
+		if err != nil {
+			return 0, 0, err
+		}
+		return projectID, cardID, nil
+	default:
+		return 0, 0, fmt.Errorf("expected <card-id> or <project-id> <card-id>")
+	}
 }
 
 func newTasksSyncCommand(rt *runtime) *cobra.Command {
@@ -48,19 +143,27 @@ func newTasksProjectsCommand(rt *runtime) *cobra.Command {
 		if err != nil {
 			return err
 		}
+		var currentID int64
+		if prefs, err := rt.loadPrefs(); err == nil {
+			currentID = prefs.TasksProjectID
+		}
 		rows := make([][]string, 0, len(projects))
 		for _, project := range projects {
-			rows = append(rows, []string{strconv.FormatInt(project.Meta.RemoteID, 10), project.Meta.Name, project.Meta.RemoteUpdatedAt.Format("2006-01-02 15:04"), project.Path})
+			marker := ""
+			if currentID != 0 && project.Meta.RemoteID == currentID {
+				marker = "*"
+			}
+			rows = append(rows, []string{marker, strconv.FormatInt(project.Meta.RemoteID, 10), project.Meta.Name, project.Meta.RemoteUpdatedAt.Format("2006-01-02 15:04"), project.Path})
 		}
-		writeRows(cmd.OutOrStdout(), []string{"id", "name", "updated_at", "path"}, rows)
+		writeRows(cmd.OutOrStdout(), []string{"current", "id", "name", "updated_at", "path"}, rows)
 		return nil
 	}}
 }
 
 func newTasksProjectCommand(rt *runtime) *cobra.Command {
 	cmd := &cobra.Command{Use: "project", Short: "Task project commands"}
-	cmd.AddCommand(&cobra.Command{Use: "show <id>", Short: "Show a cached task project", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		id, err := parseID(args[0])
+	cmd.AddCommand(&cobra.Command{Use: "show [id]", Short: "Show a cached task project (defaults to current)", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		id, err := resolveProjectID(rt, args)
 		if err != nil {
 			return err
 		}
@@ -148,8 +251,8 @@ func newTasksProjectRenameCommand(rt *runtime) *cobra.Command {
 
 func newTasksBoardCommand(rt *runtime) *cobra.Command {
 	cmd := &cobra.Command{Use: "board", Short: "Task board commands"}
-	cmd.AddCommand(&cobra.Command{Use: "show <project-id>", Short: "Show a cached task board", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		projectID, err := parseID(args[0])
+	cmd.AddCommand(&cobra.Command{Use: "show [project-id]", Short: "Show a cached task board (defaults to current project)", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		projectID, err := resolveProjectID(rt, args)
 		if err != nil {
 			return err
 		}
@@ -167,8 +270,8 @@ func newTasksBoardCommand(rt *runtime) *cobra.Command {
 
 func newTasksBoardUpdateCommand(rt *runtime) *cobra.Command {
 	var body, filePath string
-	cmd := &cobra.Command{Use: "update <project-id>", Short: "Update a remote task board markdown body", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		projectID, err := parseID(args[0])
+	cmd := &cobra.Command{Use: "update [project-id]", Short: "Update a remote task board markdown body (defaults to current project)", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		projectID, err := resolveProjectID(rt, args)
 		if err != nil {
 			return err
 		}
@@ -196,8 +299,8 @@ func newTasksBoardUpdateCommand(rt *runtime) *cobra.Command {
 }
 
 func newTasksCardsCommand(rt *runtime) *cobra.Command {
-	return &cobra.Command{Use: "cards <project-id>", Short: "List cached task cards", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		projectID, err := parseID(args[0])
+	return &cobra.Command{Use: "cards [project-id]", Short: "List cached task cards (defaults to current project)", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		projectID, err := resolveProjectID(rt, args)
 		if err != nil {
 			return err
 		}
@@ -216,8 +319,8 @@ func newTasksCardsCommand(rt *runtime) *cobra.Command {
 
 func newTasksCardCommand(rt *runtime) *cobra.Command {
 	cmd := &cobra.Command{Use: "card", Short: "Task card commands"}
-	cmd.AddCommand(&cobra.Command{Use: "show <project-id> <card-id>", Short: "Show a cached task card", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
-		projectID, id, err := parseTwoIDs(args)
+	cmd.AddCommand(&cobra.Command{Use: "show [project-id] <card-id>", Short: "Show a cached task card (project-id defaults to current)", Args: cobra.RangeArgs(1, 2), RunE: func(cmd *cobra.Command, args []string) error {
+		projectID, id, err := resolveProjectAndCardID(rt, args)
 		if err != nil {
 			return err
 		}
@@ -232,8 +335,8 @@ func newTasksCardCommand(rt *runtime) *cobra.Command {
 	cmd.AddCommand(newTasksCardCreateCommand(rt))
 	cmd.AddCommand(newTasksCardEditCommand(rt))
 	cmd.AddCommand(newTasksCardMoveCommand(rt))
-	cmd.AddCommand(&cobra.Command{Use: "delete <project-id> <card-id>", Short: "Delete a remote task card and local cache", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
-		projectID, id, err := parseTwoIDs(args)
+	cmd.AddCommand(&cobra.Command{Use: "delete [project-id] <card-id>", Short: "Delete a remote task card and local cache (project-id defaults to current)", Args: cobra.RangeArgs(1, 2), RunE: func(cmd *cobra.Command, args []string) error {
+		projectID, id, err := resolveProjectAndCardID(rt, args)
 		if err != nil {
 			return err
 		}
@@ -255,8 +358,8 @@ func newTasksCardCommand(rt *runtime) *cobra.Command {
 
 func newTasksCardCreateCommand(rt *runtime) *cobra.Command {
 	var title, body, filePath string
-	cmd := &cobra.Command{Use: "create <project-id>", Short: "Create a remote task card", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		projectID, err := parseID(args[0])
+	cmd := &cobra.Command{Use: "create [project-id]", Short: "Create a remote task card (defaults to current project)", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		projectID, err := resolveProjectID(rt, args)
 		if err != nil {
 			return err
 		}
@@ -292,8 +395,8 @@ func newTasksCardCreateCommand(rt *runtime) *cobra.Command {
 
 func newTasksCardEditCommand(rt *runtime) *cobra.Command {
 	var title, body, filePath string
-	cmd := &cobra.Command{Use: "edit <project-id> <card-id>", Short: "Update a remote task card", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
-		projectID, id, err := parseTwoIDs(args)
+	cmd := &cobra.Command{Use: "edit [project-id] <card-id>", Short: "Update a remote task card (project-id defaults to current)", Args: cobra.RangeArgs(1, 2), RunE: func(cmd *cobra.Command, args []string) error {
+		projectID, id, err := resolveProjectAndCardID(rt, args)
 		if err != nil {
 			return err
 		}
@@ -339,8 +442,8 @@ func newTasksCardEditCommand(rt *runtime) *cobra.Command {
 
 func newTasksCardMoveCommand(rt *runtime) *cobra.Command {
 	var column string
-	cmd := &cobra.Command{Use: "move <project-id> <card-id>", Short: "Move a task card to a column", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
-		projectID, id, err := parseTwoIDs(args)
+	cmd := &cobra.Command{Use: "move [project-id] <card-id>", Short: "Move a task card to a column (project-id defaults to current)", Args: cobra.RangeArgs(1, 2), RunE: func(cmd *cobra.Command, args []string) error {
+		projectID, id, err := resolveProjectAndCardID(rt, args)
 		if err != nil {
 			return err
 		}

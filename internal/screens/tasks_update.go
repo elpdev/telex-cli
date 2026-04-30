@@ -55,6 +55,13 @@ func (t Tasks) Update(msg tea.Msg) (Screen, tea.Cmd) {
 		return t, nil
 	case TasksActionMsg:
 		return t.handleAction(msg.Action)
+	case taskCopyFinishedMsg:
+		if msg.err != nil {
+			t.status = fmt.Sprintf("Could not copy %s: %v", msg.label, msg.err)
+		} else {
+			t.status = "Copied " + msg.label
+		}
+		return t, nil
 	case tea.KeyPressMsg:
 		return t.handleKey(msg)
 	}
