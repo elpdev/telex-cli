@@ -109,17 +109,32 @@ func TestContactCommunicationsUsesEndpoint(t *testing.T) {
 	}
 }
 
+func TestImportVCFUploadsFile(t *testing.T) {
+	fake := &fakeClient{body: []byte(`{"data":{"created":3,"updated":1,"skipped":0,"failed":0,"errors":[],"success":true}}`)}
+	service := NewService(fake)
+	result, err := service.ImportVCF(context.Background(), "/tmp/contacts.vcf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.multipartPath != "/api/v1/contacts/import_vcf" || fake.multipartField != "file" || fake.multipartFile != "/tmp/contacts.vcf" || result.Created != 3 || !result.Success {
+		t.Fatalf("path=%q field=%q file=%q result=%#v", fake.multipartPath, fake.multipartField, fake.multipartFile, result)
+	}
+}
+
 type fakeClient struct {
-	body       []byte
-	query      url.Values
-	getPath    string
-	postPath   string
-	postBody   any
-	putPath    string
-	putBody    any
-	patchPath  string
-	patchBody  any
-	deletePath string
+	body           []byte
+	query          url.Values
+	getPath        string
+	postPath       string
+	postBody       any
+	putPath        string
+	putBody        any
+	patchPath      string
+	patchBody      any
+	deletePath     string
+	multipartPath  string
+	multipartField string
+	multipartFile  string
 }
 
 func (f *fakeClient) Get(_ context.Context, path string, query url.Values) ([]byte, int, error) {
@@ -132,6 +147,13 @@ func (f *fakeClient) Post(_ context.Context, path string, body any) ([]byte, int
 	f.postPath = path
 	f.postBody = normalizeJSON(body)
 	return f.body, 201, nil
+}
+
+func (f *fakeClient) PostMultipartFile(_ context.Context, path, fieldName, filePath string) ([]byte, int, error) {
+	f.multipartPath = path
+	f.multipartField = fieldName
+	f.multipartFile = filePath
+	return f.body, 200, nil
 }
 
 func (f *fakeClient) Put(_ context.Context, path string, body any) ([]byte, int, error) {

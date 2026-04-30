@@ -93,3 +93,12 @@ type ContactNoteInput struct {
 	Title string
 	Body  string
 }
+
+type ImportResult struct {
+	Created int      `json:"created"`
+	Updated int      `json:"updated"`
+	Skipped int      `json:"skipped"`
+	Failed  int      `json:"failed"`
+	Errors  []string `json:"errors"`
+	Success bool     `json:"success"`
+}
