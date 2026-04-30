@@ -1,6 +1,7 @@
 package app
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -111,6 +112,51 @@ func TestMailCommandsOpenUnreadAndMailboxes(t *testing.T) {
 	}
 	if id := mailHubActiveID(t, model); id != "mail-mailboxes" {
 		t.Fatalf("go-mailboxes hub tab = %q, want mail-mailboxes", id)
+	}
+}
+
+func TestHackerNewsUsesTelexPaths(t *testing.T) {
+	dataDir := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	model := NewWithPaths(BuildInfo{Version: "test", Commit: "none", Date: "unknown"}, configPath, dataDir)
+
+	hnRoot := filepath.Join(dataDir, "hackernews")
+	if got := model.hackerNewsDataRoot(); got != hnRoot {
+		t.Fatalf("hackerNewsDataRoot = %q, want %q", got, hnRoot)
+	}
+	if got := model.hackerNewsSavedPath(); got != filepath.Join(hnRoot, "saved.json") {
+		t.Fatalf("hackerNewsSavedPath = %q", got)
+	}
+	if got := model.hackerNewsHistoryPath(); got != filepath.Join(hnRoot, "history.json") {
+		t.Fatalf("hackerNewsHistoryPath = %q", got)
+	}
+	if got := model.hackerNewsDeletedSavedPath(); got != filepath.Join(hnRoot, "deleted_saved.json") {
+		t.Fatalf("hackerNewsDeletedSavedPath = %q", got)
+	}
+	if got := model.loadHackerNewsSettings().SyncDir; got != filepath.Join(hnRoot, "sync") {
+		t.Fatalf("Hacker News sync dir = %q", got)
+	}
+	if got := model.hackerNewsConfigPath(); got != filepath.Join(filepath.Dir(configPath), "hackernews.json") {
+		t.Fatalf("hackerNewsConfigPath = %q", got)
+	}
+}
+
+func TestHackerNewsSavedScreenAlwaysReloads(t *testing.T) {
+	model := NewWithDataPath(BuildInfo{Version: "test", Commit: "none", Date: "unknown"}, t.TempDir())
+
+	if cmd := model.initScreen("hn-saved"); cmd == nil {
+		t.Fatal("expected first hn-saved init command")
+	}
+	model.initialized["hn-saved"] = true
+	if cmd := model.initScreen("hn-saved"); cmd == nil {
+		t.Fatal("expected hn-saved to reload after initial init")
+	}
+
+	if cmd := model.initScreen("hn-top"); cmd == nil {
+		t.Fatal("expected first hn-top init command")
+	}
+	if cmd := model.initScreen("hn-top"); cmd != nil {
+		t.Fatal("expected hn-top init to remain cached")
 	}
 }
 

@@ -2,6 +2,9 @@ package app
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -12,6 +15,8 @@ import (
 	"github.com/elpdev/hackernews/pkg/saved"
 	hnscreens "github.com/elpdev/hackernews/pkg/screens"
 	"github.com/elpdev/telex-cli/internal/commands"
+	"github.com/elpdev/telex-cli/internal/config"
+	"github.com/elpdev/telex-cli/internal/mailstore"
 	"github.com/elpdev/telex-cli/internal/screens"
 	"github.com/elpdev/tuimod"
 )
@@ -35,6 +40,9 @@ func (m *Model) initScreen(id string) tea.Cmd {
 		return nil
 	}
 	if isHackerNewsScreen(id) {
+		if id == "hn-saved" {
+			return screen.Init()
+		}
 		if m.initialized[id] {
 			return nil
 		}
@@ -53,31 +61,29 @@ func (m *Model) registerHackerNewsModule() {
 func (m Model) newHackerNewsModule() hackernews.Module {
 	settings := m.loadHackerNewsSettings()
 
-	var savedStore saved.Store
-	if path, err := saved.DefaultPath(); err != nil {
-		m.logs.Warn(fmt.Sprintf("Hacker News saved store unavailable: %v", err))
-	} else {
-		savedStore = saved.NewJSONStore(path)
-	}
-
-	var historyStore history.Store
-	if path, err := history.DefaultPath(); err != nil {
-		m.logs.Warn(fmt.Sprintf("Hacker News read history unavailable: %v", err))
-	} else {
-		historyStore = history.NewJSONStore(path)
-	}
+	savedStore := saved.NewJSONStore(m.hackerNewsSavedPath())
+	historyStore := history.NewJSONStore(m.hackerNewsHistoryPath())
 
 	return hackernews.New(hackernews.Options{SavedStore: savedStore, HistoryStore: historyStore, Settings: settings})
 }
 
 func (m Model) loadHackerNewsSettings() hnconfig.Settings {
-	settings := hnconfig.Defaults()
-	if path, err := hnconfig.DefaultPath(); err != nil {
-		m.logs.Warn(fmt.Sprintf("Hacker News config unavailable: %v", err))
-	} else if loaded, err := hnconfig.NewStore(path).Load(); err != nil {
+	settings := m.defaultHackerNewsSettings()
+	path := m.hackerNewsConfigPath()
+	if _, err := os.Stat(path); err != nil {
+		if !os.IsNotExist(err) {
+			m.logs.Warn(fmt.Sprintf("Hacker News config unavailable: %v", err))
+		}
+		return settings
+	}
+	loaded, err := hnconfig.NewStore(path).Load()
+	if err != nil {
 		m.logs.Warn(fmt.Sprintf("Could not load Hacker News config: %v", err))
-	} else {
-		settings = loaded
+		return settings
+	}
+	settings = loaded
+	if strings.TrimSpace(settings.SyncDir) == "" || settings.SyncDir == hnconfig.Defaults().SyncDir {
+		settings.SyncDir = m.hackerNewsSyncDir()
 	}
 	return settings
 }
@@ -240,12 +246,41 @@ func convertKeyBindings(bindings []legacykey.Binding) []key.Binding {
 }
 
 func (m Model) saveHackerNewsSettings(settings hnconfig.Settings) {
-	path, err := hnconfig.DefaultPath()
-	if err != nil {
-		m.logs.Warn(fmt.Sprintf("Hacker News config unavailable: %v", err))
-		return
+	path := m.hackerNewsConfigPath()
+	if strings.TrimSpace(settings.SyncDir) == "" || settings.SyncDir == hnconfig.Defaults().SyncDir {
+		settings.SyncDir = m.hackerNewsSyncDir()
 	}
 	if err := hnconfig.NewStore(path).Save(settings); err != nil {
 		m.logs.Warn(fmt.Sprintf("Could not save Hacker News config: %v", err))
 	}
+}
+
+func (m Model) defaultHackerNewsSettings() hnconfig.Settings {
+	settings := hnconfig.Defaults()
+	settings.SyncDir = m.hackerNewsSyncDir()
+	return settings
+}
+
+func (m Model) hackerNewsDataRoot() string {
+	return filepath.Join(mailstore.RootOrDefault(m.dataPath), "hackernews")
+}
+
+func (m Model) hackerNewsSavedPath() string {
+	return filepath.Join(m.hackerNewsDataRoot(), "saved.json")
+}
+
+func (m Model) hackerNewsHistoryPath() string {
+	return filepath.Join(m.hackerNewsDataRoot(), "history.json")
+}
+
+func (m Model) hackerNewsDeletedSavedPath() string {
+	return filepath.Join(m.hackerNewsDataRoot(), "deleted_saved.json")
+}
+
+func (m Model) hackerNewsSyncDir() string {
+	return filepath.Join(m.hackerNewsDataRoot(), "sync")
+}
+
+func (m Model) hackerNewsConfigPath() string {
+	return filepath.Join(filepath.Dir(config.PrefsPathFor(m.configPath)), "hackernews.json")
 }
