@@ -391,8 +391,8 @@ func TestCommandPaletteThemePreviewCanReturnToRoot(t *testing.T) {
 	model = openThemePalette(t, model)
 
 	model = sendKey(t, model, tea.Key{Code: tea.KeyDown})
-	if model.theme.Name != "Muted Dark" {
-		t.Fatalf("expected preview to switch to Muted Dark, got %q", model.theme.Name)
+	if model.theme.Name != "Dracula" {
+		t.Fatalf("expected preview to switch to Dracula, got %q", model.theme.Name)
 	}
 
 	model = sendKey(t, model, tea.Key{Code: tea.KeyEscape})
@@ -420,8 +420,8 @@ func TestCommandPaletteThemeSelectionConfirmsPreview(t *testing.T) {
 	model = sendKey(t, model, tea.Key{Code: tea.KeyDown})
 	model = sendKey(t, model, tea.Key{Code: tea.KeyEnter})
 
-	if model.theme.Name != "Miami" {
-		t.Fatalf("expected confirmed Miami theme, got %q", model.theme.Name)
+	if model.theme.Name != "Tokyo Night" {
+		t.Fatalf("expected confirmed Tokyo Night theme, got %q", model.theme.Name)
 	}
 	if model.showCommandPalette {
 		t.Fatal("expected theme selection to close command palette")

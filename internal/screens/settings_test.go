@@ -107,8 +107,8 @@ func TestSettingsThemeSelectUsesListNavigation(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected SettingsThemePreviewMsg on end, got %T", msg)
 	}
-	if preview.Name != "Miami" {
-		t.Fatalf("preview name = %q, want %q", preview.Name, "Miami")
+	if preview.Name != "Monokai" {
+		t.Fatalf("preview name = %q, want %q", preview.Name, "Monokai")
 	}
 
 	_, msg = runUpdate(t, s, keyMsg(tea.Key{Code: tea.KeyEnter}))
@@ -116,8 +116,8 @@ func TestSettingsThemeSelectUsesListNavigation(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected SettingsThemeChangedMsg on enter, got %T", msg)
 	}
-	if changed.Name != "Miami" {
-		t.Fatalf("changed name = %q, want %q", changed.Name, "Miami")
+	if changed.Name != "Monokai" {
+		t.Fatalf("changed name = %q, want %q", changed.Name, "Monokai")
 	}
 }
 
