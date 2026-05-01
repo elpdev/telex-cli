@@ -14,7 +14,7 @@ require (
 	github.com/elpdev/hackernews v0.5.0
 	github.com/elpdev/tuilayout v0.1.0
 	github.com/elpdev/tuipalette v0.3.0
-	github.com/elpdev/tuitheme v0.2.2
+	github.com/elpdev/tuitheme v0.3.0
 	github.com/spf13/cobra v1.10.1
 )
 
