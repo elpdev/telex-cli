@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -28,4 +29,9 @@ func parseError(status int, body []byte) error {
 		}
 	}
 	return &Error{StatusCode: status, Message: strings.TrimSpace(string(body))}
+}
+
+func IsStatus(err error, status int) bool {
+	var apiErr *Error
+	return errors.As(err, &apiErr) && apiErr.StatusCode == status
 }

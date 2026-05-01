@@ -68,6 +68,18 @@ func TestCreateDraftWritesMetadataBodyAndAttachmentsFolder(t *testing.T) {
 	}
 }
 
+func TestHasRemoteDraftRequiresSyncedRemoteMetadata(t *testing.T) {
+	if HasRemoteDraft(Draft{Meta: DraftMeta{ID: "20260424-forward", RemoteID: 21, SourceMessageID: 21, DraftKind: "forward"}}) {
+		t.Fatal("local forward draft with stale remote_id should not be treated as remote")
+	}
+	if !HasRemoteDraft(Draft{Meta: DraftMeta{ID: "20260424-remote", RemoteID: 900, RemoteStatus: "draft"}}) {
+		t.Fatal("remote draft with status should be treated as remote")
+	}
+	if !HasRemoteDraft(Draft{Meta: DraftMeta{ID: "remote-900-subject", RemoteID: 900}}) {
+		t.Fatal("remote draft cache should be treated as remote")
+	}
+}
+
 func TestAttachFileToDraftCopiesFileAndUpdatesMetadata(t *testing.T) {
 	store := New(t.TempDir())
 	mailbox := testMailboxMeta()

@@ -2,11 +2,13 @@ package main
 
 import (
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 
+	"github.com/elpdev/telex-cli/internal/api"
 	"github.com/elpdev/telex-cli/internal/mailsend"
 	"github.com/elpdev/telex-cli/internal/mailstore"
 	"github.com/spf13/cobra"
@@ -100,12 +102,12 @@ func newDraftDeleteCommand(rt *runtime) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if draft.Meta.RemoteID > 0 {
+			if mailstore.HasRemoteDraft(*draft) {
 				service, err := mailService(rt)
 				if err != nil {
 					return err
 				}
-				if err := service.DeleteOutboundMessage(rt.context(), draft.Meta.RemoteID); err != nil {
+				if err := service.DeleteOutboundMessage(rt.context(), draft.Meta.RemoteID); err != nil && !api.IsStatus(err, http.StatusNotFound) {
 					return err
 				}
 			}
