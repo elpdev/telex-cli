@@ -226,7 +226,7 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 				m.clampSelection()
 			}
 			m.status = fmt.Sprintf("Draft saved: %s", draft.Meta.ID)
-			if draft.Meta.RemoteID > 0 && m.updateDraft != nil {
+			if mailstore.HasRemoteDraft(*draft) && m.updateDraft != nil {
 				m.status = fmt.Sprintf("Draft saved locally; syncing remote draft %d...", draft.Meta.RemoteID)
 				return m, func() tea.Msg {
 					return remoteDraftUpdatedMsg{remoteID: draft.Meta.RemoteID, err: m.updateDraft(context.Background(), *draft)}
@@ -250,7 +250,7 @@ func (m Mail) Update(msg tea.Msg) (Screen, tea.Cmd) {
 			m.applySearch()
 			m.clampSelection()
 		}
-		if draft.Meta.RemoteID > 0 && m.updateDraft != nil {
+		if mailstore.HasRemoteDraft(*draft) && m.updateDraft != nil {
 			m.status = fmt.Sprintf("Draft saved locally; syncing remote draft %d...", draft.Meta.RemoteID)
 			return m, func() tea.Msg {
 				return remoteDraftUpdatedMsg{remoteID: draft.Meta.RemoteID, err: m.updateDraft(context.Background(), *draft)}

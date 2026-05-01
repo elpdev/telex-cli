@@ -128,6 +128,70 @@ func TestMailScreenMarksUnreadMessageReadWhenDetailCloses(t *testing.T) {
 	}
 }
 
+func TestReplyMarksUnreadMessageRead(t *testing.T) {
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "true")
+	store := mailstore.New(t.TempDir())
+	mailbox := testScreenMailbox(12, 34, "example.com", "hello", "hello@example.com")
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.StoreInboxMessage(mailbox, mail.Message{
+		ID:          123,
+		Subject:     "Unread",
+		FromAddress: "sender@example.net",
+		ToAddresses: []string{"hello@example.com"},
+		SystemState: "inbox",
+		Read:        false,
+		ReceivedAt:  time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC),
+	}, &mail.MessageBody{Text: "Cached body"}, time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := mailstore.ReadCachedMessage(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotID int64
+	var gotRead bool
+	var calls int
+	screen := NewMailWithActions(store, func(ctx context.Context, id int64, read bool) error {
+		gotID = id
+		gotRead = read
+		calls++
+		return nil
+	}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	screen.mailboxes = []mailstore.MailboxMeta{mailbox}
+	screen.messages = []mailstore.CachedMessage{*message}
+	screen.allMessages = screen.messages
+
+	updated, cmd := screen.editReplyDraft()
+	screen = updated.(Mail)
+	if cmd == nil {
+		t.Fatal("expected reply command")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("reply command = %T, want two-command batch", msg)
+	}
+	updated, _ = screen.Update(batch[0]())
+	screen = updated.(Mail)
+	if gotID != 123 || !gotRead || calls != 1 {
+		t.Fatalf("mark read got id=%d read=%t calls=%d", gotID, gotRead, calls)
+	}
+	readBack, err := mailstore.ReadCachedMessage(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !readBack.Meta.Read || !screen.messages[0].Meta.Read {
+		t.Fatal("expected reply to mark original message read")
+	}
+	if msg, ok := batch[1]().(draftEditedMsg); ok {
+		_ = os.Remove(msg.path)
+	}
+}
+
 func TestAggregateUnreadMailLoadsAllUnreadInboxMessages(t *testing.T) {
 	store := mailstore.New(t.TempDir())
 	first := testScreenMailbox(12, 34, "example.com", "hello", "hello@example.com")
@@ -1535,6 +1599,55 @@ func TestDeleteDraftRemovesSelectedDraft(t *testing.T) {
 	view := stripScreenANSI(screen.View(100, 20))
 	if !strings.Contains(view, "Draft deleted") {
 		t.Fatalf("view = %q", view)
+	}
+}
+
+func TestDeleteDraftSkipsRemoteDeleteForLocalForwardWithStaleRemoteID(t *testing.T) {
+	store := mailstore.New(t.TempDir())
+	mailbox := mailstore.MailboxMeta{SchemaVersion: mailstore.SchemaVersion, DomainID: 12, DomainName: "example.com", InboxID: 34, Address: "hello@example.com", LocalPart: "hello", Active: true, SyncedAt: time.Date(2026, 4, 24, 9, 0, 0, 0, time.UTC)}
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := store.CreateDraft(mailstore.DraftInput{Mailbox: mailbox, Subject: "Fwd: Delete Me", To: []string{"to@example.net"}, Body: "body", SourceMessageID: 21, DraftKind: "forward", Now: time.Date(2026, 4, 24, 14, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaPath := filepath.Join(draft.Path, "meta.toml")
+	meta, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleMeta := strings.Replace(string(meta), "remote_id = 0", "remote_id = 21", 1)
+	if staleMeta == string(meta) {
+		t.Fatalf("draft metadata did not contain zero remote_id: %s", meta)
+	}
+	if err := os.WriteFile(metaPath, []byte(staleMeta), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	remoteDeleteCalled := false
+	screen := NewMailWithActions(store, nil, nil, nil, nil, nil, nil, nil, nil, func(ctx context.Context, draft mailstore.Draft) error {
+		remoteDeleteCalled = true
+		return nil
+	}, nil, nil)
+	screen.scope = MailScope{Box: "drafts", Aggregate: true}
+	screen.messages = []mailstore.CachedMessage{{Path: draft.Path}}
+
+	updated, cmd := screen.deleteSelectedDraft()
+	screen = updated.(Mail)
+	if cmd == nil {
+		t.Fatal("expected delete command")
+	}
+	updated, _ = screen.Update(cmd())
+	screen = updated.(Mail)
+	if remoteDeleteCalled {
+		t.Fatal("remote delete should not be called for stale local forward draft")
+	}
+	if _, err := mailstore.ReadDraft(draft.Path); err == nil {
+		t.Fatal("expected local draft to be deleted")
+	}
+	if screen.status != "Draft deleted" {
+		t.Fatalf("status = %q", screen.status)
 	}
 }
 

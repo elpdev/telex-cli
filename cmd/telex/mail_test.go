@@ -268,6 +268,48 @@ func TestDraftDeleteCommandDeletesSyncedRemoteDraft(t *testing.T) {
 	}
 }
 
+func TestDraftDeleteCommandDeletesLocalCacheWhenRemoteDraftIsMissing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/outbound_messages/21" || r.Method != http.MethodDelete {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"missing"}`))
+	}))
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := (&config.Config{BaseURL: server.URL, ClientID: "id", SecretKey: "secret"}).SaveTo(configPath); err != nil {
+		t.Fatal(err)
+	}
+	_, tokenPath := config.Paths(configPath)
+	if err := config.SaveTokenTo(tokenPath, &config.TokenCache{Token: "token", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+
+	dataDir := t.TempDir()
+	store := mailstore.New(dataDir)
+	mailbox := testCommandMailboxMeta()
+	if err := store.CreateMailbox(mailbox); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := store.StoreRemoteDraft(mailbox, mail.OutboundMessage{ID: 21, DomainID: mailbox.DomainID, InboxID: mailbox.InboxID, Status: "draft", Subject: "Remote", ToAddresses: []string{"to@example.net"}, BodyText: "Body", CreatedAt: time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 4, 24, 10, 0, 0, 0, time.UTC)}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCommand(buildInfo{})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--config", configPath, "--data-dir", dataDir, "mail", "drafts", "delete", draft.Meta.ID, "--mailbox", mailbox.Address})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mailstore.ReadDraft(draft.Path); err == nil {
+		t.Fatal("expected stale local draft cache to be deleted")
+	}
+}
+
 func testCommandMailboxMeta() mailstore.MailboxMeta {
 	return mailstore.MailboxMeta{
 		SchemaVersion: mailstore.SchemaVersion,

@@ -55,9 +55,15 @@ func (m Mail) markSelectedRead() (Screen, tea.Cmd) {
 		m.status = "Read/unread action is not configured"
 		return m, nil
 	}
-	index := m.messageIndex
 	m.status = "Marking read..."
-	return m, func() tea.Msg {
+	return m, m.markMessageReadCmd(m.messageIndex, message)
+}
+
+func (m Mail) markMessageReadCmd(index int, message mailstore.CachedMessage) tea.Cmd {
+	if message.Meta.Read || m.remoteResults || !m.currentBoxSupportsMessageActions() || m.toggleRead == nil {
+		return nil
+	}
+	return func() tea.Msg {
 		if err := m.toggleRead(context.Background(), message.Meta.RemoteID, true); err != nil {
 			return messageReadToggledMsg{index: index, path: message.Path, read: true, err: err}
 		}

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
+	"github.com/elpdev/telex-cli/internal/api"
 	"github.com/elpdev/telex-cli/internal/mail"
 	"github.com/elpdev/telex-cli/internal/mailsend"
 	"github.com/elpdev/telex-cli/internal/mailstore"
@@ -229,7 +231,7 @@ func (m *Model) sendDraft(ctx context.Context, mailbox mailstore.MailboxMeta, dr
 }
 
 func (m *Model) updateDraft(ctx context.Context, draft mailstore.Draft) error {
-	if draft.Meta.RemoteID == 0 {
+	if !mailstore.HasRemoteDraft(draft) {
 		return nil
 	}
 	service, err := m.mailService()
@@ -241,14 +243,17 @@ func (m *Model) updateDraft(ctx context.Context, draft mailstore.Draft) error {
 }
 
 func (m *Model) deleteDraft(ctx context.Context, draft mailstore.Draft) error {
-	if draft.Meta.RemoteID == 0 {
+	if !mailstore.HasRemoteDraft(draft) {
 		return nil
 	}
 	service, err := m.mailService()
 	if err != nil {
 		return err
 	}
-	return service.DeleteOutboundMessage(ctx, draft.Meta.RemoteID)
+	if err := service.DeleteOutboundMessage(ctx, draft.Meta.RemoteID); err != nil && !api.IsStatus(err, http.StatusNotFound) {
+		return err
+	}
+	return nil
 }
 
 func outboundInputFromDraft(draft mailstore.Draft) *mail.OutboundMessageInput {

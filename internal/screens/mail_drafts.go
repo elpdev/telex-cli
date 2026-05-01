@@ -103,7 +103,15 @@ func (m Mail) editReplyDraft() (Screen, tea.Cmd) {
 	if len(m.messages) == 0 || len(m.mailboxes) == 0 {
 		return m, nil
 	}
-	return m.editReplyDraftFromMessage(m.messages[m.messageIndex])
+	index := m.messageIndex
+	message := m.messages[index]
+	updated, replyCmd := m.editReplyDraftFromMessage(message)
+	if readCmd := m.markMessageReadCmd(index, message); readCmd != nil && replyCmd != nil {
+		return updated, tea.Batch(readCmd, replyCmd)
+	} else if readCmd != nil {
+		return updated, readCmd
+	}
+	return updated, replyCmd
 }
 
 func (m Mail) editReplyDraftForMessageID(id int64) (Screen, tea.Cmd) {
@@ -266,7 +274,7 @@ func (m Mail) deleteSelectedDraft() (Screen, tea.Cmd) {
 		if err != nil {
 			return draftDeletedMsg{index: index, path: path, err: err}
 		}
-		if draft.Meta.RemoteID > 0 && m.deleteDraft != nil {
+		if mailstore.HasRemoteDraft(*draft) && m.deleteDraft != nil {
 			if err := m.deleteDraft(context.Background(), *draft); err != nil {
 				return draftDeletedMsg{index: index, path: path, err: err}
 			}

@@ -1,6 +1,7 @@
 package mailstore
 
 import (
+	"strings"
 	"time"
 )
 
@@ -44,4 +45,11 @@ type Draft struct {
 	Meta DraftMeta
 	Path string
 	Body string
+}
+
+func HasRemoteDraft(draft Draft) bool {
+	if draft.Meta.RemoteID == 0 {
+		return false
+	}
+	return draft.Meta.RemoteStatus != "" || strings.HasPrefix(draft.Meta.ID, "remote-")
 }
